@@ -20,6 +20,7 @@ package loader
 
 import (
 	// Load core storage filesystem backends.
+	_ "github.com/cs3org/reva/pkg/storage/fs/badger"
 	_ "github.com/cs3org/reva/pkg/storage/fs/eos"
 	_ "github.com/cs3org/reva/pkg/storage/fs/local"
 	_ "github.com/cs3org/reva/pkg/storage/fs/s3"
