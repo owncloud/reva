@@ -91,19 +91,6 @@ func New(m map[string]interface{}) (storage.FS, error) {
 	}
 	s := &badgerStorage{config: c, db: db}
 
-	// TODO when and how do we create users homes ...?
-	s.cacheMD(context.Background(), &storage.MD{
-		ID:          "fileid-aaliyah_adams", // TODO this breaks ids on rename, generate uuid, store in cache ... hm then it is no longer a cache
-		Path:        "/aaliyah_adams",
-		IsDir:       true,
-		Mime:        mime.Detect(true, "/aaliyah_adams"),
-		Permissions: &storage.PermissionSet{ListContainer: true, CreateContainer: true},
-		Size:        uint64(0),
-		Mtime: &storage.Timestamp{
-			Seconds: uint64(0),
-		},
-	}, metaRoot)
-
 	return s, nil
 }
 
@@ -156,7 +143,7 @@ func calcEtag(ctx context.Context, md *storage.MD) string {
 var metaNode = byte(0x0)
 var metaRoot = byte(0x1)
 
-func (s *badgerStorage) cacheMD(ctx context.Context, md *storage.MD, meta byte) error {
+func (s *badgerStorage) storeMD(ctx context.Context, md *storage.MD, meta byte) error {
 	log := appctx.GetLogger(ctx)
 	var b bytes.Buffer
 	e := gob.NewEncoder(&b)
@@ -286,7 +273,7 @@ func (s *badgerStorage) CreateDir(ctx context.Context, fn string) error {
 		},
 	}
 	md.Etag = calcEtag(ctx, md)
-	err := s.cacheMD(ctx, md, metaNode)
+	err := s.storeMD(ctx, md, metaNode)
 	s.propagate(ctx, md)
 
 	return err
@@ -428,17 +415,17 @@ func (s *badgerStorage) Move(ctx context.Context, oldName, newName string) error
 
 func (s *badgerStorage) GetMD(ctx context.Context, fn string) (*storage.MD, error) {
 	log := appctx.GetLogger(ctx)
-	fn = s.addPrefix(fn)
+	key := s.addPrefix(fn)
 
 	log.Debug().
-		Str("fn", fn).
+		Str("key", key).
 		Interface("ctx", ctx).
 		Msg("GetMD")
 
 	md := &storage.MD{}
 
 	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(fn))
+		item, err := txn.Get([]byte(key))
 		if err != nil {
 			return err
 		}
@@ -463,12 +450,81 @@ func (s *badgerStorage) GetMD(ctx context.Context, fn string) (*storage.MD, erro
 			Msg("returning metadata")
 		return md, nil
 	}
-	if s.config.AutocreateDepth > strings.Count(fn, "/") {
-		// TODO check if fn is in the autocreate depth
-		// TODO create dir on the fly
+	// check if fn is in the autocreate depth
+	md, err = s.autocreate(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	if md != nil {
+		log.Debug().
+			Interface("md", md).
+			Msg("returning metadata")
+		return md, nil
 	}
 	return nil, notFoundError(fn)
 }
+
+func (s *badgerStorage) autocreate(ctx context.Context, fn string) (*storage.MD, error) {
+	log := appctx.GetLogger(ctx)
+	if s.config.AutocreateDepth >= strings.Count(fn, "/") {
+		// TODO create dir on the fly
+		
+		// create first fn segment as root
+		segments := strings.Split(fn, "/")
+		
+		now := time.Now()
+		
+		p := s.addPrefix("/"+segments[0])
+		md := &storage.MD{
+			ID:          "fileid-"+segments[0], // TODO this breaks ids on rename, generate uuid, store in cache ... hm then it is no longer a cache
+			Path:        p,
+			IsDir:       true,
+			Mime:        mime.Detect(true, segments[0]),
+			Permissions: &storage.PermissionSet{ListContainer: true, CreateContainer: true},
+			Size:        uint64(0),
+			Mtime: &storage.Timestamp{
+				Seconds: uint64(now.Unix()),
+				Nanos:   uint32(now.Nanosecond()),
+			},
+		}
+		
+		log.Debug().
+			Interface("md", md).
+			Msg("autocreating root node")
+		
+		err := s.storeMD(context.Background(), md, metaRoot)
+
+		for i := 1; i < len(segments); i++ {
+			p = path.Join(p, segments[i])
+
+			md = &storage.MD{
+				ID:          "fileid-" + strings.TrimPrefix(p, "/"), // TODO this breaks ids on rename, generate uuid, store in cache ... hm then it is no longer a cache
+				Path:        p,
+				IsDir:       true,
+				Mime:        mime.Detect(true, segments[i]),
+				Permissions: &storage.PermissionSet{ListContainer: true, CreateContainer: true},
+				Size:        uint64(0),
+				Mtime: &storage.Timestamp{
+					Seconds: uint64(now.Unix()),
+					Nanos:   uint32(now.Nanosecond()),
+				},
+			}
+			
+			log.Debug().
+				Interface("md", md).
+				Msg("autocreating node")
+
+			err = s.storeMD(context.Background(), md, metaNode)
+		}
+		return md, err
+	}
+	
+	log.Debug().
+		Interface("fn", fn).
+		Msg("not autocreating")
+	return nil, nil
+}
+// TODO jfd check we return fn in all notfounderrors and not the key. the key might leak info of the underlying fs layout 
 
 func (s *badgerStorage) ListFolder(ctx context.Context, fn string) ([]*storage.MD, error) {
 	log := appctx.GetLogger(ctx)
@@ -532,7 +588,7 @@ func (s *badgerStorage) ListFolder(ctx context.Context, fn string) ([]*storage.M
 
 	log.Debug().
 		Int("count", len(finfos)).
-		Msg("returning cached results")
+		Msg("returning results")
 	return finfos, nil
 }
 
