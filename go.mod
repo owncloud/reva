@@ -13,6 +13,7 @@ require (
 	github.com/fatih/color v1.7.0 // indirect
 	github.com/go-sql-driver/mysql v1.4.1
 	github.com/gofrs/uuid v3.2.0+incompatible
+	github.com/gomodule/redigo v2.0.0+incompatible
 	github.com/grpc-ecosystem/go-grpc-middleware v1.0.1-0.20190118093823-f849b5445de4
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/mattn/go-colorable v0.0.9 // indirect
@@ -22,6 +23,7 @@ require (
 	github.com/pkg/errors v0.8.1
 	github.com/pquerna/cachecontrol v0.0.0-20180517163645-1555304b9b35 // indirect
 	github.com/prometheus/client_golang v0.9.3-0.20190127221311-3c4408c8b829
+	github.com/prometheus/common v0.2.0
 	github.com/rs/cors v1.6.0
 	github.com/rs/zerolog v1.14.3
 	golang.org/x/crypto v0.0.0-20190411191339-88737f569e3a

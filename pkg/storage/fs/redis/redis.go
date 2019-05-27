@@ -62,7 +62,7 @@
 //      requires this to be atomic (does it? well it locks the folder ... so ... urgh: locking also requires a common backend, otherwise
 //      the datasvc might PUT a file when the dir has been locked)
 
-package badger
+package redis
 
 import (
 	"bytes"
@@ -85,18 +85,16 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 
-	"github.com/dgraph-io/badger"
+	"github.com/gomodule/redigo/redis"
 )
 
 func init() {
-	registry.Register("badger", New)
+	registry.Register("redis", New)
 }
 
 type config struct {
-	// Dir will be created if it does not exist
-	Dir             string `mapstructure:"dir"`
-	ValueDir        string `mapstructure:"value_dir"`
 	Prefix          string `mapstructure:"prefix"`
+	Host            string `mapstructure:"host"`
 	AutocreateDepth int    `mapstructure:"autocreate_depth"`
 }
 
@@ -110,24 +108,18 @@ func parseConfig(m map[string]interface{}) (*config, error) {
 }
 
 func (c *config) init() {
-	c.Dir = path.Clean(c.Dir)
-	if c.Dir == "." {
-		c.Dir = "/tmp/badger"
-	}
-	c.ValueDir = path.Clean(c.ValueDir)
-	if c.ValueDir == "." {
-		c.ValueDir = "/tmp/badger"
+	if c.Host == "" {
+		c.Host = ":6379"
 	}
 }
 
-// New returns an implementation of the storage.FS interface that is backed by a badger kv store
-// TODO use an out of process kv store, eg redis or quarkdb
+// New returns an implementation of the storage.FS interface that is backed by a redis kv store
 // the keyspace is divided in several namespaces:
 // 1. the n: prefix which contains node metadata under the node id, a uuid
 //   - contains dir and file nodes, just as in a posix fs
 // 2. the n:<nodeid>:path entries which are used to look up path by fileid
 //   - this is cheaper than having to rewrite all metadata at the cost of doubling the amount of keys
-// TODO implement 3. the p/ prefix which is used to look up fileid by path
+// TODO implement 3. the p: prefix to look up fileid by path
 //   - contains path as key
 //   - is a performance vs memory tradeof, for now we do multiple lookups
 //
@@ -139,28 +131,40 @@ func New(m map[string]interface{}) (storage.FS, error) {
 	}
 	c.init()
 
-	opts := badger.DefaultOptions
-	opts.Dir = c.Dir
-	opts.ValueDir = c.ValueDir
-	db, err := badger.Open(opts)
-	if err != nil {
-		return nil, err
+	pool := &redis.Pool{
+
+		MaxIdle:     3,
+		IdleTimeout: 240 * time.Second,
+
+		Dial: func() (redis.Conn, error) {
+			c, err := redis.Dial("tcp", c.Host)
+			if err != nil {
+				return nil, err
+			}
+			return c, err
+		},
+
+		TestOnBorrow: func(c redis.Conn, t time.Time) error {
+			_, err := c.Do("PING")
+			return err
+		},
 	}
-	s := &badgerStorage{config: c, db: db}
+
+	s := &redisStorage{config: c, pool: pool}
 
 	return s, nil
 }
 
-func (s *badgerStorage) Shutdown() error {
-	return s.db.Close()
+func (s *redisStorage) Shutdown() error {
+	return s.pool.Close()
 }
 
-func (s *badgerStorage) addPrefix(p string) string {
+func (s *redisStorage) addPrefix(p string) string {
 	np := path.Join(s.config.Prefix, p)
 	return np
 }
 
-func (s *badgerStorage) removePrefix(np string) string {
+func (s *redisStorage) removePrefix(np string) string {
 	p := strings.TrimPrefix(np, s.config.Prefix)
 	if p == "" {
 		p = "/"
@@ -168,8 +172,8 @@ func (s *badgerStorage) removePrefix(np string) string {
 	return p
 }
 
-type badgerStorage struct {
-	db     *badger.DB
+type redisStorage struct {
+	pool   *redis.Pool
 	config *config
 }
 
@@ -197,10 +201,7 @@ func calcEtag(ctx context.Context, md *storage.MD) string {
 	return fmt.Sprintf(`"%x"`, h.Sum(nil))
 }
 
-var metaNode = byte(0x0)
-var metaRoot = byte(0x1)
-
-func (s *badgerStorage) storeMD(ctx context.Context, parentID string, md *storage.MD, meta byte) error {
+func (s *redisStorage) storeMD(ctx context.Context, parentID string, md *storage.MD) error {
 	log := appctx.GetLogger(ctx)
 	var b bytes.Buffer
 	e := gob.NewEncoder(&b)
@@ -214,23 +215,23 @@ func (s *badgerStorage) storeMD(ctx context.Context, parentID string, md *storag
 		log.Error().Err(err)
 		return err
 	}
-	err := s.db.Update(func(txn *badger.Txn) error {
-		// 1. add node
-		err := txn.SetWithMeta([]byte("n:"+md.ID), b.Bytes(), meta)
-		if err != nil {
-			return err
-		}
-		if name != "" {
-			// 2. add dir entry
-			err := txn.SetWithMeta([]byte("n:"+parentID+":d:"+name), []byte(md.ID), meta)
-			if err != nil {
-				return err
-			}
-			// 3. update cache for path by id lookup
-			return txn.SetWithMeta([]byte("n:"+md.ID+":path"), []byte(p), meta)
-		}
-		return nil
-	})
+
+	conn := s.pool.Get()
+	defer conn.Close()
+
+	//start transaction
+	conn.Send("MULTI")
+
+	// 1. add node
+	conn.Send("SET", "n:"+md.ID, b.Bytes())
+
+	if name != "" {
+		// 2. add dir entry
+		conn.Send("SET", "n:"+parentID+":d:"+name, md.ID)
+		// 3. update cache for path by id lookup
+		conn.Send("SET", "n:"+md.ID+":path", p)
+	}
+	_, err := conn.Do("EXEC")
 	if err != nil {
 		return err
 	}
@@ -242,7 +243,7 @@ func (s *badgerStorage) storeMD(ctx context.Context, parentID string, md *storag
 	return nil
 }
 
-func (s *badgerStorage) autocreate(ctx context.Context, p string) (*storage.MD, error) {
+func (s *redisStorage) autocreate(ctx context.Context, p string) (*storage.MD, error) {
 	log := appctx.GetLogger(ctx)
 	if s.config.AutocreateDepth >= strings.Count(p, "/") {
 
@@ -267,7 +268,7 @@ func (s *badgerStorage) autocreate(ctx context.Context, p string) (*storage.MD, 
 			Interface("md", md).
 			Msg("autocreating root node")
 
-		err := s.storeMD(context.Background(), "", md, metaRoot)
+		err := s.storeMD(context.Background(), "", md)
 		if err != nil {
 			return nil, err
 		}
@@ -298,7 +299,7 @@ func (s *badgerStorage) autocreate(ctx context.Context, p string) (*storage.MD, 
 				Str("segment", segments[i]).
 				Msg("autocreating node")
 
-			err = s.storeMD(ctx, parentID, md, metaNode)
+			err = s.storeMD(ctx, parentID, md)
 			if err != nil {
 				return nil, err
 			}
@@ -316,7 +317,7 @@ func (s *badgerStorage) autocreate(ctx context.Context, p string) (*storage.MD, 
 
 // getNodeByPath returns the parent id and the metadata for the node of the given path
 // The parent id is a byprodoct of the tree traversal and is used to save a lookup when executing a Move()
-func (s *badgerStorage) getNodeByPath(ctx context.Context, fn string) (string, *storage.MD, error) {
+func (s *redisStorage) getNodeByPath(ctx context.Context, fn string) (string, *storage.MD, error) {
 	log := appctx.GetLogger(ctx)
 	p := path.Clean("/" + fn)
 	var segments []string
@@ -332,48 +333,35 @@ func (s *badgerStorage) getNodeByPath(ctx context.Context, fn string) (string, *
 
 	md := &storage.MD{}
 
-	err := s.db.View(func(txn *badger.Txn) error {
-		// if we have segments traverse the tree
-		for i := 1; i < len(segments); i++ {
-			k := "n:" + nodeID + ":d:" + segments[i]
-			log.Debug().Str("key", k).Msg("lookup")
-			// lookup the dir entry
-			item, err := txn.Get([]byte(k))
-			if err != nil {
-				log.Error().Str("key", k).
-					Err(err)
-				return err
-			}
-			log.Debug().Str("key", k).Interface("item", item).Msg("got dir entry")
-			v, err := item.Value()
-			if err != nil {
-				log.Error().Str("key", k).
-					Err(err)
-				return err
-			}
-			parentID = nodeID
-			nodeID = string(v)
-			log.Debug().Str("key", k).Str("nodeID", nodeID).Str("segment", segments[i]).Msg("resolved dir entry")
-		}
+	conn := s.pool.Get()
+	defer conn.Close()
 
-		// now get the final node
-		k := "n:" + nodeID
-		item, err := txn.Get([]byte(k))
+	// if we have segments traverse the tree
+	for i := 1; i < len(segments); i++ {
+		k := "n:" + nodeID + ":d:" + segments[i]
+		log.Debug().Str("key", k).Msg("lookup")
+		parentID = nodeID
+		// lookup the dir entry
+		result, err := redis.String(conn.Do("GET", k))
 		if err != nil {
-			log.Error().Str("key", k).
-				Err(err)
-			return err
+			return "", nil, notFoundError(fn)
 		}
-		log.Debug().Str("key", k).Interface("item", item).Msg("got node")
-		val, err := item.Value()
-		if err != nil {
-			log.Error().Str("key", k).
-				Err(err)
-			return err
-		}
-		d := gob.NewDecoder(bytes.NewReader(val))
-		return d.Decode(&md)
-	})
+		nodeID = result
+		log.Debug().Str("key", k).Str("nodeID", nodeID).Str("segment", segments[i]).Msg("resolved dir entry")
+	}
+
+	// now get the final node
+	k := "n:" + nodeID
+	data, err := redis.Bytes(conn.Do("GET", k))
+	if err != nil {
+		log.Error().Str("key", k).
+			Err(err)
+		return "", nil, notFoundError(fn)
+	}
+	log.Debug().Str("key", k).Interface("data", data).Msg("got data")
+	d := gob.NewDecoder(bytes.NewReader(data))
+	err = d.Decode(&md)
+
 	if err != nil {
 		log.Error().
 			Err(err)
@@ -385,8 +373,9 @@ func (s *badgerStorage) getNodeByPath(ctx context.Context, fn string) (string, *
 	return parentID, md, nil
 }
 
+/*
 // propagate mtime, etag and size?
-func (s *badgerStorage) propagate(ctx context.Context, md *storage.MD) error {
+func (s *redisStorage) propagate(ctx context.Context, md *storage.MD) error {
 	log := appctx.GetLogger(ctx)
 	// split path into segments
 	parent := path.Dir(md.Path)
@@ -447,46 +436,40 @@ func (s *badgerStorage) propagate(ctx context.Context, md *storage.MD) error {
 	}
 	return err
 }
+*/
 
 // GetPathByID returns the path for the given file id
-func (s *badgerStorage) GetPathByID(ctx context.Context, id string) (string, error) {
-	path := ""
-	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("n:" + id + ":path"))
-		if err != nil {
-			return err
-		}
-		val, err := item.Value()
-		if err != nil {
-			return err
-		}
-		path = string(val)
-		return nil
-	})
-	return path, err
+func (s *redisStorage) GetPathByID(ctx context.Context, id string) (string, error) {
+	conn := s.pool.Get()
+	defer conn.Close()
+	p, err := redis.String(conn.Do("GET", "n:"+id+":path"))
+	if err != nil {
+		return "", notFoundError(id)
+	}
+	return p, nil
 }
 
-func (s *badgerStorage) AddGrant(ctx context.Context, path string, g *storage.Grant) error {
+func (s *redisStorage) AddGrant(ctx context.Context, path string, g *storage.Grant) error {
 	return notSupportedError("op not supported")
 }
 
-func (s *badgerStorage) ListGrants(ctx context.Context, path string) ([]*storage.Grant, error) {
+func (s *redisStorage) ListGrants(ctx context.Context, path string) ([]*storage.Grant, error) {
 	return nil, notSupportedError("op not supported")
 }
 
-func (s *badgerStorage) RemoveGrant(ctx context.Context, path string, g *storage.Grant) error {
+func (s *redisStorage) RemoveGrant(ctx context.Context, path string, g *storage.Grant) error {
 	return notSupportedError("op not supported")
 }
 
-func (s *badgerStorage) UpdateGrant(ctx context.Context, path string, g *storage.Grant) error {
+func (s *redisStorage) UpdateGrant(ctx context.Context, path string, g *storage.Grant) error {
 	return notSupportedError("op not supported")
 }
 
-func (s *badgerStorage) GetQuota(ctx context.Context) (int, int, error) {
+func (s *redisStorage) GetQuota(ctx context.Context) (int, int, error) {
 	return 0, 0, nil
 }
 
-func (s *badgerStorage) CreateDir(ctx context.Context, fn string) error {
+func (s *redisStorage) CreateDir(ctx context.Context, fn string) error {
 	log := appctx.GetLogger(ctx)
 	p := s.addPrefix(fn)
 
@@ -515,7 +498,7 @@ func (s *badgerStorage) CreateDir(ctx context.Context, fn string) error {
 		},
 	}
 	md.Etag = calcEtag(ctx, md)
-	err = s.storeMD(ctx, parent.ID, md, metaNode)
+	err = s.storeMD(ctx, parent.ID, md)
 	if err != nil {
 		return err
 	}
@@ -524,7 +507,7 @@ func (s *badgerStorage) CreateDir(ctx context.Context, fn string) error {
 	return err
 }
 
-func (s *badgerStorage) Delete(ctx context.Context, fn string) error {
+func (s *redisStorage) Delete(ctx context.Context, fn string) error {
 	log := appctx.GetLogger(ctx)
 	p := s.addPrefix(fn)
 
@@ -535,36 +518,24 @@ func (s *badgerStorage) Delete(ctx context.Context, fn string) error {
 
 	// get old node and parent id
 	parentID, n, err := s.getNodeByPath(ctx, p)
-	if err == badger.ErrKeyNotFound {
-		return notFoundError(fn)
-	}
 	if err != nil {
 		return err
 	}
 	// TODO delete trees recursively
 	//      - needs access to actual storage to delete blobs?
 
-	err = s.db.Update(func(txn *badger.Txn) error {
-		// 1. delete dir entry
-		err := txn.Delete([]byte("n:" + parentID + ":d:" + path.Base(p)))
-		if err != nil {
-			return err
-		}
-		// 2. delete node
-		err = txn.Delete([]byte("n:" + n.ID))
-		if err != nil {
-			return err
-		}
-		// 3. update cache for path by id lookup
-		return txn.Delete([]byte("n:" + n.ID + ":path"))
-	})
+	conn := s.pool.Get()
+	defer conn.Close()
+
+	// 1. add node
+	_, err = conn.Do("DEL", "n:"+parentID+":d:"+path.Base(p), "n:"+n.ID, "n:"+n.ID+":path")
 
 	// TODO propagate
 
 	return err
 }
 
-func (s *badgerStorage) Move(ctx context.Context, oldName string, newName string) error {
+func (s *redisStorage) Move(ctx context.Context, oldName string, newName string) error {
 	log := appctx.GetLogger(ctx)
 	oldPath := s.addPrefix(oldName)
 	newPath := s.addPrefix(newName)
@@ -577,42 +548,39 @@ func (s *badgerStorage) Move(ctx context.Context, oldName string, newName string
 
 	// get old node and parent id
 	oldParentID, node, err := s.getNodeByPath(ctx, oldPath)
-	if err == badger.ErrKeyNotFound {
-		return notFoundError(oldName)
-	}
 	if err != nil {
 		return err
 	}
 	_, newParent, err := s.getNodeByPath(ctx, path.Dir(newPath))
-	if err == badger.ErrKeyNotFound {
-		return notFoundError(path.Dir(newName))
-	}
 	if err != nil {
 		return err
 	}
 
-	err = s.db.Update(func(txn *badger.Txn) error {
-		// 1. delete old dir entry
-		err := txn.Delete([]byte("n:" + oldParentID + ":d:" + path.Base(oldPath)))
-		if err != nil {
-			return err
-		}
-		// 2. add dir entry
-		err = txn.SetWithMeta([]byte("n:"+newParent.ID+":d:"+path.Base(newPath)), []byte(node.ID), metaNode)
-		if err != nil {
-			return err
-		}
-		// 3. update cache for path by id lookup
-		return txn.SetWithMeta([]byte("n:"+node.ID+":path"), []byte(newPath), metaNode)
-		// TODO implement recursive path update for all children
-	})
+	conn := s.pool.Get()
+	defer conn.Close()
+
+	//start transaction
+	conn.Do("MULTI")
+
+	// 1. delete old dir entry
+	conn.Send("DEL", "n:"+oldParentID+":d:"+path.Base(oldPath))
+
+	// 2. add dir entry
+	conn.Send("SET", "n:"+newParent.ID+":d:"+path.Base(newPath), node.ID)
+
+	// 3. update cache for path by id lookup
+	conn.Send("SET", "n:"+node.ID+":path", newPath)
+
+	// TODO implement recursive path update for all children
+
+	_, err = conn.Do("EXEC")
 
 	// TODO propagate
 
 	return err
 }
 
-func (s *badgerStorage) GetMD(ctx context.Context, fn string) (*storage.MD, error) {
+func (s *redisStorage) GetMD(ctx context.Context, fn string) (*storage.MD, error) {
 	log := appctx.GetLogger(ctx)
 	path := s.addPrefix(fn)
 
@@ -622,8 +590,7 @@ func (s *badgerStorage) GetMD(ctx context.Context, fn string) (*storage.MD, erro
 		Msg("GetMD")
 
 	_, md, err := s.getNodeByPath(ctx, path)
-
-	if err == badger.ErrKeyNotFound {
+	if _, ok := err.(notFoundError); ok {
 		md = nil
 	} else if err != nil {
 		return nil, err
@@ -649,7 +616,7 @@ func (s *badgerStorage) GetMD(ctx context.Context, fn string) (*storage.MD, erro
 	return nil, notFoundError(fn)
 }
 
-func (s *badgerStorage) ListFolder(ctx context.Context, fn string) ([]*storage.MD, error) {
+func (s *redisStorage) ListFolder(ctx context.Context, fn string) ([]*storage.MD, error) {
 	log := appctx.GetLogger(ctx)
 	p := s.addPrefix(fn)
 
@@ -659,9 +626,6 @@ func (s *badgerStorage) ListFolder(ctx context.Context, fn string) ([]*storage.M
 		Msg("ListFolder")
 
 	_, md, err := s.getNodeByPath(ctx, p)
-	if err == badger.ErrKeyNotFound {
-		return nil, notFoundError(fn)
-	}
 	if err != nil {
 		log.Error().Err(err)
 		return nil, err
@@ -671,65 +635,61 @@ func (s *badgerStorage) ListFolder(ctx context.Context, fn string) ([]*storage.M
 
 	parentID := md.ID
 
-	err = s.db.View(func(txn *badger.Txn) error {
-		it := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer it.Close()
-		prefix := "n:" + parentID + ":d:"
-		prefixLength := len(prefix)
-		prefixBytes := []byte(prefix)
+	conn := s.pool.Get()
+	defer conn.Close()
 
-		// iterate over dir entries
-		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
-			item := it.Item()
+	prefix := "n:" + parentID + ":d:"
+	pattern := prefix + "*"
+	prefixLength := len(prefix)
 
-			// remember file name which is part of the key
-			p := string(item.Key())[prefixLength:]
+	iter := 0
+	for {
+		arr, err := redis.Values(conn.Do("SCAN", iter, "MATCH", pattern))
+		if err != nil {
+			return nil, fmt.Errorf("error retrieving '%s' keys", pattern)
+		}
 
-			v, err := item.Value()
-			if err != nil {
-				log.Error().Err(err)
-				continue // if there is an error we still want to see the rest of the files
-			}
-			n := string(v)
+		iter, _ = redis.Int(arr[0], nil)
+		keys, _ := redis.Strings(arr[1], nil)
+		for _, k := range keys {
+			name := k[prefixLength:]
 			log.Debug().
-				Str("name", p).
-				Str("node", n).
+				Str("key", k).
+				Str("name", name).
 				Msg("found dir entry")
-
-			// read node
-			nItem, err := txn.Get([]byte("n:" + n))
+			// remember file name which is part of the key
+			nodeID, err := redis.String(conn.Do("GET", k))
 			if err != nil {
-				log.Error().Err(err)
+				log.Error().Err(err).Str("key", k).Msg("could not read dir entry found")
 				continue // if there is an error we still want to see the rest of the files
 			}
-			nV, err := nItem.Value()
+			node, err := redis.Bytes(conn.Do("GET", "n:"+nodeID))
 			if err != nil {
-				log.Error().Err(err)
+				log.Error().Err(err).Str("nodeID", nodeID).Msg("could not read node")
 				continue // if there is an error we still want to see the rest of the files
 			}
 
 			md := &storage.MD{}
 
-			d := gob.NewDecoder(bytes.NewReader(nV))
+			d := gob.NewDecoder(bytes.NewReader(node))
 			err = d.Decode(&md)
 			if err != nil {
-				log.Error().Err(err)
+				log.Error().Err(err).Str("nodeID", nodeID).Msg("could not decode node")
 				continue
 			}
 
-			md.Path = path.Join(fn, p)
+			md.Path = path.Join(fn, name)
 
 			log.Debug().
-				Str("name", p).
+				Str("name", name).
 				Interface("md", md).
 				Msg("adding entry")
 
 			finfos = append(finfos, md)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		if iter == 0 {
+			break
+		}
 	}
 
 	log.Debug().
@@ -739,10 +699,8 @@ func (s *badgerStorage) ListFolder(ctx context.Context, fn string) ([]*storage.M
 }
 
 // Upload creates an entry in the dir listing, but the actual storage of the data needs to be handled elsewhere
-// TODO this is never reached. The storageprovidersvc does a stat call / GetMD and then delegates the upload to the datasvc
-//      but the datasvc uses a different instance of the badger storage. which uses a different badger instance ...
-//      we need a way to access the kv store from both processes: either redis or a go channel? tboerger?
-func (s *badgerStorage) Upload(ctx context.Context, fn string, r io.ReadCloser) error {
+// TODO implement overlay storage that storas the data ...
+func (s *redisStorage) Upload(ctx context.Context, fn string, r io.ReadCloser) error {
 
 	log := appctx.GetLogger(ctx)
 	p := s.addPrefix(fn)
@@ -780,7 +738,7 @@ func (s *badgerStorage) Upload(ctx context.Context, fn string, r io.ReadCloser) 
 		Str("parentID", parent.ID).
 		Msg("creating file node")
 
-	err = s.storeMD(ctx, parent.ID, md, metaNode)
+	err = s.storeMD(ctx, parent.ID, md)
 
 	if err != nil {
 		return err
@@ -792,31 +750,31 @@ func (s *badgerStorage) Upload(ctx context.Context, fn string, r io.ReadCloser) 
 	return err
 }
 
-func (s *badgerStorage) Download(ctx context.Context, fn string) (io.ReadCloser, error) {
+func (s *redisStorage) Download(ctx context.Context, fn string) (io.ReadCloser, error) {
 	return nil, notSupportedError("download")
 }
 
-func (s *badgerStorage) ListRevisions(ctx context.Context, path string) ([]*storage.Revision, error) {
+func (s *redisStorage) ListRevisions(ctx context.Context, path string) ([]*storage.Revision, error) {
 	return nil, notSupportedError("list revisions")
 }
 
-func (s *badgerStorage) DownloadRevision(ctx context.Context, path, revisionKey string) (io.ReadCloser, error) {
+func (s *redisStorage) DownloadRevision(ctx context.Context, path, revisionKey string) (io.ReadCloser, error) {
 	return nil, notSupportedError("download revision")
 }
 
-func (s *badgerStorage) RestoreRevision(ctx context.Context, path, revisionKey string) error {
+func (s *redisStorage) RestoreRevision(ctx context.Context, path, revisionKey string) error {
 	return notSupportedError("restore revision")
 }
 
-func (s *badgerStorage) EmptyRecycle(ctx context.Context, path string) error {
+func (s *redisStorage) EmptyRecycle(ctx context.Context, path string) error {
 	return notSupportedError("empty recycle")
 }
 
-func (s *badgerStorage) ListRecycle(ctx context.Context, path string) ([]*storage.RecycleItem, error) {
+func (s *redisStorage) ListRecycle(ctx context.Context, path string) ([]*storage.RecycleItem, error) {
 	return nil, notSupportedError("list recycle")
 }
 
-func (s *badgerStorage) RestoreRecycleItem(ctx context.Context, fn, restoreKey string) error {
+func (s *redisStorage) RestoreRecycleItem(ctx context.Context, fn, restoreKey string) error {
 	return notSupportedError("restore recycle")
 }
 
