@@ -583,7 +583,7 @@ func (s *service) AddGrant(ctx context.Context, req *storageproviderv0alphapb.Ad
 			UserID: userID,
 			Type:   s.getStorageGranteeType(req.Grant.Grantee.Type),
 		},
-		PermissionSet: s.getStoragePermissionSet(req.Grant.Permissions),
+		PermissionSet: permissions2set(req.Grant.Permissions),
 	}
 
 	err := s.storage.AddGrant(ctx, fn, g)
@@ -610,21 +610,10 @@ func (s *service) getStorageGranteeType(t storageproviderv0alphapb.GranteeType) 
 	}
 }
 
-func (s *service) getStoragePermissionSet(set *storageproviderv0alphapb.ResourcePermissions) *storage.PermissionSet {
-	toret := &storage.PermissionSet{}
-	if set.ListContainer {
-		toret.ListContainer = true
-	}
-	if set.CreateContainer {
-		toret.CreateContainer = true
-	}
-	return toret
-}
-
 func (s *service) UpdateGrant(ctx context.Context, req *storageproviderv0alphapb.UpdateGrantRequest) (*storageproviderv0alphapb.UpdateGrantResponse, error) {
 	log := appctx.GetLogger(ctx)
 	fn := req.Ref.GetPath()
-	storagePerm := s.getStoragePermissionSet(req.Grant.Permissions)
+	storagePerm := permissions2set(req.Grant.Permissions)
 	granteeType := s.getStorageGranteeType(req.Grant.Grantee.Type)
 
 	if granteeType == storage.GranteeTypeInvalid {
@@ -661,7 +650,7 @@ func (s *service) RemoveGrant(ctx context.Context, req *storageproviderv0alphapb
 	log := appctx.GetLogger(ctx)
 	fn := req.Ref.GetPath()
 	granteeType := s.getStorageGranteeType(req.Grant.Grantee.Type)
-	storagePerm := s.getStoragePermissionSet(req.Grant.Permissions)
+	storagePerm := permissions2set(req.Grant.Permissions)
 
 	// check targetType is valid
 	if granteeType == storage.GranteeTypeInvalid {
@@ -840,4 +829,77 @@ func (s *service) toInfo(md *storage.MD) *storageproviderv0alphapb.ResourceInfo 
 	}
 
 	return info
+}
+
+
+// TODO same code to map permissions to storage permission set here and in the usershareprovider
+func permissions2set(p *storageproviderv0alphapb.ResourcePermissions) *storage.PermissionSet {
+	return &storage.PermissionSet{
+		// r
+		Stat:                 p.Stat,
+		InitiateFileDownload: p.InitiateFileDownload,
+
+		// w
+		CreateContainer:    p.CreateContainer,
+		InitiateFileUpload: p.InitiateFileUpload,
+		Delete:             p.Delete,
+		Move:               p.Move,
+
+		// x
+		ListContainer: p.ListContainer,
+
+		// sharing
+		AddGrant:    p.AddGrant,
+		ListGrants:  p.ListGrants,
+		RemoveGrant: p.RemoveGrant,
+		UpdateGrant: p.UpdateGrant,
+
+		// trash
+		ListRecycle:        p.ListRecycle,
+		RestoreRecycleItem: p.RestoreRecycleItem,
+		PurgeRecycle:       p.PurgeRecycle,
+
+		// versions
+		ListFileVersions:   p.ListFileVersions,
+		RestoreFileVersion: p.RestoreFileVersion,
+
+		// ?
+		GetPath:  p.GetPath,
+		GetQuota: p.GetQuota,
+	}
+}
+func set2permissions(s *storage.PermissionSet) *storageproviderv0alphapb.ResourcePermissions {
+	return &storageproviderv0alphapb.ResourcePermissions{
+		// r
+		Stat:                 s.Stat,
+		InitiateFileDownload: s.InitiateFileDownload,
+
+		// w
+		CreateContainer:    s.CreateContainer,
+		InitiateFileUpload: s.InitiateFileUpload,
+		Delete:             s.Delete,
+		Move:               s.Move,
+
+		// x
+		ListContainer: s.ListContainer,
+
+		// sharing
+		AddGrant:    s.AddGrant,
+		ListGrants:  s.ListGrants,
+		RemoveGrant: s.RemoveGrant,
+		UpdateGrant: s.UpdateGrant,
+
+		// trash
+		ListRecycle:        s.ListRecycle,
+		RestoreRecycleItem: s.RestoreRecycleItem,
+		PurgeRecycle:       s.PurgeRecycle,
+
+		// versions
+		ListFileVersions:   s.ListFileVersions,
+		RestoreFileVersion: s.RestoreFileVersion,
+
+		// ?
+		GetPath:  s.GetPath,
+		GetQuota: s.GetQuota,
+	}
 }

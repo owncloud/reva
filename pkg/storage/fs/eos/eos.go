@@ -246,11 +246,26 @@ func getEosACLType(aclType storage.GranteeType) (string, error) {
 
 // TODO(labkode): fine grained permission controls.
 func getEosACLPerm(set *storage.PermissionSet) (string, error) {
-	if set.Delete {
-		return "rwx!d", nil
+	var b strings.Builder
+
+	if set.Stat || set.InitiateFileDownload {
+		b.WriteString("r")
+	}
+	if set.CreateContainer || set.InitiateFileUpload || set.Delete || set.Move {
+		b.WriteString("w")
+	}
+	if set.ListContainer {
+		b.WriteString("x")
 	}
 
-	return "rx", nil
+	if !set.Delete {
+		b.WriteString("!d")
+	}
+
+	// TODO sharing
+	// TODO trash
+	// TODO versions
+	return b.String(), nil
 }
 
 func (fs *eosStorage) getEosACL(g *storage.Grant) (*acl.Entry, error) {
@@ -300,6 +315,8 @@ func (fs *eosStorage) UpdateGrant(ctx context.Context, fn string, g *storage.Gra
 	if err != nil {
 		return err
 	}
+	log := appctx.GetLogger(ctx)
+	log.Debug().Str("fn", fn).Interface("grant", g).Interface("eosACL", eosACL).Msg("mapped permissions")
 
 	fn = fs.getInternalPath(ctx, fn)
 	err = fs.c.AddACL(ctx, u.Username, fn, eosACL)
@@ -348,38 +365,60 @@ func (fs *eosStorage) getGranteeType(aclType string) storage.GranteeType {
 }
 
 // TODO(labkode): add more fine grained controls.
+// EOS acls are a mix of ACLs and POSIX permissions. More details can be found in
+// https://github.com/cern-eos/eos/blob/master/doc/configuration/permission.rst
+// TODO we need to evaluate all acls in the list at once to properly forbid (!) and overwrite (+) permissons
+// This is ugly, because those are actually negative permissions ...
 func (fs *eosStorage) getGrantPermissionSet(mode string) *storage.PermissionSet {
-	// TODO AddGrant permission? only for owner and co owners?
-	// TODO Delete
+
+	// TODO also check unix permissions for read access
+	p := &storage.PermissionSet{}
+	// r
+	if strings.Contains(mode, "r") {
+		p.Stat = true
+		p.InitiateFileDownload = true
+	}
+	// w
+	if strings.Contains(mode, "w") {
+		p.CreateContainer = true
+		p.InitiateFileUpload = true
+		p.Delete = true
+		if p.InitiateFileDownload {
+			p.Move = true
+		}
+	}
+	if strings.Contains(mode, "wo") {
+		p.CreateContainer = true
+		//	p.InitiateFileUpload = false // TODO only when the file exists
+		p.Delete = false
+	}
+	if strings.Contains(mode, "!d") {
+		p.Delete = false
+	}
+	// x
+	if strings.Contains(mode, "x") {
+		p.ListContainer = true
+	}
+
+	// sharing
+	// TODO AddGrant
+	// TODO ListGrants
+	// TODO RemoveGrant
+	// TODO UpdateGrant
+
+	// trash
+	// TODO ListRecycle
+	// TODO RestoreRecycleItem
+	// TODO PurgeRecycle
+
+	// versions
+	// TODO ListFileVersions
+	// TODO RestoreFileVersion
+
+	// ?
 	// TODO GetPath
 	// TODO GetQuota
-	// TODO InitiateFileUpload
-	// TODO ListGrants
-	// TODO ListFileVersions
-	// TODO ListRecycle
-	// TODO RemoveGrant
-	// TODO PurgeRecycle only for owner and co owners?
-	// TODO RestoreFileVersion
-	// TODO RestoreRecycleItem
-	// TODO UpdateGrant
-	switch mode {
-	case "rx":
-		return &storage.PermissionSet{
-			ListContainer: true,
-			//InitiateFileDownload: true,
-			//Stat:          true,
-		}
-	case "rwx!d":
-		return &storage.PermissionSet{
-			Move:            true,
-			CreateContainer: true,
-			ListContainer:   true,
-		}
-	default:
-		// return no permissions are we do not know
-		// what acl is this one.
-		return &storage.PermissionSet{} // default values are false
-	}
+	return p
 }
 
 func (fs *eosStorage) GetMD(ctx context.Context, fn string) (*storage.MD, error) {

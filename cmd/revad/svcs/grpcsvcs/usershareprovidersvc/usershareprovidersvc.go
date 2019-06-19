@@ -101,14 +101,10 @@ func (s *service) CreateShare(ctx context.Context, req *usershareproviderv0alpha
 			},
 			Type: storage.GranteeTypeUser, // TODO hardcoded, read from share
 		},
-		PermissionSet: &storage.PermissionSet{
-			ListContainer:   req.Grant.Permissions.Permissions.ListContainer,
-			CreateContainer: req.Grant.Permissions.Permissions.CreateContainer,
-			Move:            req.Grant.Permissions.Permissions.Move,
-			Delete:          req.Grant.Permissions.Permissions.Delete,
-			// TODO map more permissions
-		},
+		PermissionSet: permissions2set(req.Grant.Permissions.Permissions),
 	}
+
+	// TODO try to read role?
 
 	log.Debug().Str("path", path).Msg("list shares")
 	// check if path exists
@@ -235,47 +231,6 @@ func (s *service) ListShares(ctx context.Context, req *usershareproviderv0alphap
 	return res, nil
 }
 
-func grantToShare(grant *storage.Grant) *usershareproviderv0alphapb.Share {
-	share := &usershareproviderv0alphapb.Share{
-		Id: &usershareproviderv0alphapb.ShareId{},
-		// ResourceId: not available in grant, set in parent
-		Permissions: &usershareproviderv0alphapb.SharePermissions{
-			Permissions: &storageproviderv0alphapb.ResourcePermissions{
-				ListContainer:   grant.PermissionSet.ListContainer,
-				CreateContainer: grant.PermissionSet.CreateContainer,
-				Move:            grant.PermissionSet.Move,
-				Delete:          grant.PermissionSet.Delete,
-				// TODO add more permissons to grant.PermissionSet
-			},
-		},
-		Grantee: &storageproviderv0alphapb.Grantee{
-			Type: storageproviderv0alphapb.GranteeType_GRANTEE_TYPE_INVALID,
-			Id: &typespb.UserId{
-				Idp:      grant.Grantee.UserID.IDP,
-				OpaqueId: grant.Grantee.UserID.OpaqueID,
-			},
-		},
-		// Owner: not available in grant, set in parent
-		// Creator: TODO not available in grant, add it?
-		Ctime: &typespb.Timestamp{}, // TODO should be named btime, not available in grant, add it?
-		// Mtime: TODO not available in grant, add it?
-	}
-	switch grant.Grantee.Type {
-	case storage.GranteeTypeUser:
-		share.Grantee.Type = storageproviderv0alphapb.GranteeType_GRANTEE_TYPE_USER
-		// FIXME this kind of id works only for acls ...
-		// it becomes unique if prefixed with the fileid ...
-		share.Id.OpaqueId = "u:" + grant.Grantee.UserID.OpaqueID
-	case storage.GranteeTypeGroup:
-		share.Grantee.Type = storageproviderv0alphapb.GranteeType_GRANTEE_TYPE_GROUP
-		// FIXME this kind of id works only for acls ...
-		// it becomes unique if prefixed with the fileid ...
-		share.Id.OpaqueId = "g:" + grant.Grantee.UserID.OpaqueID
-		// FIXME grantee.UserID ... might be a group ... rename to identifier?
-	}
-	return share
-}
-
 func (s *service) UpdateShare(ctx context.Context, req *usershareproviderv0alphapb.UpdateShareRequest) (*usershareproviderv0alphapb.UpdateShareResponse, error) {
 
 	ref := req.Ref.GetId()
@@ -312,13 +267,7 @@ func (s *service) UpdateShare(ctx context.Context, req *usershareproviderv0alpha
 				OpaqueID: username,
 			},
 		},
-		PermissionSet: &storage.PermissionSet{
-			//AddGrant:        rPerm.AddGrand, // TODO map more permissions
-			ListContainer:   rPerm.ListContainer,
-			CreateContainer: rPerm.CreateContainer,
-			Move:            rPerm.Move,
-			Delete:          rPerm.Delete,
-		},
+		PermissionSet: permissions2set(rPerm),
 	}
 	switch sType {
 	case "u":
@@ -328,7 +277,7 @@ func (s *service) UpdateShare(ctx context.Context, req *usershareproviderv0alpha
 	default:
 		grant.Grantee.Type = storage.GranteeTypeInvalid
 	}
-	// TODO the storage has no method to get a grand by shareid
+	// TODO the storage has no method to get a grant by shareid
 	err := s.storage.UpdateGrant(ctx, path, grant)
 	if err != nil {
 		// TODO not found error
@@ -365,4 +314,111 @@ func getFS(c *config) (storage.FS, error) {
 		return f(c.Drivers[c.Driver])
 	}
 	return nil, fmt.Errorf("driver not found: %s", c.Driver)
+}
+
+func grantToShare(grant *storage.Grant) *usershareproviderv0alphapb.Share {
+	share := &usershareproviderv0alphapb.Share{
+		Id: &usershareproviderv0alphapb.ShareId{},
+		// ResourceId: not available in grant, set in parent
+		Permissions: &usershareproviderv0alphapb.SharePermissions{
+			Permissions: set2permissions(grant.PermissionSet),
+		},
+		Grantee: &storageproviderv0alphapb.Grantee{
+			Type: storageproviderv0alphapb.GranteeType_GRANTEE_TYPE_INVALID,
+			Id: &typespb.UserId{
+				Idp:      grant.Grantee.UserID.IDP,
+				OpaqueId: grant.Grantee.UserID.OpaqueID,
+			},
+		},
+		// Owner: not available in grant, set in parent
+		// Creator: TODO not available in grant, add it?
+		Ctime: &typespb.Timestamp{}, // TODO should be named btime, not available in grant, add it?
+		// Mtime: TODO not available in grant, add it?
+	}
+	switch grant.Grantee.Type {
+	case storage.GranteeTypeUser:
+		share.Grantee.Type = storageproviderv0alphapb.GranteeType_GRANTEE_TYPE_USER
+		// FIXME this kind of id works only for acls ...
+		// it becomes unique if prefixed with the fileid ...
+		share.Id.OpaqueId = "u:" + grant.Grantee.UserID.OpaqueID
+	case storage.GranteeTypeGroup:
+		share.Grantee.Type = storageproviderv0alphapb.GranteeType_GRANTEE_TYPE_GROUP
+		// FIXME this kind of id works only for acls ...
+		// it becomes unique if prefixed with the fileid ...
+		share.Id.OpaqueId = "g:" + grant.Grantee.UserID.OpaqueID
+		// FIXME grantee.UserID ... might be a group ... rename to identifier?
+	}
+	return share
+}
+
+// TODO same code to map permissions to storage permission set here and in the storageprovider
+func permissions2set(p *storageproviderv0alphapb.ResourcePermissions) *storage.PermissionSet {
+	return &storage.PermissionSet{
+		// r
+		Stat:                 p.Stat,
+		InitiateFileDownload: p.InitiateFileDownload,
+
+		// w
+		CreateContainer:    p.CreateContainer,
+		InitiateFileUpload: p.InitiateFileUpload,
+		Delete:             p.Delete,
+		Move:               p.Move,
+
+		// x
+		ListContainer: p.ListContainer,
+
+		// sharing
+		AddGrant:    p.AddGrant,
+		ListGrants:  p.ListGrants,
+		RemoveGrant: p.RemoveGrant,
+		UpdateGrant: p.UpdateGrant,
+
+		// trash
+		ListRecycle:        p.ListRecycle,
+		RestoreRecycleItem: p.RestoreRecycleItem,
+		PurgeRecycle:       p.PurgeRecycle,
+
+		// versions
+		ListFileVersions:   p.ListFileVersions,
+		RestoreFileVersion: p.RestoreFileVersion,
+
+		// ?
+		GetPath:  p.GetPath,
+		GetQuota: p.GetQuota,
+	}
+}
+func set2permissions(s *storage.PermissionSet) *storageproviderv0alphapb.ResourcePermissions {
+	return &storageproviderv0alphapb.ResourcePermissions{
+		// r
+		Stat:                 s.Stat,
+		InitiateFileDownload: s.InitiateFileDownload,
+
+		// w
+		CreateContainer:    s.CreateContainer,
+		InitiateFileUpload: s.InitiateFileUpload,
+		Delete:             s.Delete,
+		Move:               s.Move,
+
+		// x
+		ListContainer: s.ListContainer,
+
+		// sharing
+		AddGrant:    s.AddGrant,
+		ListGrants:  s.ListGrants,
+		RemoveGrant: s.RemoveGrant,
+		UpdateGrant: s.UpdateGrant,
+
+		// trash
+		ListRecycle:        s.ListRecycle,
+		RestoreRecycleItem: s.RestoreRecycleItem,
+		PurgeRecycle:       s.PurgeRecycle,
+
+		// versions
+		ListFileVersions:   s.ListFileVersions,
+		RestoreFileVersion: s.RestoreFileVersion,
+
+		// ?
+		GetPath:  s.GetPath,
+		GetQuota: s.GetQuota,
+	}
 }
