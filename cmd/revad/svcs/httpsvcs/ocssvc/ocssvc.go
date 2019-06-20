@@ -33,9 +33,14 @@ func init() {
 
 // Config holds the config options that need to be passed down to all ocs handlers
 type Config struct {
-	Prefix       string           `mapstructure:"prefix"`
-	Config       ConfigData       `mapstructure:"config"`
-	Capabilities CapabilitiesData `mapstructure:"capabilities"`
+	Prefix                 string                            `mapstructure:"prefix"`
+	Config                 ConfigData                        `mapstructure:"config"`
+	Capabilities           CapabilitiesData                  `mapstructure:"capabilities"`
+	StorageProviderSVC     string                            `mapstructure:"storageprovidersvc"`
+	UserShareProviderSVC   string                            `mapstructure:"usershareprovidersvc"`
+	PublicShareProviderSVC string                            `mapstructure:"publicshareprovidersvc"`
+	UserManager            string                            `mapstructure:"user_manager"`
+	UserManagers           map[string]map[string]interface{} `mapstructure:"user_managers"`
 }
 
 type svc struct {
@@ -57,7 +62,9 @@ func New(m map[string]interface{}) (httpsvcs.Service, error) {
 	}
 
 	// initialize handlers and set default configs
-	s.V1Handler.init(conf)
+	if err := s.V1Handler.init(conf); err != nil {
+		return nil, err
+	}
 
 	s.setHandler()
 	return s, nil
@@ -82,11 +89,13 @@ func (s *svc) setHandler() {
 
 		log.Debug().Str("head", head).Str("tail", r.URL.Path).Msg("ocs routing")
 
-		if head == "v1.php" {
+		// TODO v2 uses a status code mapper
+		// see https://github.com/owncloud/core/commit/bacf1603ffd53b7a5f73854d1d0ceb4ae545ce9f#diff-262cbf0df26b45bad0cf00d947345d9c
+		if head == "v1.php" || head == "v2.php" {
 			s.V1Handler.Handler().ServeHTTP(w, r)
 			return
 		}
 
-		http.Error(w, "Not Found", http.StatusNotFound)
+		WriteOCSError(w, r, MetaNotFound.StatusCode, "Not found", nil)
 	})
 }

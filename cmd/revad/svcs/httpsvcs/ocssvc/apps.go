@@ -29,9 +29,9 @@ type AppsHandler struct {
 	SharesHandler *SharesHandler
 }
 
-func (h *AppsHandler) init(c *Config) {
+func (h *AppsHandler) init(c *Config) error {
 	h.SharesHandler = new(SharesHandler)
-	h.SharesHandler.init(c)
+	return h.SharesHandler.init(c)
 }
 
 // ServeHTTP routes the known apps
@@ -48,8 +48,8 @@ func (h *AppsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		http.Error(w, "Not Found", http.StatusNotFound)
+		WriteOCSError(w, r, MetaNotFound.StatusCode, "Not found", nil)
 	default:
-		http.Error(w, "Not Found", http.StatusNotFound)
+		WriteOCSError(w, r, MetaNotFound.StatusCode, "Not found", nil)
 	}
 }

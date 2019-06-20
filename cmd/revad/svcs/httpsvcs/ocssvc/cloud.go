@@ -27,11 +27,13 @@ import (
 // CloudHandler holds references to UserHandler and CapabilitiesHandler
 type CloudHandler struct {
 	UserHandler         *UserHandler
+	UsersHandler        *UsersHandler
 	CapabilitiesHandler *CapabilitiesHandler
 }
 
 func (h *CloudHandler) init(c *Config) {
 	h.UserHandler = new(UserHandler)
+	h.UsersHandler = new(UsersHandler)
 	h.CapabilitiesHandler = new(CapabilitiesHandler)
 	h.CapabilitiesHandler.init(c)
 }
@@ -46,8 +48,10 @@ func (h *CloudHandler) Handler() http.Handler {
 			h.CapabilitiesHandler.Handler().ServeHTTP(w, r)
 		case "user":
 			h.UserHandler.ServeHTTP(w, r)
+		case "users":
+			h.UsersHandler.ServeHTTP(w, r)
 		default:
-			http.Error(w, "Not Found", http.StatusNotFound)
+			WriteOCSError(w, r, MetaNotFound.StatusCode, "Not found", nil)
 		}
 	})
 }
