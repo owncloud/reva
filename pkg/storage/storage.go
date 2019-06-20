@@ -101,11 +101,39 @@ type Timestamp struct {
 }
 
 // PermissionSet is the set of permissions for a resource.
+// same permissions as the cs3 Resource Permissions
 type PermissionSet struct {
-	ListContainer   bool
-	CreateContainer bool
-	Move            bool
-	Delete          bool
+	// r
+	Stat                 bool
+	InitiateFileDownload bool
+
+	// w
+	CreateContainer      bool
+	InitiateFileUpload   bool
+	Delete               bool
+	Move                 bool
+
+	// x
+	ListContainer        bool
+
+	// sharing
+	ListGrants           bool
+	AddGrant             bool
+	UpdateGrant          bool
+	RemoveGrant          bool
+
+	// trash
+	ListRecycle          bool
+	RestoreRecycleItem   bool
+	PurgeRecycle         bool
+
+	// versions
+	ListFileVersions     bool
+	RestoreFileVersion   bool
+
+	// ?
+	GetPath              bool
+	GetQuota             bool
 }
 
 // Grant represents a grant for the storage.
