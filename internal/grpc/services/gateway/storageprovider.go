@@ -135,7 +135,8 @@ func (s *svc) InitiateFileDownload(ctx context.Context, req *provider.InitiateFi
 	}
 
 	log := appctx.GetLogger(ctx)
-	if s.isSharedFolder(ctx, p) || s.isShareName(ctx, p) {
+	_, base := path.Split(p)
+	if base == "" {
 		log.Debug().Msgf("path:%s points to shared folder or share name", p)
 		err := errtypes.PermissionDenied("gateway: cannot upload to share folder or share name: path=" + p)
 		log.Err(err).Msg("gateway: error downloading")
@@ -144,60 +145,53 @@ func (s *svc) InitiateFileDownload(ctx context.Context, req *provider.InitiateFi
 		}, nil
 
 	}
+	log.Debug().Msgf("shared child: %s", p)
 
-	if s.isShareChild(ctx, p) {
-		log.Debug().Msgf("shared child: %s", p)
-		shareName, shareChild := s.splitShare(ctx, p)
-
-		ref := &provider.Reference{
-			Spec: &provider.Reference_Path{
-				Path: shareName,
-			},
-		}
-		statReq := &provider.StatRequest{Ref: ref}
-		statRes, err := s.stat(ctx, statReq)
-		if err != nil {
-			return &gateway.InitiateFileDownloadResponse{
-				Status: status.NewInternal(ctx, err, "gateway: error creating container"),
-			}, nil
-		}
-
-		if statRes.Status.Code != rpc.Code_CODE_OK {
-			err := status.NewErrorFromCode(statRes.Status.Code, "gateway")
-			log.Err(err).Msg("gateway: error creating container")
-			return &gateway.InitiateFileDownloadResponse{
-				Status: status.NewInternal(ctx, err, "gateway: error creating container"),
-			}, nil
-		}
-
-		if statRes.Info.Type != provider.ResourceType_RESOURCE_TYPE_REFERENCE {
-			err := errors.New(fmt.Sprintf("gateway: expected reference: got:%+v", statRes.Info))
-			log.Err(err).Msg("gateway: error creating container")
-			return &gateway.InitiateFileDownloadResponse{
-				Status: status.NewInternal(ctx, err, "gateway: error creating container"),
-			}, nil
-		}
-
-		ri, err := s.checkRef(ctx, statRes.Info)
-		if err != nil {
-			log.Err(err).Msg("gateway: error resolving reference")
-			return &gateway.InitiateFileDownloadResponse{
-				Status: status.NewInternal(ctx, err, "error creating container"),
-			}, nil
-		}
-
-		// append child to target
-		target := path.Join(ri.Path, shareChild)
-		ref = &provider.Reference{
-			Spec: &provider.Reference_Path{
-				Path: target,
-			},
-		}
-		req.Ref = ref
-		return s.initiateFileDownload(ctx, req)
+	ref := &provider.Reference{
+		Spec: &provider.Reference_Path{
+			Path: p,
+		},
+	}
+	statReq = &provider.StatRequest{Ref: ref}
+	statRes, err = s.stat(ctx, statReq)
+	if err != nil {
+		return &gateway.InitiateFileDownloadResponse{
+			Status: status.NewInternal(ctx, err, "gateway: error creating container"),
+		}, nil
 	}
 
-	panic("gateway: download: unknown path:" + p)
+	if statRes.Status.Code != rpc.Code_CODE_OK {
+		err := status.NewErrorFromCode(statRes.Status.Code, "gateway")
+		log.Err(err).Msg("gateway: error creating container")
+		return &gateway.InitiateFileDownloadResponse{
+			Status: status.NewInternal(ctx, err, "gateway: error creating container"),
+		}, nil
+	}
+
+	if statRes.Info.Type != provider.ResourceType_RESOURCE_TYPE_REFERENCE {
+		err := errors.New(fmt.Sprintf("gateway: expected reference: got:%+v", statRes.Info))
+		log.Err(err).Msg("gateway: error creating container")
+		return &gateway.InitiateFileDownloadResponse{
+			Status: status.NewInternal(ctx, err, "gateway: error creating container"),
+		}, nil
+	}
+
+	ri, err := s.checkRef(ctx, statRes.Info)
+	if err != nil {
+		log.Err(err).Msg("gateway: error resolving reference")
+		return &gateway.InitiateFileDownloadResponse{
+			Status: status.NewInternal(ctx, err, "error creating container"),
+		}, nil
+	}
+
+	// append child to target
+	ref = &provider.Reference{
+		Spec: &provider.Reference_Path{
+			Path: ri.Path,
+		},
+	}
+	req.Ref = ref
+	return s.initiateFileDownload(ctx, req)
 }
 
 func (s *svc) initiateFileDownload(ctx context.Context, req *provider.InitiateFileDownloadRequest) (*gateway.InitiateFileDownloadResponse, error) {
