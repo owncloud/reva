@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/sprig v2.22.0+incompatible
 	github.com/ReneKroon/ttlcache/v2 v2.9.0
 	github.com/asaskevich/govalidator v0.0.0-20210307081110-f21760c49a8d // indirect
-	github.com/aws/aws-sdk-go v1.41.9
+	github.com/aws/aws-sdk-go v1.44.114
 	github.com/beevik/etree v1.1.0
 	github.com/bluele/gcache v0.0.2
 	github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 // indirect
@@ -72,8 +72,8 @@ require (
 	go.opentelemetry.io/otel/trace v1.1.0
 	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
 	golang.org/x/oauth2 v0.0.0-20210819190943-2bc19b11175f
-	golang.org/x/sys v0.0.0-20210921065528-437939a70204
-	golang.org/x/term v0.0.0-20210916214954-140adaaadfaf
+	golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e
+	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	google.golang.org/genproto v0.0.0-20200825200019-8632dd797987
 	google.golang.org/grpc v1.41.0
 	google.golang.org/protobuf v1.27.1
