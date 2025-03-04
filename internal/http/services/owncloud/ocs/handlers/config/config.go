@@ -22,9 +22,9 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocs/config"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocs/data"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocs/response"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocs/config"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocs/data"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocs/response"
 )
 
 // Handler renders the config endpoint
@@ -40,7 +40,7 @@ func (h *Handler) Init(c *config.Config) {
 		h.c.Version = "1.7"
 	}
 	if h.c.Website == "" {
-		h.c.Website = "reva"
+		h.c.Website = "owncloud"
 	}
 	if h.c.Host == "" {
 		h.c.Host = "" // TODO get from context?

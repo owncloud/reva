@@ -21,7 +21,7 @@ package prometheus
 import (
 	"net/http"
 
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -38,7 +38,7 @@ func init() {
 func New(m map[string]interface{}) (global.Middleware, int, error) {
 	namespace := m["namespace"].(string)
 	if namespace == "" {
-		namespace = "reva"
+		namespace = "owncloud"
 	}
 	subsystem := m["subsystem"].(string)
 	ph := prometheusHandler{

@@ -22,11 +22,11 @@ import (
 	"log"
 	"time"
 
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/events/example/consumer"
-	"github.com/cs3org/reva/v2/pkg/events/example/publisher"
-	"github.com/cs3org/reva/v2/pkg/events/server"
-	"github.com/cs3org/reva/v2/pkg/events/stream"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/events/example/consumer"
+	"github.com/cs3org/owncloud/v2/pkg/events/example/publisher"
+	"github.com/cs3org/owncloud/v2/pkg/events/server"
+	"github.com/cs3org/owncloud/v2/pkg/events/stream"
 )
 
 // Simple example of an event workflow

@@ -27,10 +27,10 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/cs3org/reva/v2/cmd/revad/internal/config"
-	"github.com/cs3org/reva/v2/cmd/revad/internal/grace"
-	"github.com/cs3org/reva/v2/cmd/revad/runtime"
-	"github.com/cs3org/reva/v2/pkg/sysinfo"
+	"github.com/cs3org/owncloud/v2/cmd/owncloudd/internal/config"
+	"github.com/cs3org/owncloud/v2/cmd/owncloudd/internal/grace"
+	"github.com/cs3org/owncloud/v2/cmd/owncloudd/runtime"
+	"github.com/cs3org/owncloud/v2/pkg/sysinfo"
 
 	"github.com/google/uuid"
 )
@@ -39,7 +39,7 @@ var (
 	versionFlag = flag.Bool("version", false, "show version and exit")
 	testFlag    = flag.Bool("t", false, "test configuration and exit")
 	signalFlag  = flag.String("s", "", "send signal to a master process: stop, quit, reload")
-	configFlag  = flag.String("c", "/etc/revad/revad.toml", "set configuration file")
+	configFlag  = flag.String("c", "/etc/owncloudd/owncloudd.toml", "set configuration file")
 	pidFlag     = flag.String("p", "", "pid file. If empty defaults to a random file in the OS temporary directory")
 	logFlag     = flag.String("log", "", "log messages with the given severity or above. One of: [trace, debug, info, warn, error, fatal, panic]")
 	dirFlag     = flag.String("dev-dir", "", "runs any toml file in the specified directory. Intended for development use only")
@@ -215,7 +215,7 @@ func runSingle(conf map[string]interface{}) {
 
 func getPidfile() string {
 	uuid := uuid.New().String()
-	name := fmt.Sprintf("revad-%s.pid", uuid)
+	name := fmt.Sprintf("owncloudd-%s.pid", uuid)
 
 	return path.Join(os.TempDir(), name)
 }

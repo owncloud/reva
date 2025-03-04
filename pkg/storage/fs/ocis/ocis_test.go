@@ -21,8 +21,8 @@ package ocis_test
 import (
 	"os"
 
-	"github.com/cs3org/reva/v2/pkg/storage/fs/ocis"
-	"github.com/cs3org/reva/v2/tests/helpers"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/ocis"
+	"github.com/cs3org/owncloud/v2/tests/helpers"
 	"github.com/rs/zerolog"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -36,7 +36,7 @@ var _ = Describe("Ocis", func() {
 	)
 
 	BeforeEach(func() {
-		tmpRoot, err := helpers.TempDir("reva-unit-tests-*-root")
+		tmpRoot, err := helpers.TempDir("owncloud-unit-tests-*-root")
 		Expect(err).ToNot(HaveOccurred())
 
 		options = map[string]interface{}{

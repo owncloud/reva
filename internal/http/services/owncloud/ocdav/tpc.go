@@ -32,13 +32,13 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/services/datagateway"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/errors"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/net"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/internal/http/services/datagateway"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/errors"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/net"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
 )
 
 const (
@@ -117,7 +117,7 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 // 										   +----------+
 
 // handleTPCPull performs a GET request on the remote site and upload it
-// the requested reva endpoint.
+// the requested owncloud endpoint.
 func (s *svc) handleTPCPull(ctx context.Context, w http.ResponseWriter, r *http.Request, ns string) {
 	src := r.Header.Get("Source")
 	dst := path.Join(ns, r.URL.Path)
@@ -281,7 +281,7 @@ func (s *svc) performHTTPPull(ctx context.Context, selector pool.Selectable[gate
 // 										   +----------+
 
 // handleTPCPush performs a PUT request on the remote site and while downloading
-// data from the requested reva endpoint.
+// data from the requested owncloud endpoint.
 func (s *svc) handleTPCPush(ctx context.Context, w http.ResponseWriter, r *http.Request, ns string) {
 	src := path.Join(ns, r.URL.Path)
 	dst := r.Header.Get("Destination")

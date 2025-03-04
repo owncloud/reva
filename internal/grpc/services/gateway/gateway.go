@@ -24,12 +24,12 @@ import (
 	"strings"
 
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/storage/cache"
-	"github.com/cs3org/reva/v2/pkg/token"
-	"github.com/cs3org/reva/v2/pkg/token/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/storage/cache"
+	"github.com/cs3org/owncloud/v2/pkg/token"
+	"github.com/cs3org/owncloud/v2/pkg/token/manager/registry"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -128,7 +128,7 @@ func (c *config) init() {
 	}
 
 	if c.ProviderCacheConfig.Database == "" {
-		c.ProviderCacheConfig.Database = "reva"
+		c.ProviderCacheConfig.Database = "owncloud"
 	}
 
 	if c.CreatePersonalSpaceCacheConfig.Store == "" {
@@ -136,7 +136,7 @@ func (c *config) init() {
 	}
 
 	if c.CreatePersonalSpaceCacheConfig.Database == "" {
-		c.CreatePersonalSpaceCacheConfig.Database = "reva"
+		c.CreatePersonalSpaceCacheConfig.Database = "owncloud"
 	}
 }
 

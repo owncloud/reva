@@ -25,10 +25,10 @@ import (
 	"strings"
 
 	ocmprovider "github.com/cs3org/go-cs3apis/cs3/ocm/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/ocm/provider"
-	"github.com/cs3org/reva/v2/pkg/ocm/provider/authorizer/registry"
-	"github.com/cs3org/reva/v2/pkg/utils/cfg"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/provider"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/provider/authorizer/registry"
+	"github.com/cs3org/owncloud/v2/pkg/utils/cfg"
 )
 
 func init() {
@@ -65,7 +65,7 @@ type config struct {
 
 func (c *config) ApplyDefaults() {
 	if c.Providers == "" {
-		c.Providers = "/etc/revad/ocm-providers.json"
+		c.Providers = "/etc/owncloudd/ocm-providers.json"
 	}
 }
 

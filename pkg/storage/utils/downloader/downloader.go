@@ -27,10 +27,10 @@ import (
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/services/datagateway"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/internal/http/services/datagateway"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
 )
 
 // Downloader is the interface implemented by the objects that are able to
@@ -39,14 +39,14 @@ type Downloader interface {
 	Download(context.Context, *provider.ResourceId, io.Writer) error
 }
 
-type revaDownloader struct {
+type owncloudDownloader struct {
 	gatewaySelector pool.Selectable[gateway.GatewayAPIClient]
 	httpClient      *http.Client
 }
 
-// NewDownloader creates a Downloader from the reva gateway
+// NewDownloader creates a Downloader from the owncloud gateway
 func NewDownloader(gatewaySelector pool.Selectable[gateway.GatewayAPIClient], options ...rhttp.Option) Downloader {
-	return &revaDownloader{
+	return &owncloudDownloader{
 		gatewaySelector: gatewaySelector,
 		httpClient:      rhttp.GetHTTPClient(options...),
 	}
@@ -62,7 +62,7 @@ func getDownloadProtocol(protocols []*gateway.FileDownloadProtocol, prot string)
 }
 
 // Download downloads a resource given the path to the dst Writer
-func (r *revaDownloader) Download(ctx context.Context, id *provider.ResourceId, dst io.Writer) error {
+func (r *owncloudDownloader) Download(ctx context.Context, id *provider.ResourceId, dst io.Writer) error {
 	gatewayClient, err := r.gatewaySelector.Next()
 	if err != nil {
 		return err

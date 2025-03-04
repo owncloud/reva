@@ -26,8 +26,8 @@ import (
 	"strings"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/user"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/user"
 	"github.com/hashicorp/go-plugin"
 	"github.com/mitchellh/mapstructure"
 )
@@ -43,7 +43,7 @@ type config struct {
 
 func (c *config) init() {
 	if c.Users == "" {
-		c.Users = "/etc/revad/users.json"
+		c.Users = "/etc/owncloudd/users.json"
 	}
 }
 

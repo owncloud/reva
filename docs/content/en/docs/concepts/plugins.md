@@ -28,26 +28,26 @@ As mentioned earlier, the components that can be created and used in a Reva Plug
 
 All you need to do to create a plugin is:
 
-1. Create an implementation of the desired interface: A Plugin should implement the interface exposed by the corresponding service. Eg: [Userprovider](https://github.com/cs3org/reva/blob/master/pkg/user/user.go#L67) interface.
+1. Create an implementation of the desired interface: A Plugin should implement the interface exposed by the corresponding service. Eg: [Userprovider](https://github.com/cs3org/owncloud/blob/master/pkg/user/user.go#L67) interface.
 2. Serve the plugin using the [go-plugin's](https://github.com/hashicorp/go-plugin) `plugin.Serve` method.
 
 The core handles all of the communication details and go-plugin implementations inside the server.
 
 Your plugin must use the packages from the Reva core to implement the interfaces. You're encouraged to use whatever other packages you want in your plugin implementation. Because plugins are their own processes, there is no danger of colliding dependencies.
 
-- `github.com/cs3org/reva/v2/pkg/<service_type>`: Contains the interface that you have to implement for any give plugin.
+- `github.com/cs3org/owncloud/v2/pkg/<service_type>`: Contains the interface that you have to implement for any give plugin.
 - `github.com/hashicorp/go-plugin`: To serve the plugin over RPC. This handles all the inter-process communication.
 
-Basic example of serving your component is shown below. This example consists of a simple `JSON` plugin driver for the [Userprovider](https://github.com/cs3org/reva/blob/master/internal/grpc/services/userprovider/userprovider.go) service. You can find the example code [here](https://github.com/cs3org/reva/blob/master/examples/plugin/json/json.go).
+Basic example of serving your component is shown below. This example consists of a simple `JSON` plugin driver for the [Userprovider](https://github.com/cs3org/owncloud/blob/master/internal/grpc/services/userprovider/userprovider.go) service. You can find the example code [here](https://github.com/cs3org/owncloud/blob/master/examples/plugin/json/json.go).
 
 ```go
 
 // main.go
 
 import (
-   	"github.com/cs3org/reva/v2/pkg/user"
+   	"github.com/cs3org/owncloud/v2/pkg/user"
     "github.com/hashicorp/go-plugin"
-	revaPlugin "github.com/cs3org/reva/v2/pkg/plugin"
+	owncloudPlugin "github.com/cs3org/owncloud/v2/pkg/plugin"
 )
 
 // Assume this implements the user.Manager interface
@@ -56,7 +56,7 @@ type Manager struct{}
 func main() {
     // plugin.Serve serves the implementation over RPC to the core
 	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: revaPlugin.Handshake,
+		HandshakeConfig: owncloudPlugin.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"userprovider": &user.ProviderPlugin{Impl: &Manager{}},
 		},
@@ -68,13 +68,13 @@ The `plugin.Serve` method handles all the details of communicating with Reva cor
 
 The `plugin.Serve` method takes in the plugin configuration, which you would have to define in your plugin source code:
 
-- `HandshakeConfig`: The handshake is defined in `github.com/cs3org/reva/v2/pkg/plugin`
+- `HandshakeConfig`: The handshake is defined in `github.com/cs3org/owncloud/v2/pkg/plugin`
 
 ```go
 var Handshake = plugin.HandshakeConfig{
 	ProtocolVersion:  1,
 	MagicCookieKey:   "BASIC_PLUGIN",
-	MagicCookieValue: "reva",
+	MagicCookieValue: "owncloud",
 }
 ```
 
@@ -92,7 +92,7 @@ Runtime plugin can be configured using `.toml` files. We have ensured backwards 
 
 Reva provides 3 ways of loading plugins:
 
-1. Providing path to already compiled go binary: If you have already compiled plugin binary, you just need to provide the path to the binary and rest of the work of loading the plugin would be taken care by the reva core. 
+1. Providing path to already compiled go binary: If you have already compiled plugin binary, you just need to provide the path to the binary and rest of the work of loading the plugin would be taken care by the owncloud core. 
 
 ```
 # Starting grpc userprovider service with json driver plugin
@@ -103,7 +103,7 @@ driver = "/absolute/path/to/binary/json"
 user = "user.demo.json"
 ```
 
-2. Provide path to the plugin source code: If you want the reva core to compile the plugins and then load the binary, you need to point to the go package consisting the plugin source code:
+2. Provide path to the plugin source code: If you want the owncloud core to compile the plugins and then load the binary, you need to point to the go package consisting the plugin source code:
 
 ```
 # Starting grpc userprovider service with json driver plugin

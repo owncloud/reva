@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/cs3org/reva/v2/internal/http/interceptors/auth/credential/registry"
-	"github.com/cs3org/reva/v2/pkg/auth"
+	"github.com/cs3org/owncloud/v2/internal/http/interceptors/auth/credential/registry"
+	"github.com/cs3org/owncloud/v2/pkg/auth"
 )
 
 func init() {

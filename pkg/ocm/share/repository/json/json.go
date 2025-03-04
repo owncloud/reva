@@ -35,11 +35,11 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/genproto/protobuf/field_mask"
 
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/ocm/share"
-	"github.com/cs3org/reva/v2/pkg/ocm/share/repository/registry"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	"github.com/cs3org/reva/v2/pkg/utils/cfg"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/share"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/share/repository/registry"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/utils/cfg"
 )
 
 func init() {
@@ -175,7 +175,7 @@ type config struct {
 
 func (c *config) ApplyDefaults() {
 	if c.File == "" {
-		c.File = "/var/tmp/reva/ocm-shares.json"
+		c.File = "/var/tmp/owncloud/ocm-shares.json"
 	}
 }
 

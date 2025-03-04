@@ -39,17 +39,17 @@ import (
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/publicshare"
-	"github.com/cs3org/reva/v2/pkg/publicshare/manager/json/persistence"
-	"github.com/cs3org/reva/v2/pkg/publicshare/manager/json/persistence/cs3"
-	"github.com/cs3org/reva/v2/pkg/publicshare/manager/json/persistence/file"
-	"github.com/cs3org/reva/v2/pkg/publicshare/manager/json/persistence/memory"
-	"github.com/cs3org/reva/v2/pkg/publicshare/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/metadata"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/manager/json/persistence"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/manager/json/persistence/cs3"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/manager/json/persistence/file"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/manager/json/persistence/memory"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/metadata"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 )
@@ -69,7 +69,7 @@ func NewFile(c map[string]interface{}) (publicshare.Manager, error) {
 
 	conf.init()
 	if conf.File == "" {
-		conf.File = "/var/tmp/reva/publicshares"
+		conf.File = "/var/tmp/owncloud/publicshares"
 	}
 
 	p := file.New(conf.File)

@@ -22,15 +22,15 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/cs3org/reva/v2/internal/http/interceptors/appctx"
-	"github.com/cs3org/reva/v2/internal/http/interceptors/auth"
-	cors2 "github.com/cs3org/reva/v2/internal/http/interceptors/cors"
-	revaLogMiddleware "github.com/cs3org/reva/v2/internal/http/interceptors/log"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
-	"github.com/cs3org/reva/v2/pkg/storage/favorite/memory"
-	rtrace "github.com/cs3org/reva/v2/pkg/trace"
+	"github.com/cs3org/owncloud/v2/internal/http/interceptors/appctx"
+	"github.com/cs3org/owncloud/v2/internal/http/interceptors/auth"
+	cors2 "github.com/cs3org/owncloud/v2/internal/http/interceptors/cors"
+	owncloudLogMiddleware "github.com/cs3org/owncloud/v2/internal/http/interceptors/log"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/storage/favorite/memory"
+	rtrace "github.com/cs3org/owncloud/v2/pkg/trace"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	httpServer "github.com/go-micro/plugins/v4/server/http"
@@ -82,7 +82,7 @@ func Service(opts ...Option) (micro.Service, error) {
 		server.RegisterInterval(sopts.RegisterInterval),
 	)
 
-	revaService, err := ocdav.NewWith(&sopts.config, sopts.FavoriteManager, sopts.lockSystem, &sopts.Logger, sopts.GatewaySelector)
+	owncloudService, err := ocdav.NewWith(&sopts.config, sopts.FavoriteManager, sopts.lockSystem, &sopts.Logger, sopts.GatewaySelector)
 	if err != nil {
 		return nil, err
 	}
@@ -106,11 +106,11 @@ func Service(opts ...Option) (micro.Service, error) {
 		}
 		tp = rtrace.NewTracerProvider(topts...)
 	}
-	if err := useMiddlewares(r, &sopts, revaService, tp); err != nil {
+	if err := useMiddlewares(r, &sopts, owncloudService, tp); err != nil {
 		return nil, err
 	}
 
-	r.Handle("/*", revaService.Handler())
+	r.Handle("/*", owncloudService.Handler())
 
 	_ = chi.Walk(r, func(method string, route string, handler http.Handler, middlewares ...func(http.Handler) http.Handler) error {
 		sopts.Logger.Debug().Str("service", "ocdav").Str("method", method).Str("route", route).Int("middlewares", len(middlewares)).Msg("serving endpoint")
@@ -176,7 +176,7 @@ func useMiddlewares(r *chi.Mux, sopts *Options, svc global.Service, tp trace.Tra
 	}
 
 	// log
-	lm := revaLogMiddleware.New()
+	lm := owncloudLogMiddleware.New()
 
 	cors, _, err := cors2.New(map[string]interface{}{
 		"allow_credentials": sopts.AllowCredentials,
@@ -199,7 +199,7 @@ func useMiddlewares(r *chi.Mux, sopts *Options, svc global.Service, tp trace.Tra
 	if sopts.MetricsEnabled {
 		namespace := sopts.MetricsNamespace
 		if namespace == "" {
-			namespace = "reva"
+			namespace = "owncloud"
 		}
 		subsystem := sopts.MetricsSubsystem
 		if subsystem == "" {
@@ -234,7 +234,7 @@ func traceHandler(tp trace.TracerProvider, name string) func(http.Handler) http.
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := rtrace.Propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-			t := tp.Tracer("reva")
+			t := tp.Tracer("owncloud")
 			ctx, span := t.Start(ctx, name)
 			defer span.End()
 

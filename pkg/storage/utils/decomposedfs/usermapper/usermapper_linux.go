@@ -27,7 +27,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	revactx "github.com/cs3org/reva/v2/pkg/ctx"
+	owncloudctx "github.com/cs3org/owncloud/v2/pkg/ctx"
 )
 
 // UnixMapper is a user mapper that maps users to unix uids and gids
@@ -65,7 +65,7 @@ func (um *UnixMapper) ScopeBase() (func() error, error) {
 
 // ScopeUser returns to the base uid and gid returning a function that can be used to restore the previous scope
 func (um *UnixMapper) ScopeUser(ctx context.Context) (func() error, error) {
-	u := revactx.ContextMustGetUser(ctx)
+	u := owncloudctx.ContextMustGetUser(ctx)
 
 	uid, gid, err := um.mapUser(u.Username)
 	if err != nil {

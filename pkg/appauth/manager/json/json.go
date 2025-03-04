@@ -30,10 +30,10 @@ import (
 	authpb "github.com/cs3org/go-cs3apis/cs3/auth/provider/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appauth"
-	"github.com/cs3org/reva/v2/pkg/appauth/manager/registry"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/appauth"
+	"github.com/cs3org/owncloud/v2/pkg/appauth/manager/registry"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/sethvargo/go-password/password"
@@ -80,7 +80,7 @@ func New(m map[string]interface{}) (appauth.Manager, error) {
 
 func (c *config) init() {
 	if c.File == "" {
-		c.File = "/var/tmp/reva/appauth.json"
+		c.File = "/var/tmp/owncloud/appauth.json"
 	}
 	if c.TokenStrength == 0 {
 		c.TokenStrength = 16

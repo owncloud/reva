@@ -28,7 +28,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cs3org/reva/v2/pkg/storage/cache"
+	"github.com/cs3org/owncloud/v2/pkg/storage/cache"
 	"github.com/google/renameio/v2"
 	"github.com/pkg/xattr"
 	"github.com/rogpeppe/go-internal/lockedfile"

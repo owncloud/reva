@@ -27,11 +27,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
@@ -44,11 +44,11 @@ import (
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/tree")
+	tracer = otel.Tracer("github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/tree")
 }
 
 const (
-	// TokenTransportHeader holds the header key for the reva transfer token
+	// TokenTransportHeader holds the header key for the owncloud transfer token
 	TokenTransportHeader = "X-Reva-Transfer"
 )
 

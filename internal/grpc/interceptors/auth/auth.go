@@ -27,15 +27,15 @@ import (
 	authpb "github.com/cs3org/go-cs3apis/cs3/auth/provider/v1beta1"
 	gatewayv1beta1 "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/token"
-	tokenmgr "github.com/cs3org/reva/v2/pkg/token/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/token"
+	tokenmgr "github.com/cs3org/owncloud/v2/pkg/token/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
@@ -265,7 +265,7 @@ func (ss *wrappedServerStream) Context() context.Context {
 	return ss.newCtx
 }
 
-// dismantleToken extracts the user and scopes from the reva access token
+// dismantleToken extracts the user and scopes from the owncloud access token
 func dismantleToken(ctx context.Context, tkn string, req interface{}, mgr token.Manager, gatewayAddr string) (*userpb.User, map[string]*authpb.Scope, error) {
 	u, tokenScope, err := mgr.DismantleToken(ctx, tkn)
 	if err != nil {

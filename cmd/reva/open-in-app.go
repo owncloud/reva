@@ -26,7 +26,7 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/pkg/errors"
 )
 
@@ -39,7 +39,7 @@ func openInAppCommand() *command {
 	viewMode := cmd.String("viewmode", "view", "the view permissions, defaults to view")
 	app := cmd.String("app", "", "the application if the default is to be overridden for the file's mimetype")
 	insecureFlag := cmd.Bool("insecure", false, "disables grpc transport security")
-	skipVerifyFlag := cmd.Bool("skip-verify", false, "whether to skip verifying remote reva's certificate chain and host name")
+	skipVerifyFlag := cmd.Bool("skip-verify", false, "whether to skip verifying remote owncloud's certificate chain and host name")
 
 	cmd.ResetFlags = func() {
 		*viewMode = "view"

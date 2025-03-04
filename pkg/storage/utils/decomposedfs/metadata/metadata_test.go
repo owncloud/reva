@@ -23,8 +23,8 @@ import (
 	"os"
 	"path"
 
-	"github.com/cs3org/reva/v2/pkg/storage/cache"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata"
+	"github.com/cs3org/owncloud/v2/pkg/storage/cache"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

@@ -26,9 +26,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cs3org/reva/v2/pkg/storage/cache"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/lookup"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata"
+	"github.com/cs3org/owncloud/v2/pkg/storage/cache"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/lookup"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata"
 )
 
 func init() {

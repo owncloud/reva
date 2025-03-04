@@ -25,10 +25,10 @@ import (
 
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/cbox/utils"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/storage/favorite"
-	"github.com/cs3org/reva/v2/pkg/storage/favorite/registry"
+	"github.com/cs3org/owncloud/v2/pkg/cbox/utils"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/storage/favorite"
+	"github.com/cs3org/owncloud/v2/pkg/storage/favorite/registry"
 	"github.com/mitchellh/mapstructure"
 )
 

@@ -38,16 +38,16 @@ import (
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"google.golang.org/grpc/codes"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/publicshare"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	sdk "github.com/cs3org/reva/v2/pkg/sdk/common"
-	"github.com/cs3org/reva/v2/pkg/share"
-	"github.com/cs3org/reva/v2/pkg/storagespace"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	sdk "github.com/cs3org/owncloud/v2/pkg/sdk/common"
+	"github.com/cs3org/owncloud/v2/pkg/share"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/pkg/errors"
 	gstatus "google.golang.org/grpc/status"
@@ -88,7 +88,7 @@ func (s *svc) sign(_ context.Context, target string, expiresAt int64) (string, e
 	claims := transferClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Unix(expiresAt, 0)),
-			Audience:  jwt.ClaimStrings{"reva"},
+			Audience:  jwt.ClaimStrings{"owncloud"},
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 		Target: target,

@@ -31,13 +31,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
 
-	"github.com/cs3org/reva/v2/pkg/eosclient"
-	erpc "github.com/cs3org/reva/v2/pkg/eosclient/eosgrpc/eos_grpc"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/logger"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/acl"
+	"github.com/cs3org/owncloud/v2/pkg/eosclient"
+	erpc "github.com/cs3org/owncloud/v2/pkg/eosclient/eosgrpc/eos_grpc"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/logger"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/acl"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -47,7 +47,7 @@ import (
 
 const (
 	versionPrefix = ".sys.v#."
-	// lwShareAttrKey = "reva.lwshare"
+	// lwShareAttrKey = "owncloud.lwshare"
 )
 
 const (
@@ -144,7 +144,7 @@ func newgrpc(ctx context.Context, opt *Options) (erpc.EosClient, error) {
 	// connecting later
 	prq := new(erpc.PingRequest)
 	prq.Authkey = opt.Authkey
-	prq.Message = []byte("hi this is a ping from reva")
+	prq.Message = []byte("hi this is a ping from owncloud")
 	prep, err := ecl.Ping(ctx, prq)
 	if err != nil {
 		log.Warn().Str("Could not ping to ", "'"+opt.GrpcURI+"' ").Str("err", err.Error()).Msg("")

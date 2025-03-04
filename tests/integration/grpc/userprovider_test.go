@@ -24,10 +24,10 @@ import (
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	jwt "github.com/cs3org/reva/v2/pkg/token/manager/jwt"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	jwt "github.com/cs3org/owncloud/v2/pkg/token/manager/jwt"
 	"google.golang.org/grpc/metadata"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -37,7 +37,7 @@ import (
 var _ = Describe("user providers", func() {
 	var (
 		dependencies []RevadConfig
-		revads       map[string]*Revad
+		owncloudds       map[string]*Revad
 
 		existingIdp string
 
@@ -67,14 +67,14 @@ var _ = Describe("user providers", func() {
 		ctx = metadata.AppendToOutgoingContext(ctx, ctxpkg.TokenHeader, t)
 		ctx = ctxpkg.ContextSetUser(ctx, user)
 
-		revads, err = startRevads(dependencies, map[string]string{})
+		owncloudds, err = startRevads(dependencies, map[string]string{})
 		Expect(err).ToNot(HaveOccurred())
-		serviceClient, err = pool.GetUserProviderServiceClient(revads["users"].GrpcAddress)
+		serviceClient, err = pool.GetUserProviderServiceClient(owncloudds["users"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	AfterEach(func() {
-		for _, r := range revads {
+		for _, r := range owncloudds {
 			Expect(r.Cleanup(CurrentSpecReport().Failed())).To(Succeed())
 		}
 	})

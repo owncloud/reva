@@ -36,16 +36,16 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	storagep "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/services/datagateway"
-	"github.com/cs3org/reva/v2/pkg/conversions"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/ocm/share"
-	ocm "github.com/cs3org/reva/v2/pkg/ocm/storage/received"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/ocis"
-	jwt "github.com/cs3org/reva/v2/pkg/token/manager/jwt"
-	"github.com/cs3org/reva/v2/tests/helpers"
+	"github.com/cs3org/owncloud/v2/internal/http/services/datagateway"
+	"github.com/cs3org/owncloud/v2/pkg/conversions"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/share"
+	ocm "github.com/cs3org/owncloud/v2/pkg/ocm/storage/received"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/ocis"
+	jwt "github.com/cs3org/owncloud/v2/pkg/token/manager/jwt"
+	"github.com/cs3org/owncloud/v2/tests/helpers"
 	"github.com/owncloud/ocis/v2/services/webdav/pkg/net"
 	"github.com/pkg/errors"
 	"github.com/studio-b12/gowebdav"
@@ -83,7 +83,7 @@ var (
 
 var _ = Describe("ocm share", func() {
 	var (
-		revads = map[string]*Revad{}
+		owncloudds = map[string]*Revad{}
 
 		variables = map[string]string{}
 
@@ -151,7 +151,7 @@ var _ = Describe("ocm share", func() {
 		Expect(err).ToNot(HaveOccurred())
 		ctxEinstein = ctxWithAuthToken(tokenManager, einstein)
 		ctxMarie = ctxWithAuthToken(tokenManager, marie)
-		revads, err = startRevads([]RevadConfig{
+		owncloudds, err = startRevads([]RevadConfig{
 			{Name: "cernboxgw", Config: "ocm-share/ocm-server-cernbox-grpc.toml",
 				Files: map[string]string{
 					"providers": "ocm-providers.demo.json",
@@ -179,11 +179,11 @@ var _ = Describe("ocm share", func() {
 			{Name: "cernboxmachineauth", Config: "ocm-share/cernbox-machine-authprovider.toml"},
 		}, variables)
 		Expect(err).ToNot(HaveOccurred())
-		cernboxgw, err = pool.GetGatewayServiceClient(revads["cernboxgw"].GrpcAddress)
+		cernboxgw, err = pool.GetGatewayServiceClient(owncloudds["cernboxgw"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
-		cesnetgw, err = pool.GetGatewayServiceClient(revads["cesnetgw"].GrpcAddress)
+		cesnetgw, err = pool.GetGatewayServiceClient(owncloudds["cesnetgw"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
-		cernbox.Services[0].Endpoint.Path = "http://" + revads["cernboxhttp"].GrpcAddress + "/ocm"
+		cernbox.Services[0].Endpoint.Path = "http://" + owncloudds["cernboxhttp"].GrpcAddress + "/ocm"
 
 		createHomeResp, err := cernboxgw.CreateHome(ctxEinstein, &provider.CreateHomeRequest{})
 		Expect(err).ToNot(HaveOccurred())
@@ -191,7 +191,7 @@ var _ = Describe("ocm share", func() {
 	})
 
 	AfterEach(func() {
-		for _, r := range revads {
+		for _, r := range owncloudds {
 			Expect(r.Cleanup(CurrentGinkgoTestDescription().Failed)).To(Succeed())
 		}
 	})
@@ -222,8 +222,8 @@ var _ = Describe("ocm share", func() {
 		Context("einstein shares a file with view permissions", func() {
 			It("marie is able to see the content of the file", func() {
 				fs, err := ocis.New(map[string]interface{}{
-					"root":           revads["cernboxgw"].StorageRoot,
-					"permissionssvc": revads["permissions"].GrpcAddress,
+					"root":           owncloudds["cernboxgw"].StorageRoot,
+					"permissionssvc": owncloudds["permissions"].GrpcAddress,
 				}, nil, nil)
 				Expect(err).ToNot(HaveOccurred())
 				ref := &provider.Reference{

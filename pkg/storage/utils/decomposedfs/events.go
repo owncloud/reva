@@ -23,11 +23,11 @@ import (
 
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	revactx "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/node"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	owncloudctx "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/node"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 )
 
 func (fs *Decomposedfs) publishEvent(ctx context.Context, evf func() (any, error)) {
@@ -48,7 +48,7 @@ func (fs *Decomposedfs) publishEvent(ctx context.Context, evf func() (any, error
 
 func (fs *Decomposedfs) moveEvent(ctx context.Context, oldRef, newRef *provider.Reference, oldNode, newNode *node.Node, orp, nrp *provider.ResourcePermissions) func() (any, error) {
 	return func() (any, error) {
-		executant, _ := revactx.ContextGetUser(ctx)
+		executant, _ := owncloudctx.ContextGetUser(ctx)
 		ev := events.ItemMoved{
 			SpaceOwner:        newNode.Owner(),
 			Executant:         executant.GetId(),

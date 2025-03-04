@@ -26,7 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/cs3org/reva/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 )
@@ -37,7 +37,7 @@ type RevaPlugin struct {
 	Client *plugin.Client
 }
 
-const dirname = "/var/tmp/reva"
+const dirname = "/var/tmp/owncloud"
 
 var isAlphaNum = regexp.MustCompile(`^[A-Za-z0-9]+$`).MatchString
 
@@ -118,10 +118,10 @@ func Load(pluginType, driver string) (*RevaPlugin, error) {
 		return nil, err
 	}
 
-	revaPlugin := &RevaPlugin{
+	owncloudPlugin := &RevaPlugin{
 		Plugin: raw,
 		Client: client,
 	}
 
-	return revaPlugin, nil
+	return owncloudPlugin, nil
 }

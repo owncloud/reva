@@ -19,7 +19,7 @@
 package credentials
 
 import (
-	"github.com/cs3org/reva/v2/pkg/siteacc/credentials/crypto"
+	"github.com/cs3org/owncloud/v2/pkg/siteacc/credentials/crypto"
 	"github.com/pkg/errors"
 )
 

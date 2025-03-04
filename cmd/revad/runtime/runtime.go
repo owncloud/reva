@@ -27,26 +27,26 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cs3org/reva/v2/cmd/revad/internal/grace"
-	"github.com/cs3org/reva/v2/pkg/logger"
-	"github.com/cs3org/reva/v2/pkg/registry"
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	rtrace "github.com/cs3org/reva/v2/pkg/trace"
+	"github.com/cs3org/owncloud/v2/cmd/owncloudd/internal/grace"
+	"github.com/cs3org/owncloud/v2/pkg/logger"
+	"github.com/cs3org/owncloud/v2/pkg/registry"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	rtrace "github.com/cs3org/owncloud/v2/pkg/trace"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Run runs a reva server with the given config file and pid file.
+// Run runs a owncloud server with the given config file and pid file.
 func Run(mainConf map[string]interface{}, pidFile, logLevel string) {
 	log := logger.InitLoggerOrDie(mainConf["log"], logLevel)
 	RunWithOptions(mainConf, pidFile, WithLogger(log))
 }
 
-// RunWithOptions runs a reva server with the given config file, pid file and options.
+// RunWithOptions runs a owncloud server with the given config file, pid file and options.
 func RunWithOptions(mainConf map[string]interface{}, pidFile string, opts ...Option) {
 	options := newOptions(opts...)
 	parseSharedConfOrDie(mainConf["shared"])

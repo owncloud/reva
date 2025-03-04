@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/config"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/config"
 )
 
 // Validator validates strings

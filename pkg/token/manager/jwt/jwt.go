@@ -24,10 +24,10 @@ import (
 
 	auth "github.com/cs3org/go-cs3apis/cs3/auth/provider/v1beta1"
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/token"
-	"github.com/cs3org/reva/v2/pkg/token/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/token"
+	"github.com/cs3org/owncloud/v2/pkg/token/manager/registry"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
@@ -97,7 +97,7 @@ func (m *manager) MintToken(ctx context.Context, u *user.User, scope map[string]
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			Issuer:    u.Id.Idp,
-			Audience:  jwt.ClaimStrings{"reva"},
+			Audience:  jwt.ClaimStrings{"owncloud"},
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 		User:  u,

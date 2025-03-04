@@ -25,8 +25,8 @@ import (
 	"net/url"
 	"os"
 
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
 	"github.com/go-chi/chi/v5"
 	"github.com/mitchellh/mapstructure"
 	"github.com/rs/zerolog"
@@ -47,7 +47,7 @@ type config struct {
 
 func (c *config) init() {
 	if c.ProxyRulesJSON == "" {
-		c.ProxyRulesJSON = "/etc/revad/proxy_rules.json"
+		c.ProxyRulesJSON = "/etc/owncloudd/proxy_rules.json"
 	}
 }
 

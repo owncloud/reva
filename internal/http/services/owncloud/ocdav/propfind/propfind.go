@@ -37,21 +37,21 @@ import (
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/grpc/services/storageprovider"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/config"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/errors"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/net"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/prop"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/spacelookup"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/conversions"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/publicshare"
-	rstatus "github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp/router"
-	"github.com/cs3org/reva/v2/pkg/storagespace"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/internal/grpc/services/storageprovider"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/config"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/errors"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/net"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/prop"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/spacelookup"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/conversions"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare"
+	rstatus "github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/router"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/iancoleman/strcase"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
@@ -1587,7 +1587,7 @@ func mdToPropResponse(ctx context.Context, pf *XML, md *provider.ResourceInfo, p
 					// can only occur on the root node
 					// server implementation in https://github.com/owncloud/core/pull/24054
 					// see https://doc.owncloud.com/server/admin_manual/configuration/server/occ_command.html#maintenance-commands
-					// TODO(jfd): double check the client behavior with reva on backup restore
+					// TODO(jfd): double check the client behavior with owncloud on backup restore
 					fallthrough
 				default:
 					appendToNotFound(prop.NotFound("oc:" + pf.Prop[i].Local))

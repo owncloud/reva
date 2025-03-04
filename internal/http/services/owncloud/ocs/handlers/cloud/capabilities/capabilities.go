@@ -21,9 +21,9 @@ package capabilities
 import (
 	"net/http"
 
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocs/config"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocs/response"
-	"github.com/cs3org/reva/v2/pkg/owncloud/ocs"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocs/config"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocs/response"
+	"github.com/cs3org/owncloud/v2/pkg/owncloud/ocs"
 )
 
 // Handler renders the capability endpoint
@@ -73,10 +73,10 @@ func (h *Handler) Init(c *config.Config) {
 		h.c.Capabilities.Core.Status.Edition = "community" // TODO make build determined
 	}
 	if h.c.Capabilities.Core.Status.ProductName == "" {
-		h.c.Capabilities.Core.Status.ProductName = "reva" // TODO make build determined
+		h.c.Capabilities.Core.Status.ProductName = "owncloud" // TODO make build determined
 	}
 	if h.c.Capabilities.Core.Status.Product == "" {
-		h.c.Capabilities.Core.Status.Product = "reva" // TODO make build determined
+		h.c.Capabilities.Core.Status.Product = "owncloud" // TODO make build determined
 	}
 	if h.c.Capabilities.Core.Status.Hostname == "" {
 		h.c.Capabilities.Core.Status.Hostname = "" // TODO get from context?
@@ -221,7 +221,7 @@ func (h *Handler) Init(c *config.Config) {
 			Micro:          11,
 			String:         "10.0.11",
 			Edition:        "community",
-			Product:        "reva",
+			Product:        "owncloud",
 			ProductVersion: "",
 		}
 	}

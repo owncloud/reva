@@ -10,17 +10,17 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/internal/grpc/services/publicshareprovider"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/permission"
-	"github.com/cs3org/reva/v2/pkg/publicshare"
-	"github.com/cs3org/reva/v2/pkg/publicshare/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/publicshare/mocks"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	cs3mocks "github.com/cs3org/reva/v2/tests/cs3mocks/mocks"
+	"github.com/cs3org/owncloud/v2/internal/grpc/services/publicshareprovider"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/permission"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/publicshare/mocks"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	cs3mocks "github.com/cs3org/owncloud/v2/tests/cs3mocks/mocks"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
@@ -28,8 +28,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-func createPublicShareProvider(revaConfig map[string]interface{}, gs pool.Selectable[gateway.GatewayAPIClient], sm publicshare.Manager) (link.LinkAPIServer, error) {
-	config, err := publicshareprovider.ParseConfig(revaConfig)
+func createPublicShareProvider(owncloudConfig map[string]interface{}, gs pool.Selectable[gateway.GatewayAPIClient], sm publicshare.Manager) (link.LinkAPIServer, error) {
+	config, err := publicshareprovider.ParseConfig(owncloudConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ var _ = Describe("PublicShareProvider", func() {
 		resourcePermissions     *providerpb.ResourcePermissions
 		linkPermissions         *providerpb.ResourcePermissions
 		createdLink             *link.PublicShare
-		revaConfig              map[string]interface{}
+		owncloudConfig              map[string]interface{}
 		user                    *userpb.User
 	)
 
@@ -132,7 +132,7 @@ var _ = Describe("PublicShareProvider", func() {
 			InitiateFileUpload:   true,
 		}
 
-		revaConfig = map[string]interface{}{
+		owncloudConfig = map[string]interface{}{
 			"driver": "mockManager",
 			"drivers": map[string]map[string]interface{}{
 				"jsoncs3": {
@@ -158,7 +158,7 @@ var _ = Describe("PublicShareProvider", func() {
 			},
 		}
 		var err error
-		provider, err = createPublicShareProvider(revaConfig, gatewaySelector, manager)
+		provider, err = createPublicShareProvider(owncloudConfig, gatewaySelector, manager)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(provider).ToNot(BeNil())
 	})
@@ -584,10 +584,10 @@ var _ = Describe("PublicShareProvider", func() {
 		})
 		It("creates a viewable public share without a password", func() {
 			// set password enforcement only on writeable shares
-			revaConfig["public_share_must_have_password"] = false
-			revaConfig["writeable_share_must_have_password"] = true
+			owncloudConfig["public_share_must_have_password"] = false
+			owncloudConfig["writeable_share_must_have_password"] = true
 
-			provider, err := createPublicShareProvider(revaConfig, gatewaySelector, manager)
+			provider, err := createPublicShareProvider(owncloudConfig, gatewaySelector, manager)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(provider).ToNot(BeNil())
 
@@ -623,10 +623,10 @@ var _ = Describe("PublicShareProvider", func() {
 		})
 		It("creates an editable public share without a password", func() {
 			// set password enforcement to false on all public shares
-			revaConfig["public_share_must_have_password"] = false
-			revaConfig["writeable_share_must_have_password"] = false
+			owncloudConfig["public_share_must_have_password"] = false
+			owncloudConfig["writeable_share_must_have_password"] = false
 
-			provider, err := createPublicShareProvider(revaConfig, gatewaySelector, manager)
+			provider, err := createPublicShareProvider(owncloudConfig, gatewaySelector, manager)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(provider).ToNot(BeNil())
 
@@ -666,10 +666,10 @@ var _ = Describe("PublicShareProvider", func() {
 		})
 		It("applies the password policy even if no enforcement is configured", func() {
 			// set password enforcement to false on all public shares
-			revaConfig["public_share_must_have_password"] = false
-			revaConfig["writeable_share_must_have_password"] = false
+			owncloudConfig["public_share_must_have_password"] = false
+			owncloudConfig["writeable_share_must_have_password"] = false
 
-			provider, err := createPublicShareProvider(revaConfig, gatewaySelector, manager)
+			provider, err := createPublicShareProvider(owncloudConfig, gatewaySelector, manager)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(provider).ToNot(BeNil())
 

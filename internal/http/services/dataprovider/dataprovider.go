@@ -25,14 +25,14 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"github.com/rs/zerolog"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/events/stream"
-	datatxregistry "github.com/cs3org/reva/v2/pkg/rhttp/datatx/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
-	"github.com/cs3org/reva/v2/pkg/rhttp/router"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/registry"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/events/stream"
+	datatxregistry "github.com/cs3org/owncloud/v2/pkg/rhttp/datatx/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/router"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/registry"
 )
 
 func init() {
@@ -133,13 +133,13 @@ func getDataTXs(c *config, fs storage.FS, publisher events.Publisher, log *zerol
 	if len(c.DataTXs) == 0 {
 		c.DataTXs["simple"] = make(map[string]interface{})
 		c.DataTXs["simple"]["cache_store"] = "noop"
-		c.DataTXs["simple"]["cache_database"] = "reva"
+		c.DataTXs["simple"]["cache_database"] = "owncloud"
 		c.DataTXs["spaces"] = make(map[string]interface{})
 		c.DataTXs["spaces"]["cache_store"] = "noop"
-		c.DataTXs["spaces"]["cache_database"] = "reva"
+		c.DataTXs["spaces"]["cache_database"] = "owncloud"
 		c.DataTXs["tus"] = make(map[string]interface{})
 		c.DataTXs["tus"]["cache_store"] = "noop"
-		c.DataTXs["tus"]["cache_database"] = "reva"
+		c.DataTXs["tus"]["cache_database"] = "owncloud"
 	}
 
 	txs := make(map[string]http.Handler)

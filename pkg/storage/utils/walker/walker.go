@@ -26,8 +26,8 @@ import (
 
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
 )
 
 // WalkFunc is the type of function called by Walk to visit each file or directory
@@ -46,17 +46,17 @@ type Walker interface {
 	Walk(ctx context.Context, root *provider.ResourceId, fn WalkFunc) error
 }
 
-type revaWalker struct {
+type owncloudWalker struct {
 	gatewaySelector pool.Selectable[gateway.GatewayAPIClient]
 }
 
-// NewWalker creates a Walker object that uses the reva gateway
+// NewWalker creates a Walker object that uses the owncloud gateway
 func NewWalker(gatewaySelector pool.Selectable[gateway.GatewayAPIClient]) Walker {
-	return &revaWalker{gatewaySelector: gatewaySelector}
+	return &owncloudWalker{gatewaySelector: gatewaySelector}
 }
 
 // Walk walks the file tree rooted at root, calling fn for each file or folder in the tree, including the root.
-func (r *revaWalker) Walk(ctx context.Context, root *provider.ResourceId, fn WalkFunc) error {
+func (r *owncloudWalker) Walk(ctx context.Context, root *provider.ResourceId, fn WalkFunc) error {
 	info, err := r.stat(ctx, root)
 
 	if err != nil {
@@ -72,7 +72,7 @@ func (r *revaWalker) Walk(ctx context.Context, root *provider.ResourceId, fn Wal
 	return err
 }
 
-func (r *revaWalker) walkRecursively(ctx context.Context, wd string, info *provider.ResourceInfo, fn WalkFunc) error {
+func (r *owncloudWalker) walkRecursively(ctx context.Context, wd string, info *provider.ResourceInfo, fn WalkFunc) error {
 
 	if info.Type != provider.ResourceType_RESOURCE_TYPE_CONTAINER {
 		return fn(wd, info, nil)
@@ -95,7 +95,7 @@ func (r *revaWalker) walkRecursively(ctx context.Context, wd string, info *provi
 	return nil
 }
 
-func (r *revaWalker) readDir(ctx context.Context, id *provider.ResourceId) ([]*provider.ResourceInfo, error) {
+func (r *owncloudWalker) readDir(ctx context.Context, id *provider.ResourceId) ([]*provider.ResourceInfo, error) {
 	gatewayClient, err := r.gatewaySelector.Next()
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func (r *revaWalker) readDir(ctx context.Context, id *provider.ResourceId) ([]*p
 	return resp.Infos, nil
 }
 
-func (r *revaWalker) stat(ctx context.Context, id *provider.ResourceId) (*provider.ResourceInfo, error) {
+func (r *owncloudWalker) stat(ctx context.Context, id *provider.ResourceId) (*provider.ResourceInfo, error) {
 	gatewayClient, err := r.gatewaySelector.Next()
 	if err != nil {
 		return nil, err

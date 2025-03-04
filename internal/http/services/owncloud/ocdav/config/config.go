@@ -1,6 +1,6 @@
 package config
 
-import "github.com/cs3org/reva/v2/pkg/sharedconf"
+import "github.com/cs3org/owncloud/v2/pkg/sharedconf"
 
 // Config holds the config options that need to be passed down to all ocdav handlers
 type Config struct {
@@ -64,11 +64,11 @@ func (c *Config) Init() {
 	}
 
 	if c.Product == "" {
-		c.Product = "reva"
+		c.Product = "owncloud"
 	}
 
 	if c.ProductName == "" {
-		c.ProductName = "reva"
+		c.ProductName = "owncloud"
 	}
 
 	if c.ProductVersion == "" {

@@ -31,13 +31,13 @@ import (
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	invitepb "github.com/cs3org/go-cs3apis/cs3/ocm/invite/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/ocm/invite"
-	"github.com/cs3org/reva/v2/pkg/ocm/invite/repository/registry"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	"github.com/cs3org/reva/v2/pkg/utils/cfg"
-	"github.com/cs3org/reva/v2/pkg/utils/list"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/invite"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/invite/repository/registry"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/utils/cfg"
+	"github.com/cs3org/owncloud/v2/pkg/utils/list"
 	"github.com/pkg/errors"
 )
 
@@ -63,7 +63,7 @@ func init() {
 
 func (c *config) ApplyDefaults() {
 	if c.File == "" {
-		c.File = "/var/tmp/reva/ocm-invites.json"
+		c.File = "/var/tmp/owncloud/ocm-invites.json"
 	}
 }
 

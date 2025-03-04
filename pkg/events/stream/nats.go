@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/logger"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/logger"
 	"github.com/go-micro/plugins/v4/events/natsjs"
 )
 

@@ -29,10 +29,10 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	storagep "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	jwt "github.com/cs3org/reva/v2/pkg/token/manager/jwt"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	jwt "github.com/cs3org/owncloud/v2/pkg/token/manager/jwt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -40,7 +40,7 @@ import (
 
 // This test suite tests the gprc gateway interface
 //
-// It uses the `startRevads` helper to spawn the according reva daemon and
+// It uses the `startRevads` helper to spawn the according owncloud daemon and
 // other dependencies like a userprovider if needed.
 // It also sets up an authenticated context and a service client to the storage
 // provider to be used in the assertion functions.
@@ -49,7 +49,7 @@ var _ = PDescribe("gateway using a static registry and a shard setup", func() {
 	// FIXME: Bring me back please!
 	var (
 		dependencies = []RevadConfig{}
-		revads       = map[string]*Revad{}
+		owncloudds       = map[string]*Revad{}
 
 		einsteinCtx   context.Context
 		marieCtx      context.Context
@@ -113,15 +113,15 @@ var _ = PDescribe("gateway using a static registry and a shard setup", func() {
 		einsteinCtx = metadata.AppendToOutgoingContext(einsteinCtx, ctxpkg.TokenHeader, t)
 		einsteinCtx = ctxpkg.ContextSetUser(einsteinCtx, einstein)
 
-		revads, err = startRevads(dependencies, variables)
+		owncloudds, err = startRevads(dependencies, variables)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(revads["gateway"]).ToNot(BeNil())
-		serviceClient, err = pool.GetGatewayServiceClient(revads["gateway"].GrpcAddress)
+		Expect(owncloudds["gateway"]).ToNot(BeNil())
+		serviceClient, err = pool.GetGatewayServiceClient(owncloudds["gateway"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	AfterEach(func() {
-		for _, r := range revads {
+		for _, r := range owncloudds {
 			Expect(r.Cleanup(CurrentGinkgoTestDescription().Failed)).To(Succeed())
 		}
 	})
@@ -146,10 +146,10 @@ var _ = PDescribe("gateway using a static registry and a shard setup", func() {
 			Expect(statRes.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
 
 			// the mapping considers the opaque id: f... -> storage2
-			fi, err := os.Stat(path.Join(revads["storage2"].StorageRoot, "data/f", marie.Id.OpaqueId))
+			fi, err := os.Stat(path.Join(owncloudds["storage2"].StorageRoot, "data/f", marie.Id.OpaqueId))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(fi.IsDir()).To(BeTrue())
-			_, err = os.Stat(path.Join(revads["storage"].StorageRoot, "data/f", marie.Id.OpaqueId))
+			_, err = os.Stat(path.Join(owncloudds["storage"].StorageRoot, "data/f", marie.Id.OpaqueId))
 			Expect(err).To(HaveOccurred())
 
 			ghRes, err := serviceClient.GetHome(marieCtx, &storagep.GetHomeRequest{})
@@ -170,10 +170,10 @@ var _ = PDescribe("gateway using a static registry and a shard setup", func() {
 			Expect(statRes.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
 
 			// the mapping considers the opaque id: e... -> storage
-			fi, err = os.Stat(path.Join(revads["storage"].StorageRoot, "data/e", einstein.Id.OpaqueId))
+			fi, err = os.Stat(path.Join(owncloudds["storage"].StorageRoot, "data/e", einstein.Id.OpaqueId))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(fi.IsDir()).To(BeTrue())
-			_, err = os.Stat(path.Join(revads["storage2"].StorageRoot, "data/e", einstein.Id.OpaqueId))
+			_, err = os.Stat(path.Join(owncloudds["storage2"].StorageRoot, "data/e", einstein.Id.OpaqueId))
 			Expect(err).To(HaveOccurred())
 
 			ghRes, err = serviceClient.GetHome(einsteinCtx, &storagep.GetHomeRequest{})
@@ -250,7 +250,7 @@ var _ = PDescribe("gateway using a static registry and a shard setup", func() {
 					Expect(err).ToNot(HaveOccurred())
 					Expect(statRes.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
 
-					idRef := &storagep.Reference{ResourceId: &storagep.ResourceId{StorageId: revads["storage2"].ID, OpaqueId: statRes.Info.Id.OpaqueId}}
+					idRef := &storagep.Reference{ResourceId: &storagep.ResourceId{StorageId: owncloudds["storage2"].ID, OpaqueId: statRes.Info.Id.OpaqueId}}
 					statRes, err = serviceClient.Stat(marieCtx, &storagep.StatRequest{Ref: idRef})
 					Expect(err).ToNot(HaveOccurred())
 					Expect(statRes.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))

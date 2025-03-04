@@ -34,15 +34,15 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/mime"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/acl"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/chunking"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/grants"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/templates"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/mime"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/acl"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/chunking"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/grants"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/templates"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/pkg/errors"
 )
 
@@ -63,7 +63,7 @@ type Config struct {
 
 func (c *Config) init() {
 	if c.Root == "" {
-		c.Root = "/var/tmp/reva"
+		c.Root = "/var/tmp/owncloud"
 	}
 
 	if c.UserLayout == "" {

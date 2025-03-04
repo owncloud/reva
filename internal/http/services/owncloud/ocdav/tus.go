@@ -33,14 +33,14 @@ import (
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/errors"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/net"
-	"github.com/cs3org/reva/v2/internal/http/services/owncloud/ocdav/spacelookup"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/conversions"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
-	"github.com/cs3org/reva/v2/pkg/storagespace"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/errors"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/net"
+	"github.com/cs3org/owncloud/v2/internal/http/services/owncloud/ocdav/spacelookup"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/conversions"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/rs/zerolog"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"go.opentelemetry.io/otel/propagation"
@@ -259,7 +259,7 @@ func (s *svc) handleTusPost(ctx context.Context, w http.ResponseWriter, r *http.
 		}
 	}
 
-	// TUS clients don't understand the reva transfer token. We need to append it to the upload endpoint.
+	// TUS clients don't understand the owncloud transfer token. We need to append it to the upload endpoint.
 	// The DataGateway has to take care of pulling it back into the request header upon request arrival.
 	if token != "" {
 		if !strings.HasSuffix(ep, "/") {

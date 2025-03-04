@@ -29,14 +29,14 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/ocm/share"
-	"github.com/cs3org/reva/v2/pkg/ocm/share/repository/registry"
-	ocmuser "github.com/cs3org/reva/v2/pkg/ocm/user"
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	"github.com/cs3org/reva/v2/pkg/utils/cfg"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/share"
+	"github.com/cs3org/owncloud/v2/pkg/ocm/share/repository/registry"
+	ocmuser "github.com/cs3org/owncloud/v2/pkg/ocm/user"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/utils/cfg"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -105,7 +105,7 @@ func (s *service) UnprotectedEndpoints() []string {
 	}
 }
 
-// CreateOCMCoreShare is called when an OCM request comes into this reva instance from.
+// CreateOCMCoreShare is called when an OCM request comes into this owncloud instance from.
 func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCMCoreShareRequest) (*ocmcore.CreateOCMCoreShareResponse, error) {
 	if req.ShareType != ocm.ShareType_SHARE_TYPE_USER {
 		return nil, errtypes.NotSupported("share type not supported")

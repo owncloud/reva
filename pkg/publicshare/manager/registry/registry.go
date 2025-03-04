@@ -18,7 +18,7 @@
 
 package registry
 
-import "github.com/cs3org/reva/v2/pkg/publicshare"
+import "github.com/cs3org/owncloud/v2/pkg/publicshare"
 
 // NewFunc is the function that share managers
 // should register at init time.

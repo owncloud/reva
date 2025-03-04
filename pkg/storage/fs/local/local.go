@@ -19,10 +19,10 @@
 package local
 
 import (
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/registry"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/localfs"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/registry"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/localfs"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -33,7 +33,7 @@ func init() {
 }
 
 type config struct {
-	Root        string `mapstructure:"root" docs:"/var/tmp/reva/;Path of root directory for user storage."`
+	Root        string `mapstructure:"root" docs:"/var/tmp/owncloud/;Path of root directory for user storage."`
 	ShareFolder string `mapstructure:"share_folder" docs:"/MyShares;Path for storing share references."`
 	UserLayout  string `mapstructure:"user_layout" docs:"{{.Username}};Template used for building the user's root path."`
 	DisableHome bool   `mapstructure:"disable_home" docs:"false;Enable/disable special /home handling."`

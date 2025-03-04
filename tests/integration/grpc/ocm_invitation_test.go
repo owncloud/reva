@@ -35,13 +35,13 @@ import (
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/token"
-	"github.com/cs3org/reva/v2/pkg/token/manager/jwt"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	"github.com/cs3org/reva/v2/pkg/utils/list"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/token"
+	"github.com/cs3org/owncloud/v2/pkg/token/manager/jwt"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/utils/list"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -73,7 +73,7 @@ func ocmUserEqual(u1, u2 *userpb.User) bool {
 var _ = Describe("ocm invitation workflow", func() {
 	var (
 		err    error
-		revads = map[string]*Revad{}
+		owncloudds = map[string]*Revad{}
 
 		variables = map[string]string{}
 
@@ -155,7 +155,7 @@ var _ = Describe("ocm invitation workflow", func() {
 			ctxEinstein = ctxWithAuthToken(tokenManager, einstein)
 			ctxMarie = ctxWithAuthToken(tokenManager, marie)
 			variables["ocm_driver"] = driver
-			revads, err = startRevads([]RevadConfig{
+			owncloudds, err = startRevads([]RevadConfig{
 				{
 					Name:   "cernboxgw",
 					Config: "ocm-server-cernbox-grpc.toml",
@@ -180,15 +180,15 @@ var _ = Describe("ocm invitation workflow", func() {
 				},
 			}, variables)
 			Expect(err).ToNot(HaveOccurred())
-			cernboxgw, err = pool.GetGatewayServiceClient(revads["cernboxgw"].GrpcAddress)
+			cernboxgw, err = pool.GetGatewayServiceClient(owncloudds["cernboxgw"].GrpcAddress)
 			Expect(err).ToNot(HaveOccurred())
-			cesnetgw, err = pool.GetGatewayServiceClient(revads["cesnetgw"].GrpcAddress)
+			cesnetgw, err = pool.GetGatewayServiceClient(owncloudds["cesnetgw"].GrpcAddress)
 			Expect(err).ToNot(HaveOccurred())
-			cernbox.Services[0].Endpoint.Path = "http://" + revads["cernboxhttp"].GrpcAddress + "/ocm"
+			cernbox.Services[0].Endpoint.Path = "http://" + owncloudds["cernboxhttp"].GrpcAddress + "/ocm"
 		})
 
 		AfterEach(func() {
-			for _, r := range revads {
+			for _, r := range owncloudds {
 				Expect(r.Cleanup(CurrentGinkgoTestDescription().Failed)).To(Succeed())
 			}
 			Expect(os.RemoveAll(inviteTokenFile)).To(Succeed())
@@ -342,8 +342,8 @@ var _ = Describe("ocm invitation workflow", func() {
 			})
 
 			JustBeforeEach(func() {
-				cesnetURL = revads["cesnethttp"].GrpcAddress
-				cernboxURL = revads["cernboxhttp"].GrpcAddress
+				cesnetURL = owncloudds["cesnethttp"].GrpcAddress
+				cernboxURL = owncloudds["cernboxhttp"].GrpcAddress
 
 				var ok bool
 				tknMarie, ok = ctxpkg.ContextGetToken(ctxMarie)
@@ -357,7 +357,7 @@ var _ = Describe("ocm invitation workflow", func() {
 				token = tknRes.InviteToken.Token
 			})
 
-			acceptInvite := func(revaToken, domain, provider, token string) int {
+			acceptInvite := func(owncloudToken, domain, provider, token string) int {
 				d, err := json.Marshal(map[string]string{
 					"token":          token,
 					"providerDomain": provider,
@@ -365,7 +365,7 @@ var _ = Describe("ocm invitation workflow", func() {
 				Expect(err).ToNot(HaveOccurred())
 				req, err := http.NewRequestWithContext(context.TODO(), http.MethodPost, fmt.Sprintf("http://%s/sciencemesh/accept-invite", domain), bytes.NewReader(d))
 				Expect(err).ToNot(HaveOccurred())
-				req.Header.Set("x-access-token", revaToken)
+				req.Header.Set("x-access-token", owncloudToken)
 				req.Header.Set("content-type", "application/json")
 
 				res, err := http.DefaultClient.Do(req)
@@ -393,10 +393,10 @@ var _ = Describe("ocm invitation workflow", func() {
 				}
 			}
 
-			findAccepted := func(revaToken, domain string) ([]*remoteUser, int) {
+			findAccepted := func(owncloudToken, domain string) ([]*remoteUser, int) {
 				req, err := http.NewRequestWithContext(context.TODO(), http.MethodGet, fmt.Sprintf("http://%s/sciencemesh/find-accepted-users", domain), nil)
 				Expect(err).ToNot(HaveOccurred())
-				req.Header.Set("x-access-token", revaToken)
+				req.Header.Set("x-access-token", owncloudToken)
 
 				res, err := http.DefaultClient.Do(req)
 				Expect(err).ToNot(HaveOccurred())
@@ -407,10 +407,10 @@ var _ = Describe("ocm invitation workflow", func() {
 				return users, res.StatusCode
 			}
 
-			generateToken := func(revaToken, domain string) (*generateInviteResponse, int) {
+			generateToken := func(owncloudToken, domain string) (*generateInviteResponse, int) {
 				req, err := http.NewRequestWithContext(context.TODO(), http.MethodPost, fmt.Sprintf("http://%s/sciencemesh/generate-invite", domain), nil)
 				Expect(err).ToNot(HaveOccurred())
-				req.Header.Set("x-access-token", revaToken)
+				req.Header.Set("x-access-token", owncloudToken)
 
 				res, err := http.DefaultClient.Do(req)
 				Expect(err).ToNot(HaveOccurred())

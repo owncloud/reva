@@ -40,17 +40,17 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/studio-b12/gowebdav"
 
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/mime"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp/router"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/registry"
-	"github.com/cs3org/reva/v2/pkg/storagespace"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	"github.com/cs3org/reva/v2/pkg/utils/cfg"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/mime"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/router"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/registry"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/utils/cfg"
 )
 
 func init() {
@@ -202,7 +202,7 @@ func (d *driver) webdavClient(ctx context.Context, forUser *userpb.UserId, ref *
 	}
 
 	// FIXME: it's still not clear from the OCM APIs how to use the shared secret
-	// will use as a token in the bearer authentication as this is the reva implementation
+	// will use as a token in the bearer authentication as this is the owncloud implementation
 	c := gowebdav.NewAuthClient(endpoint, gowebdav.NewPreemptiveAuth(BearerAuthenticator{Token: secret}))
 	if d.c.Insecure {
 		c.SetTransport(&http.Transport{

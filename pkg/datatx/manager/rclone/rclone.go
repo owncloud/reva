@@ -34,10 +34,10 @@ import (
 
 	datatx "github.com/cs3org/go-cs3apis/cs3/tx/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	txdriver "github.com/cs3org/reva/v2/pkg/datatx"
-	registry "github.com/cs3org/reva/v2/pkg/datatx/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	txdriver "github.com/cs3org/owncloud/v2/pkg/datatx"
+	registry "github.com/cs3org/owncloud/v2/pkg/datatx/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
@@ -50,7 +50,7 @@ func init() {
 func (c *config) init(m map[string]interface{}) {
 	// set sane defaults
 	if c.File == "" {
-		c.File = "/var/tmp/reva/datatx-transfers.json"
+		c.File = "/var/tmp/owncloud/datatx-transfers.json"
 	}
 	if c.JobStatusCheckInterval == 0 {
 		c.JobStatusCheckInterval = 2000

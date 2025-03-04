@@ -29,11 +29,11 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	datatx "github.com/cs3org/go-cs3apis/cs3/tx/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
 	"github.com/pkg/errors"
 )
 
@@ -406,7 +406,7 @@ func (s *svc) handleTransfer(ctx context.Context, share *ocm.ReceivedShare, tran
 	}
 	destServiceHost := dstWebdavHostURL.Host + dstWebdavHostURL.Path
 	// optional prefix must only appear in target url path:
-	// http://...token...@reva.eu/prefix/?name=remote.php/webdav/home/...
+	// http://...token...@owncloud.eu/prefix/?name=remote.php/webdav/home/...
 	destEndpointPath := strings.TrimPrefix(destWebdavEndpointURL.Path, dstWebdavHostURL.Path)
 	destEndpointScheme := destWebdavEndpointURL.Scheme
 	destToken := ctxpkg.ContextMustGetToken(ctx)

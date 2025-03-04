@@ -30,11 +30,11 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	datatx "github.com/cs3org/go-cs3apis/cs3/tx/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	txdriver "github.com/cs3org/reva/v2/pkg/datatx"
-	txregistry "github.com/cs3org/reva/v2/pkg/datatx/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
+	txdriver "github.com/cs3org/owncloud/v2/pkg/datatx"
+	txregistry "github.com/cs3org/owncloud/v2/pkg/datatx/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -90,7 +90,7 @@ func (c *config) init() {
 		c.TxDriver = "rclone"
 	}
 	if c.TxSharesFile == "" {
-		c.TxSharesFile = "/var/tmp/reva/datatx-shares.json"
+		c.TxSharesFile = "/var/tmp/owncloud/datatx-shares.json"
 	}
 	if c.DataTransfersFolder == "" {
 		c.DataTransfersFolder = "/home/DataTransfers"

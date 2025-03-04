@@ -24,7 +24,7 @@ import (
 	"path"
 	"time"
 
-	"github.com/cs3org/reva/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc/metadata"
 
@@ -32,14 +32,14 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	storagep "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/ocis"
-	jwt "github.com/cs3org/reva/v2/pkg/token/manager/jwt"
-	"github.com/cs3org/reva/v2/pkg/utils"
-	"github.com/cs3org/reva/v2/tests/helpers"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/ocis"
+	jwt "github.com/cs3org/owncloud/v2/pkg/token/manager/jwt"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/tests/helpers"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -47,7 +47,7 @@ import (
 
 // This test suite tests the gprc gateway interface
 //
-// It uses the `startRevads` helper to spawn the according reva daemon and
+// It uses the `startRevads` helper to spawn the according owncloud daemon and
 // other dependencies like a userprovider if needed.
 // It also sets up an authenticated context and a service client to the storage
 // provider to be used in the assertion functions.
@@ -55,7 +55,7 @@ var _ = Describe("gateway", func() {
 	var (
 		dependencies = []RevadConfig{}
 		variables    = map[string]string{}
-		revads       = map[string]*Revad{}
+		owncloudds       = map[string]*Revad{}
 
 		ctx           context.Context
 		serviceClient gateway.GatewayAPIClient
@@ -126,15 +126,15 @@ var _ = Describe("gateway", func() {
 		ctx = metadata.AppendToOutgoingContext(ctx, ctxpkg.TokenHeader, t)
 		ctx = ctxpkg.ContextSetUser(ctx, user)
 
-		revads, err = startRevads(dependencies, variables)
+		owncloudds, err = startRevads(dependencies, variables)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(revads["gateway"]).ToNot(BeNil())
-		serviceClient, err = pool.GetGatewayServiceClient(revads["gateway"].GrpcAddress)
+		Expect(owncloudds["gateway"]).ToNot(BeNil())
+		serviceClient, err = pool.GetGatewayServiceClient(owncloudds["gateway"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	AfterEach(func() {
-		for _, r := range revads {
+		for _, r := range owncloudds {
 			Expect(r.Cleanup(CurrentSpecReport().Failed())).To(Succeed())
 		}
 	})
@@ -187,9 +187,9 @@ var _ = Describe("gateway", func() {
 		JustBeforeEach(func() {
 			var err error
 			shard1Fs, err = ocis.New(map[string]interface{}{
-				"root":                revads["storage"].StorageRoot,
-				"userprovidersvc":     revads["users"].GrpcAddress,
-				"permissionssvc":      revads["permissions"].GrpcAddress,
+				"root":                owncloudds["storage"].StorageRoot,
+				"userprovidersvc":     owncloudds["users"].GrpcAddress,
+				"permissionssvc":      owncloudds["permissions"].GrpcAddress,
 				"treesize_accounting": true,
 				"treetime_accounting": true,
 			}, nil, &zerolog.Logger{})
@@ -213,9 +213,9 @@ var _ = Describe("gateway", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			shard2Fs, err = ocis.New(map[string]interface{}{
-				"root":                revads["storage"].StorageRoot,
-				"userprovidersvc":     revads["users"].GrpcAddress,
-				"permissionssvc":      revads["permissions"].GrpcAddress,
+				"root":                owncloudds["storage"].StorageRoot,
+				"userprovidersvc":     owncloudds["users"].GrpcAddress,
+				"permissionssvc":      owncloudds["permissions"].GrpcAddress,
 				"treesize_accounting": true,
 				"treetime_accounting": true,
 			}, nil, &zerolog.Logger{})
@@ -318,10 +318,10 @@ var _ = Describe("gateway", func() {
 
 				ssid, err := storagespace.ParseID(space.Id.OpaqueId)
 				Expect(err).ToNot(HaveOccurred())
-				mpk1, err := os.ReadFile(path.Join(revads["storage"].StorageRoot, "/indexes/by-type/project.mpk"))
+				mpk1, err := os.ReadFile(path.Join(owncloudds["storage"].StorageRoot, "/indexes/by-type/project.mpk"))
 				Expect(err).ToNot(HaveOccurred())
 				Expect(string(mpk1)).ToNot(ContainSubstring(ssid.OpaqueId))
-				mpk2, err := os.ReadFile(path.Join(revads["storage2"].StorageRoot, "/indexes/by-type/project.mpk"))
+				mpk2, err := os.ReadFile(path.Join(owncloudds["storage2"].StorageRoot, "/indexes/by-type/project.mpk"))
 				Expect(err).ToNot(HaveOccurred())
 				Expect(string(mpk2)).To(ContainSubstring(ssid.OpaqueId))
 			})
@@ -377,8 +377,8 @@ var _ = Describe("gateway", func() {
 		JustBeforeEach(func() {
 			var err error
 			fs, err = ocis.New(map[string]interface{}{
-				"root":                revads["storage"].StorageRoot,
-				"permissionssvc":      revads["permissions"].GrpcAddress,
+				"root":                owncloudds["storage"].StorageRoot,
+				"permissionssvc":      owncloudds["permissions"].GrpcAddress,
 				"treesize_accounting": true,
 				"treetime_accounting": true,
 			}, nil, &zerolog.Logger{})
@@ -401,9 +401,9 @@ var _ = Describe("gateway", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			embeddedFs, err = ocis.New(map[string]interface{}{
-				"root":                revads["storage2"].StorageRoot,
-				"userprovidersvc":     revads["users"].GrpcAddress,
-				"permissionssvc":      revads["permissions"].GrpcAddress,
+				"root":                owncloudds["storage2"].StorageRoot,
+				"userprovidersvc":     owncloudds["users"].GrpcAddress,
+				"permissionssvc":      owncloudds["permissions"].GrpcAddress,
 				"treesize_accounting": true,
 				"treetime_accounting": true,
 			}, nil, &zerolog.Logger{})

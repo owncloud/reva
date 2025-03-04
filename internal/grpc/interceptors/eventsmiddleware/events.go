@@ -28,13 +28,13 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	revactx "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/events/stream"
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
-	"github.com/cs3org/reva/v2/pkg/storagespace"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	owncloudctx "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/events/stream"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 	"google.golang.org/grpc"
 )
@@ -74,7 +74,7 @@ func NewUnary(m map[string]interface{}) (grpc.UnaryServerInterceptor, int, error
 		default:
 		}
 
-		executant, _ := revactx.ContextGetUser(ctx)
+		executant, _ := owncloudctx.ContextGetUser(ctx)
 
 		// The MoveResponse event is moved to the decomposedfs
 		var ev interface{}

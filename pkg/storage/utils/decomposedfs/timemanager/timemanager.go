@@ -22,8 +22,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/node"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/node"
 )
 
 // Manager is responsible for managing time-related attributes of nodes in a decomposed file system.

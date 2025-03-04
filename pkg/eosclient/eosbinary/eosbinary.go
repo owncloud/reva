@@ -32,11 +32,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/eosclient"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/acl"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/eosclient"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/acl"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/trace"
@@ -44,7 +44,7 @@ import (
 
 const (
 	versionPrefix  = ".sys.v#."
-	lwShareAttrKey = "reva.lwshare"
+	lwShareAttrKey = "owncloud.lwshare"
 	userACLEvalKey = "eval.useracl"
 	favoritesKey   = "http://owncloud.org/ns/favorite"
 )
@@ -1204,7 +1204,7 @@ func (c *Client) mapToFileInfo(ctx context.Context, kv, attrs map[string]string,
 		return nil, err
 	}
 
-	// Read lightweight ACLs recognized by the sys.reva.lwshare attr
+	// Read lightweight ACLs recognized by the sys.owncloud.lwshare attr
 	if lwACLStr, ok := attrs["sys."+lwShareAttrKey]; ok {
 		lwAcls, err := acl.Parse(lwACLStr, acl.ShortTextForm)
 		if err != nil {

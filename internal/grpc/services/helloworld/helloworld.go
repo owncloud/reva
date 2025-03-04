@@ -22,8 +22,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cs3org/reva/v2/internal/grpc/services/helloworld/proto"
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/internal/grpc/services/helloworld/proto"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -43,7 +43,7 @@ type service struct {
 
 // New returns a new PreferencesServiceServer
 // It can be tested like this:
-// prototool grpc --address 0.0.0.0:9999 --method 'revad.helloworld.HelloWorldService/Hello' --data '{"name": "Alice"}'
+// prototool grpc --address 0.0.0.0:9999 --method 'owncloudd.helloworld.HelloWorldService/Hello' --data '{"name": "Alice"}'
 func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Service, error) {
 	c := &conf{}
 	if err := mapstructure.Decode(m, c); err != nil {

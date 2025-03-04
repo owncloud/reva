@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	ocmprovider "github.com/cs3org/go-cs3apis/cs3/ocm/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
 	"github.com/pkg/errors"
 )
 

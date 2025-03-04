@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/c-bata/go-prompt"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
 )
 
 var (
@@ -140,13 +140,13 @@ func main() {
 		return
 	}
 
-	fmt.Printf("reva-cli %s (rev-%s)\n", version, gitCommit)
+	fmt.Printf("owncloud-cli %s (rev-%s)\n", version, gitCommit)
 	fmt.Println("Please use `exit` or `Ctrl-D` to exit this program.")
 
 	p := prompt.New(
 		executor.Execute,
 		completer.Complete,
-		prompt.OptionTitle("reva-cli"),
+		prompt.OptionTitle("owncloud-cli"),
 		prompt.OptionPrefix(">> "),
 	)
 	p.Run()

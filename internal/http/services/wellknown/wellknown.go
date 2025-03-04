@@ -21,9 +21,9 @@ package wellknown
 import (
 	"net/http"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
-	"github.com/cs3org/reva/v2/pkg/utils/cfg"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/utils/cfg"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 )

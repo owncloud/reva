@@ -34,14 +34,14 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	storageprovider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/token"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/token"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -132,8 +132,8 @@ func (s *svc) openFederatedShares(ctx context.Context, targetURL string, vm gate
 
 	conn, err := getConn(gatewayEP, insecure, skipVerify)
 	if err != nil {
-		log.Err(err).Msg("error connecting to remote reva")
-		return nil, errors.Wrap(err, "gateway: error connecting to remote reva")
+		log.Err(err).Msg("error connecting to remote owncloud")
+		return nil, errors.Wrap(err, "gateway: error connecting to remote owncloud")
 	}
 
 	gatewayClient := gateway.NewGatewayAPIClient(conn)

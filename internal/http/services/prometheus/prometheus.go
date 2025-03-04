@@ -27,7 +27,7 @@ import (
 	"github.com/rs/zerolog"
 	"go.opencensus.io/stats/view"
 
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
 )
 
 func init() {
@@ -44,7 +44,7 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 	conf.init()
 
 	pe, err := prometheus.NewExporter(prometheus.Options{
-		Namespace: "revad",
+		Namespace: "owncloudd",
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "prometheus: error creating exporter")

@@ -37,17 +37,17 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/grpc/services/storageprovider"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/mime"
-	"github.com/cs3org/reva/v2/pkg/rhttp/datatx/metrics"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/ace"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/grants"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/internal/grpc/services/storageprovider"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/mime"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/datatx/metrics"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/ace"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/grants"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/rogpeppe/go-internal/lockedfile"
@@ -58,7 +58,7 @@ import (
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/cs3org/reva/pkg/storage/utils/decomposedfs/node")
+	tracer = otel.Tracer("github.com/cs3org/owncloud/pkg/storage/utils/decomposedfs/node")
 }
 
 // Define keys and values used in the node metadata

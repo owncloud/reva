@@ -40,29 +40,29 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/conversions"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/eosclient"
-	"github.com/cs3org/reva/v2/pkg/eosclient/eosbinary"
-	"github.com/cs3org/reva/v2/pkg/eosclient/eosgrpc"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/mime"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/acl"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/chunking"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/grants"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/templates"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/conversions"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/eosclient"
+	"github.com/cs3org/owncloud/v2/pkg/eosclient/eosbinary"
+	"github.com/cs3org/owncloud/v2/pkg/eosclient/eosgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/mime"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/acl"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/chunking"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/grants"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/templates"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/jellydator/ttlcache/v2"
 	"github.com/pkg/errors"
 )
 
 const (
-	refTargetAttrKey = "reva.target"
+	refTargetAttrKey = "owncloud.target"
 )
 
 const (
@@ -73,13 +73,13 @@ const (
 )
 
 // LockPayloadKey is the key in the xattr for lock payload
-const LockPayloadKey = "reva.lock.payload"
+const LockPayloadKey = "owncloud.lock.payload"
 
 // LockExpirationKey is the key in the xattr for lock expiration
-const LockExpirationKey = "reva.lock.expiration"
+const LockExpirationKey = "owncloud.lock.expiration"
 
 // LockTypeKey is the key in the xattr for lock payload
-const LockTypeKey = "reva.lock.type"
+const LockTypeKey = "owncloud.lock.type"
 
 var hiddenReg = regexp.MustCompile(`\.sys\..#.`)
 
@@ -892,7 +892,7 @@ func encodeLock(l *provider.Lock) (string, error) {
 }
 
 // RefreshLock refreshes an existing lock on the given reference
-// TODO: use existingLockId. See https://github.com/cs3org/reva/pull/3286
+// TODO: use existingLockId. See https://github.com/cs3org/owncloud/pull/3286
 func (fs *eosfs) RefreshLock(ctx context.Context, ref *provider.Reference, newLock *provider.Lock, _ string) error {
 	// TODO (gdelmont): check if the new lock is already expired?
 
@@ -1698,7 +1698,7 @@ func (fs *eosfs) CreateReference(ctx context.Context, p string, targetURI *url.U
 	// TODO(labkode): with the grpc plugin we can create a file touching with xattrs.
 	// Current mechanism is: touch to hidden dir, set xattr, rename.
 	dir, base := path.Split(fn)
-	tmp := path.Join(dir, fmt.Sprintf(".sys.reva#.%s", base))
+	tmp := path.Join(dir, fmt.Sprintf(".sys.owncloud#.%s", base))
 	rootAuth, err := fs.getRootAuth(ctx)
 	if err != nil {
 		return nil
@@ -1717,7 +1717,7 @@ func (fs *eosfs) CreateReference(ctx context.Context, p string, targetURI *url.U
 	}
 
 	if err := fs.c.SetAttr(ctx, rootAuth, attr, false, false, tmp); err != nil {
-		err = errors.Wrapf(err, "eosfs: error setting reva.ref attr on file: %q", tmp)
+		err = errors.Wrapf(err, "eosfs: error setting owncloud.ref attr on file: %q", tmp)
 		return err
 	}
 
@@ -2115,7 +2115,7 @@ func (fs *eosfs) convertToFileReference(ctx context.Context, eosFileInfo *eoscli
 		return nil, err
 	}
 	info.Type = provider.ResourceType_RESOURCE_TYPE_REFERENCE
-	val, ok := eosFileInfo.Attrs["reva.target"]
+	val, ok := eosFileInfo.Attrs["owncloud.target"]
 	if !ok || val == "" {
 		return nil, errtypes.InternalError("eosfs: reference does not contain target: target=" + val + " file=" + eosFileInfo.File)
 	}

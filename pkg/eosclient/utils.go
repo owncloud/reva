@@ -21,7 +21,7 @@ package eosclient
 import (
 	"fmt"
 
-	"github.com/cs3org/reva/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
 )
 
 const (

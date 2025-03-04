@@ -23,7 +23,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/node"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/pkg/errors"
 )
 

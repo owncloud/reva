@@ -38,16 +38,16 @@ import (
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/services/datagateway"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rhttp"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/internal/http/services/datagateway"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 )
 
 // TempDir creates a temporary directory in tmp/ and returns its path
 //
-// Temporary test directories are created in reva/tmp because system
+// Temporary test directories are created in owncloud/tmp because system
 // /tmp directories are often tmpfs mounts which do not support user
 // extended attributes.
 func TempDir(name string) (string, error) {
@@ -57,7 +57,7 @@ func TempDir(name string) (string, error) {
 	if err != nil {
 		return "nil", err
 	}
-	tmpRoot, err := os.MkdirTemp(tmpDir, "reva-unit-tests-*-root")
+	tmpRoot, err := os.MkdirTemp(tmpDir, "owncloud-unit-tests-*-root")
 	if err != nil {
 		return "nil", err
 	}

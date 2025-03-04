@@ -19,7 +19,7 @@
 package registry
 
 import (
-	"github.com/cs3org/reva/v2/pkg/user"
+	"github.com/cs3org/owncloud/v2/pkg/user"
 )
 
 // NewFunc is the function that user managers

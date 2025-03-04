@@ -34,10 +34,10 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/services/reqres"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/internal/http/services/reqres"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -205,7 +205,7 @@ func getUserIDFromOCMUser(user string) (*userpb.UserId, error) {
 	return &userpb.UserId{
 		OpaqueId: id,
 		Idp:      idp,
-		// the remote user is a federated account for the local reva
+		// the remote user is a federated account for the local owncloud
 		Type: userpb.UserType_USER_TYPE_FEDERATED,
 	}, nil
 }

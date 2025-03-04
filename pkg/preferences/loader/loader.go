@@ -20,6 +20,6 @@ package loader
 
 import (
 	// Load preferences drivers.
-	_ "github.com/cs3org/reva/v2/pkg/preferences/memory"
+	_ "github.com/cs3org/owncloud/v2/pkg/preferences/memory"
 	// Add your own here
 )

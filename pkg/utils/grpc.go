@@ -13,7 +13,7 @@ import (
 	permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	storageprovider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -52,7 +52,7 @@ func GetServiceUserContextWithContext(ctx context.Context, gwc gateway.GatewayAP
 	return metadata.AppendToOutgoingContext(ctx, ctxpkg.TokenHeader, token), nil
 }
 
-// GetServiceUserToken returns a reva authentication token for the given service user
+// GetServiceUserToken returns a owncloud authentication token for the given service user
 func GetServiceUserToken(ctx context.Context, gwc gateway.GatewayAPIClient, serviceUserID string, serviceUserSecret string) (string, error) {
 	authRes, err := gwc.Authenticate(ctx, &gateway.AuthenticateRequest{
 		Type:         "serviceaccounts",

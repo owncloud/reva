@@ -31,21 +31,21 @@ import (
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
-	"github.com/cs3org/reva/v2/internal/http/interceptors/auth/credential/registry"
-	tokenregistry "github.com/cs3org/reva/v2/internal/http/interceptors/auth/token/registry"
-	tokenwriterregistry "github.com/cs3org/reva/v2/internal/http/interceptors/auth/tokenwriter/registry"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/auth"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/status"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/rhttp/global"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/token"
-	tokenmgr "github.com/cs3org/reva/v2/pkg/token/manager/registry"
-	"github.com/cs3org/reva/v2/pkg/utils"
+	"github.com/cs3org/owncloud/v2/internal/http/interceptors/auth/credential/registry"
+	tokenregistry "github.com/cs3org/owncloud/v2/internal/http/interceptors/auth/token/registry"
+	tokenwriterregistry "github.com/cs3org/owncloud/v2/internal/http/interceptors/auth/tokenwriter/registry"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/auth"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/status"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/rhttp/global"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/token"
+	tokenmgr "github.com/cs3org/owncloud/v2/pkg/token/manager/registry"
+	"github.com/cs3org/owncloud/v2/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -229,8 +229,8 @@ func authenticateUser(w http.ResponseWriter, r *http.Request, conf *config, toke
 		return nil, err
 	}
 
-	// reva token or auth token can be passed using the same technique (for example bearer)
-	// before validating it against an auth provider, we can check directly if it's a reva
+	// owncloud token or auth token can be passed using the same technique (for example bearer)
+	// before validating it against an auth provider, we can check directly if it's a owncloud
 	// token and if not try to use it for authenticating the user.
 	for _, tokenStrategy := range tokenStrategies {
 		token := tokenStrategy.GetToken(r)

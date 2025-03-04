@@ -24,7 +24,7 @@ import (
 	"net/url"
 	"path/filepath"
 
-	"github.com/cs3org/reva/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
 )
 
 const OCMAPIVersion = "1.1.0"
@@ -32,7 +32,7 @@ const OCMAPIVersion = "1.1.0"
 type OcmProviderConfig struct {
 	OCMPrefix    string `docs:"ocm;The prefix URL where the OCM API is served."                                   mapstructure:"ocm_prefix"`
 	Endpoint     string `docs:"This host's full URL. If it's not configured, it is assumed OCM is not available." mapstructure:"endpoint"`
-	Provider     string `docs:"reva;A friendly name that defines this service."                                   mapstructure:"provider"`
+	Provider     string `docs:"owncloud;A friendly name that defines this service."                                   mapstructure:"provider"`
 	WebdavRoot   string `docs:"/remote.php/dav/ocm;The root URL of the WebDAV endpoint to serve OCM shares."      mapstructure:"webdav_root"`
 	WebappRoot   string `docs:"/external/sciencemesh;The root URL to serve Web apps via OCM."                     mapstructure:"webapp_root"`
 	EnableWebapp bool   `docs:"false;Whether web apps are enabled in OCM shares."                                 mapstructure:"enable_webapp"`
@@ -63,7 +63,7 @@ func (c *OcmProviderConfig) ApplyDefaults() {
 		c.OCMPrefix = "ocm"
 	}
 	if c.Provider == "" {
-		c.Provider = "reva"
+		c.Provider = "owncloud"
 	}
 	if c.WebdavRoot == "" {
 		c.WebdavRoot = "/remote.php/dav/ocm/"

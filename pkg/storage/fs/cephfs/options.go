@@ -24,7 +24,7 @@ package cephfs
 import (
 	"path/filepath"
 
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
 )
 
 // Options for the cephfs module
@@ -56,7 +56,7 @@ func (c *Options) fillDefaults() {
 	}
 
 	if c.ShadowFolder == "" {
-		c.ShadowFolder = "/.reva_hidden"
+		c.ShadowFolder = "/.owncloud_hidden"
 	} else {
 		c.ShadowFolder = addLeadingSlash(c.ShadowFolder)
 	}

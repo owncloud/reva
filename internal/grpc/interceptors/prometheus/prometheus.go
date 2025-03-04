@@ -21,7 +21,7 @@ package prometheus
 import (
 	"context"
 
-	"github.com/cs3org/reva/v2/pkg/rgrpc"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
@@ -59,7 +59,7 @@ func NewStream() grpc.StreamServerInterceptor {
 func interceptorFromConfig(m map[string]interface{}) (grpc.UnaryServerInterceptor, error) {
 	namespace := m["namespace"].(string)
 	if namespace == "" {
-		namespace = "reva"
+		namespace = "owncloud"
 	}
 	subsystem := m["subsystem"].(string)
 	reqProcessed := promauto.NewCounter(prometheus.CounterOpts{

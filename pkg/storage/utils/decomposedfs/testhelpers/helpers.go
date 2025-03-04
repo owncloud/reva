@@ -24,15 +24,15 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/posix/timemanager"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/aspects"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/lookup"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/permissions"
-	"github.com/cs3org/reva/v2/pkg/storagespace"
-	"github.com/cs3org/reva/v2/pkg/store"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/posix/timemanager"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/aspects"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/lookup"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/permissions"
+	"github.com/cs3org/owncloud/v2/pkg/storagespace"
+	"github.com/cs3org/owncloud/v2/pkg/store"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/mock"
@@ -42,14 +42,14 @@ import (
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
 	v1beta11 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	ruser "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/node"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/options"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/permissions/mocks"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/tree"
-	treemocks "github.com/cs3org/reva/v2/pkg/storage/utils/decomposedfs/tree/mocks"
-	"github.com/cs3org/reva/v2/tests/helpers"
+	ruser "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/node"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/options"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/permissions/mocks"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/tree"
+	treemocks "github.com/cs3org/owncloud/v2/pkg/storage/utils/decomposedfs/tree/mocks"
+	"github.com/cs3org/owncloud/v2/tests/helpers"
 )
 
 // TestEnv represents a test environment for unit tests
@@ -89,7 +89,7 @@ const (
 // The default config can be overridden by providing the strings to override
 // via map as a parameter
 func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
-	tmpRoot, err := helpers.TempDir("reva-unit-tests-*-root")
+	tmpRoot, err := helpers.TempDir("owncloud-unit-tests-*-root")
 	if err != nil {
 		return nil, err
 	}

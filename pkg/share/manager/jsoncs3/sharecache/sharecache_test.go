@@ -26,8 +26,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/cs3org/reva/v2/pkg/share/manager/jsoncs3/sharecache"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/metadata"
+	"github.com/cs3org/owncloud/v2/pkg/share/manager/jsoncs3/sharecache"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/metadata"
 )
 
 var _ = Describe("Sharecache", func() {

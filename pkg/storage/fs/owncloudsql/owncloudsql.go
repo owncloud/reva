@@ -45,21 +45,21 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/cs3org/reva/v2/internal/grpc/services/storageprovider"
-	"github.com/cs3org/reva/v2/pkg/appctx"
-	"github.com/cs3org/reva/v2/pkg/conversions"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/errtypes"
-	"github.com/cs3org/reva/v2/pkg/events"
-	"github.com/cs3org/reva/v2/pkg/logger"
-	"github.com/cs3org/reva/v2/pkg/mime"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/sharedconf"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/owncloudsql/filecache"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/registry"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/chunking"
-	"github.com/cs3org/reva/v2/pkg/storage/utils/templates"
+	"github.com/cs3org/owncloud/v2/internal/grpc/services/storageprovider"
+	"github.com/cs3org/owncloud/v2/pkg/appctx"
+	"github.com/cs3org/owncloud/v2/pkg/conversions"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/errtypes"
+	"github.com/cs3org/owncloud/v2/pkg/events"
+	"github.com/cs3org/owncloud/v2/pkg/logger"
+	"github.com/cs3org/owncloud/v2/pkg/mime"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/sharedconf"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/owncloudsql/filecache"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/registry"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/chunking"
+	"github.com/cs3org/owncloud/v2/pkg/storage/utils/templates"
 )
 
 const (
@@ -136,7 +136,7 @@ func (c *config) init(m map[string]interface{}) {
 		c.UserLayout = "{{.Username}}"
 	}
 	if c.UploadInfoDir == "" {
-		c.UploadInfoDir = "/var/tmp/reva/uploadinfo"
+		c.UploadInfoDir = "/var/tmp/owncloud/uploadinfo"
 	}
 	// fallback for old config
 	if c.DeprecatedShareDirectory != "" {

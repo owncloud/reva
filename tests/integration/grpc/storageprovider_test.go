@@ -26,15 +26,15 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	storagep "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/cs3org/reva/v2/pkg/auth/scope"
-	ctxpkg "github.com/cs3org/reva/v2/pkg/ctx"
-	"github.com/cs3org/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/cs3org/reva/v2/pkg/storage"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/nextcloud"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/ocis"
-	"github.com/cs3org/reva/v2/pkg/storage/fs/registry"
-	jwt "github.com/cs3org/reva/v2/pkg/token/manager/jwt"
-	"github.com/cs3org/reva/v2/tests/helpers"
+	"github.com/cs3org/owncloud/v2/pkg/auth/scope"
+	ctxpkg "github.com/cs3org/owncloud/v2/pkg/ctx"
+	"github.com/cs3org/owncloud/v2/pkg/rgrpc/todo/pool"
+	"github.com/cs3org/owncloud/v2/pkg/storage"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/nextcloud"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/ocis"
+	"github.com/cs3org/owncloud/v2/pkg/storage/fs/registry"
+	jwt "github.com/cs3org/owncloud/v2/pkg/token/manager/jwt"
+	"github.com/cs3org/owncloud/v2/tests/helpers"
 	"github.com/google/uuid"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -54,13 +54,13 @@ func ref(provider string, path string) *storagep.Reference {
 	return r
 }
 
-func createFS(provider string, revads map[string]*Revad) (storage.FS, error) {
+func createFS(provider string, owncloudds map[string]*Revad) (storage.FS, error) {
 	conf := make(map[string]interface{})
 	var f registry.NewFunc
 	switch provider {
 	case "ocis":
-		conf["root"] = revads["storage"].StorageRoot
-		conf["permissionssvc"] = revads["permissions"].GrpcAddress
+		conf["root"] = owncloudds["storage"].StorageRoot
+		conf["permissionssvc"] = owncloudds["permissions"].GrpcAddress
 		f = ocis.New
 	case "nextcloud":
 		conf["endpoint"] = "http://localhost:8080/apps/sciencemesh/"
@@ -73,7 +73,7 @@ func createFS(provider string, revads map[string]*Revad) (storage.FS, error) {
 // This test suite tests the gprc storageprovider interface using different
 // storage backends
 //
-// It uses the `startRevads` helper to spawn the according reva daemon and
+// It uses the `startRevads` helper to spawn the according owncloud daemon and
 // other dependencies like a userprovider if needed.
 // It also sets up an authenticated context and a service client to the storage
 // provider to be used in the assertion functions.
@@ -81,7 +81,7 @@ var _ = Describe("storage providers", func() {
 	var (
 		dependencies = []RevadConfig{}
 		variables    = map[string]string{}
-		revads       = map[string]*Revad{}
+		owncloudds       = map[string]*Revad{}
 
 		ctx            context.Context
 		providerClient storagep.ProviderAPIClient
@@ -118,16 +118,16 @@ var _ = Describe("storage providers", func() {
 		ctx = metadata.AppendToOutgoingContext(ctx, ctxpkg.TokenHeader, t)
 		ctx = ctxpkg.ContextSetUser(ctx, user)
 
-		revads, err = startRevads(dependencies, variables)
+		owncloudds, err = startRevads(dependencies, variables)
 		Expect(err).ToNot(HaveOccurred())
-		providerClient, err = pool.GetStorageProviderServiceClient(revads["storage"].GrpcAddress)
+		providerClient, err = pool.GetStorageProviderServiceClient(owncloudds["storage"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
-		spacesClient, err = pool.GetSpacesProviderServiceClient(revads["storage"].GrpcAddress)
+		spacesClient, err = pool.GetSpacesProviderServiceClient(owncloudds["storage"].GrpcAddress)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	AfterEach(func() {
-		for _, r := range revads {
+		for _, r := range owncloudds {
 			Expect(r.Cleanup(CurrentSpecReport().Failed())).To(Succeed())
 		}
 	})
@@ -712,7 +712,7 @@ var _ = Describe("storage providers", func() {
 
 			Context("with an existing file /versioned_file", func() {
 				JustBeforeEach(func() {
-					fs, err := createFS(provider, revads)
+					fs, err := createFS(provider, owncloudds)
 					Expect(err).ToNot(HaveOccurred())
 
 					content1 := []byte("1")
