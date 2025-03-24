@@ -24,6 +24,7 @@ import (
 
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
+	ocm "github.com/cs3org/go-cs3apis/cs3/ocm/share/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
@@ -118,9 +119,9 @@ func NewUnary(m map[string]interface{}) (grpc.UnaryServerInterceptor, int, error
 				ev = OCMCoreShareCreated(v, req.(*ocmcore.CreateOCMCoreShareRequest), executant)
 			}
 
-		case *ocmcore.DeleteOCMCoreShareResponse:
-			if isSuccess(v) {
-				ev = OCMCoreShareDelete(v, req.(*ocmcore.DeleteOCMCoreShareRequest), executant)
+		case *ocm.RemoveOCMShareResponse:
+			if isSuccess(v) && v.GetOpaque() != nil {
+				ev = OCMCoreShareRemove(v, req.(*ocmcore.DeleteOCMCoreShareRequest), executant)
 			}
 
 		case *provider.AddGrantResponse:

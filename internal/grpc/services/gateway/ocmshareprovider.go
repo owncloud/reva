@@ -119,6 +119,30 @@ func (s *svc) RemoveOCMShare(ctx context.Context, req *ocm.RemoveOCMShareRequest
 		}, err
 	}
 
+	if res.Opaque == nil {
+		res.Opaque = &v1beta1.Opaque{
+			Map: make(map[string]*v1beta1.OpaqueEntry),
+		}
+	}
+
+	metadata := map[string]*v1beta1.OpaqueEntry{
+		"executant": {
+			Decoder: "plain",
+			Value:   []byte("placeholder_executant"),
+		},
+		"grantee": {
+			Decoder: "plain",
+			Value:   []byte("placeholder_grantee"),
+		},
+		"share_name": {
+			Decoder: "plain",
+			Value:   []byte("placeholder_share_name"),
+		},
+	}
+	for key, value := range metadata {
+		res.Opaque.Map[key] = value
+	}
+
 	return res, nil
 }
 

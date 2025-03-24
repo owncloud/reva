@@ -212,10 +212,15 @@ func OCMCoreShareCreated(r *ocmcore.CreateOCMCoreShareResponse, req *ocmcore.Cre
 	}
 }
 
-func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.DeleteOCMCoreShareRequest, executant *user.User) events.OCMCoreShareDelete {
+func OCMCoreShareRemove(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.DeleteOCMCoreShareRequest, executant *user.User) events.OCMCoreShareDelete {
+	metadata := r.GetOpaque()
+	if metadata == nil {
+		return events.OCMCoreShareDelete{}
+	}
 	return events.OCMCoreShareDelete{
-		ID:        req.GetId(),
-		Executant: executant.GetId(),
+		Executant:     utils.ReadPlainFromOpaque(metadata, "executant_name"),
+		GranteeUserID: utils.ReadPlainFromOpaque(metadata, "grantee_name"),
+		ResourceName:  utils.ReadPlainFromOpaque(metadata, "share_name"),
 	}
 }
 
