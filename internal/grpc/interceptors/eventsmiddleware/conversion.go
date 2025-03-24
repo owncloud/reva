@@ -212,6 +212,13 @@ func OCMCoreShareCreated(r *ocmcore.CreateOCMCoreShareResponse, req *ocmcore.Cre
 	}
 }
 
+func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.DeleteOCMCoreShareRequest, executant *user.User) events.OCMCoreShareDelete {
+	return events.OCMCoreShareDelete{
+		ID:        req.GetId(),
+		Executant: executant.GetId(),
+	}
+}
+
 // FileTouched converts the response to an event
 func FileTouched(r *provider.TouchFileResponse, req *provider.TouchFileRequest, spaceOwner *user.UserId, executant *user.User) events.FileTouched {
 	return events.FileTouched{

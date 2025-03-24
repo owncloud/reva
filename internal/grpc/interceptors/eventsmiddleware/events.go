@@ -28,6 +28,7 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	revactx "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/events"
@@ -35,7 +36,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 	"google.golang.org/grpc"
 )
 
@@ -117,6 +117,12 @@ func NewUnary(m map[string]interface{}) (grpc.UnaryServerInterceptor, int, error
 			if isSuccess(v) {
 				ev = OCMCoreShareCreated(v, req.(*ocmcore.CreateOCMCoreShareRequest), executant)
 			}
+
+		case *ocmcore.DeleteOCMCoreShareResponse:
+			if isSuccess(v) {
+				ev = OCMCoreShareDelete(v, req.(*ocmcore.DeleteOCMCoreShareRequest), executant)
+			}
+
 		case *provider.AddGrantResponse:
 			// TODO: update CS3 APIs
 			// FIXME these should be part of the RemoveGrantRequest object

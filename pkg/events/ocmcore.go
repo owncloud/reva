@@ -44,3 +44,16 @@ func (OCMCoreShareCreated) Unmarshal(v []byte) (interface{}, error) {
 	err := json.Unmarshal(v, &e)
 	return e, err
 }
+
+// OCMCoreShareDelete is emitted when an ocm share is requested for delete
+type OCMCoreShareDelete struct {
+	ID        string
+	Executant *user.UserId
+}
+
+// Unmarshal to fulfill umarshaller interface
+func (OCMCoreShareDelete) Unmarshal(v []byte) (interface{}, error) {
+	e := OCMCoreShareDelete{}
+	err := json.Unmarshal(v, &e)
+	return e, err
+}
