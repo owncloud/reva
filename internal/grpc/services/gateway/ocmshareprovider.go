@@ -35,6 +35,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/pkg/errors"
+
+	v1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 )
 
 // TODO(labkode): add multi-phase commit logic when commit share or commit ref is enabled.
@@ -103,6 +105,18 @@ func (s *svc) RemoveOCMShare(ctx context.Context, req *ocm.RemoveOCMShareRequest
 	}
 	share := getShareRes.Share
 
+	// Get share info for notifications and events before it is deleted
+	resourceName := share.GetName()
+	granteeOpaqueID := ""
+	if userID := share.GetGrantee().GetUserId(); userID != nil {
+		granteeOpaqueID = userID.OpaqueId
+	}
+	executantOpaqueID := ""
+	if userID := share.GetOwner(); userID != nil {
+		// TODO: Owner may not be the person who created or deleted the share
+		executantOpaqueID = userID.OpaqueId
+	}
+
 	res, err := c.RemoveOCMShare(ctx, req)
 	if err != nil {
 		return nil, errors.Wrap(err, "gateway: error calling RemoveOCMShare")
@@ -119,6 +133,7 @@ func (s *svc) RemoveOCMShare(ctx context.Context, req *ocm.RemoveOCMShareRequest
 		}, err
 	}
 
+	// Save share information for notifications and events
 	if res.Opaque == nil {
 		res.Opaque = &v1beta1.Opaque{
 			Map: make(map[string]*v1beta1.OpaqueEntry),
@@ -126,17 +141,17 @@ func (s *svc) RemoveOCMShare(ctx context.Context, req *ocm.RemoveOCMShareRequest
 	}
 
 	metadata := map[string]*v1beta1.OpaqueEntry{
-		"executant": {
+		"executantname": {
 			Decoder: "plain",
-			Value:   []byte("placeholder_executant"),
+			Value:   []byte(executantOpaqueID),
 		},
-		"grantee": {
+		"granteename": {
 			Decoder: "plain",
-			Value:   []byte("placeholder_grantee"),
+			Value:   []byte(granteeOpaqueID),
 		},
-		"share_name": {
+		"resourcename": {
 			Decoder: "plain",
-			Value:   []byte("placeholder_share_name"),
+			Value:   []byte(resourceName),
 		},
 	}
 	for key, value := range metadata {
