@@ -28,7 +28,6 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
-	ocmshare "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appctx"
@@ -119,9 +118,10 @@ func NewUnary(m map[string]interface{}) (grpc.UnaryServerInterceptor, int, error
 			if isSuccess(v) {
 				ev = OCMCoreShareCreated(v, req.(*ocmcore.CreateOCMCoreShareRequest), executant)
 			}
-		case *ocmshare.RemoveOCMShareResponse:
-			if isSuccess(v) && v.GetOpaque() != nil {
-				ev = OCMCoreShareRemove(v, req.(*ocmshare.RemoveOCMShareResponse), executant)
+		case *ocmcore.DeleteOCMCoreShareResponse:
+			// if isSuccess(v) && v.GetOpaque() != nil {
+			if isSuccess(v) {
+				ev = OCMCoreShareDelete(v, req.(*ocmcore.DeleteOCMCoreShareRequest), executant)
 			}
 
 		case *provider.AddGrantResponse:

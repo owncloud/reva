@@ -393,20 +393,6 @@ func (s *service) RemoveOCMShare(ctx context.Context, req *ocm.RemoveOCMShareReq
 		}, nil
 	}
 
-	shareResInfo := getShareRes.GetShare()
-	// Get share info for notifications and events before it is deleted
-	resourceName := shareResInfo.GetName()
-	granteeOpaqueID := ""
-	if userID := shareResInfo.GetGrantee().GetUserId(); userID != nil {
-		granteeOpaqueID = userID.OpaqueId
-	}
-	executantOpaqueID := ""
-	if userID := shareResInfo.GetOwner(); userID != nil {
-		// TODO: Owner may not be the person who created or deleted the share
-		executantOpaqueID = userID.OpaqueId
-	}
-	fmt.Printf("reva RemoveOCMShare r: %s, g: %s, e: %s\n", resourceName, granteeOpaqueID, executantOpaqueID)
-
 	if err := s.repo.DeleteShare(ctx, user, req.Ref); err != nil {
 		if errors.Is(err, share.ErrShareNotFound) {
 			return &ocm.RemoveOCMShareResponse{
@@ -426,22 +412,6 @@ func (s *service) RemoveOCMShare(ctx context.Context, req *ocm.RemoveOCMShareReq
 
 	return &ocm.RemoveOCMShareResponse{
 		Status: status.NewOK(ctx),
-		Opaque: &typespb.Opaque{
-			Map: map[string]*typespb.OpaqueEntry{
-				"executantname": {
-					Decoder: "plain",
-					Value:   []byte(executantOpaqueID),
-				},
-				"granteename": {
-					Decoder: "plain",
-					Value:   []byte(granteeOpaqueID),
-				},
-				"resourcename": {
-					Decoder: "plain",
-					Value:   []byte(resourceName),
-				},
-			},
-		},
 	}, nil
 }
 

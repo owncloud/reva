@@ -26,7 +26,6 @@ import (
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
-	ocmshare "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
@@ -213,8 +212,8 @@ func OCMCoreShareCreated(r *ocmcore.CreateOCMCoreShareResponse, req *ocmcore.Cre
 	}
 }
 
-func OCMCoreShareRemove(r *ocmshare.RemoveOCMShareResponse, req *ocmshare.RemoveOCMShareResponse, executant *user.User) events.OCMCoreShareDelete {
-	return events.OCMCoreShareDelete{
+func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.DeleteOCMCoreShareRequest, executant *user.User) events.OCMCoreShareRemove {
+	return events.OCMCoreShareRemove{
 		Executant:     utils.ReadPlainFromOpaque(r.GetOpaque(), "executantname"),
 		GranteeUserID: utils.ReadPlainFromOpaque(r.GetOpaque(), "granteename"),
 		ResourceName:  utils.ReadPlainFromOpaque(r.GetOpaque(), "resourcename"),
