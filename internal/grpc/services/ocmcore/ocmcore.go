@@ -185,12 +185,24 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		return nil, errtypes.UserRequired("missing remote user id in a metadata")
 	}
 
-	user := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
-	resourceName := "placeholder name"
-	granteeOpaqueID := "placeholder granteeOpaqueID"
-	executantOpaqueID := "placehodler executantOpaqueID"
+	share, err := s.repo.GetReceivedShare(ctx, &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}, &ocm.ShareReference{
+		Spec: &ocm.ShareReference_Id{
+			Id: &ocm.ShareId{
+				OpaqueId: req.GetId(),
+			},
+		},
+	})
+	if err != nil {
+		return nil, errtypes.InternalError("unable to get share details")
+	}
 
-	err := s.repo.DeleteReceivedShare(ctx, user, &ocm.ShareReference{
+	user := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
+	resourceName := share.Name
+	granteeOpaqueID := share.Grantee.GetUserId().OpaqueId
+	executantOpaqueID := share.Owner.OpaqueId
+	nowInSeconds := uint64(time.Now().Unix())
+
+	err = s.repo.DeleteReceivedShare(ctx, user, &ocm.ShareReference{
 		Spec: &ocm.ShareReference_Id{
 			Id: &ocm.ShareId{
 				OpaqueId: req.GetId(),
@@ -202,11 +214,11 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		res.Status = status.NewOK(ctx)
 		res.Opaque = &typesv1beta1.Opaque{
 			Map: map[string]*typesv1beta1.OpaqueEntry{
-				"executantname": {
+				"executantuserid": {
 					Decoder: "plain",
 					Value:   []byte(executantOpaqueID),
 				},
-				"granteename": {
+				"granteeuserid": {
 					Decoder: "plain",
 					Value:   []byte(granteeOpaqueID),
 				},
