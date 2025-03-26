@@ -28,7 +28,7 @@ import (
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/ocm/share"
 	"github.com/owncloud/reva/v2/pkg/ocm/share/repository/registry"
@@ -111,7 +111,7 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		return nil, errtypes.NotSupported("share type not supported")
 	}
 
-	now := &typesv1beta1.Timestamp{
+	now := &typespb.Timestamp{
 		Seconds: uint64(time.Now().Unix()),
 	}
 
@@ -212,8 +212,8 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 	res := &ocmcore.DeleteOCMCoreShareResponse{}
 	if err == nil {
 		res.Status = status.NewOK(ctx)
-		res.Opaque = &typesv1beta1.Opaque{
-			Map: map[string]*typesv1beta1.OpaqueEntry{
+		res.Opaque = &typespb.Opaque{
+			Map: map[string]*typespb.OpaqueEntry{
 				"executantuserid": {
 					Decoder: "plain",
 					Value:   []byte(executantOpaqueID),
