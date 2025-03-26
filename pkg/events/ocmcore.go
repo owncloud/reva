@@ -47,9 +47,11 @@ func (OCMCoreShareCreated) Unmarshal(v []byte) (interface{}, error) {
 
 // OCMCoreShareDelete is emitted when an ocm share is requested for delete
 type OCMCoreShareDelete struct {
+	ShareID         string
 	ExecutantUserID string
 	GranteeUserID   string
 	ResourceName    string
+	CTime           *types.Timestamp
 }
 
 // Unmarshal to fulfill umarshaller interface

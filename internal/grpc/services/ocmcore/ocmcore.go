@@ -226,6 +226,10 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 					Decoder: "plain",
 					Value:   []byte(resourceName),
 				},
+				"timestamp": {
+					Decoder: "plain",
+					Value:   []byte(fmt.Sprintf("%d", nowInSeconds)),
+				},
 			},
 		}
 	} else {

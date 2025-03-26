@@ -19,6 +19,7 @@
 package eventsmiddleware
 
 import (
+	"strconv"
 	"time"
 
 	group "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
@@ -27,6 +28,7 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
@@ -213,10 +215,20 @@ func OCMCoreShareCreated(r *ocmcore.CreateOCMCoreShareResponse, req *ocmcore.Cre
 }
 
 func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.DeleteOCMCoreShareRequest, executant *user.User) events.OCMCoreShareDelete {
+	timestampStrInSec := utils.ReadPlainFromOpaque(r.GetOpaque(), "timestamp")
+	timestampIntInSec, err := strconv.ParseUint(timestampStrInSec, 10, 64)
+	if err != nil {
+		// fallback to event received "now". 0 would be weird for the user
+		timestampIntInSec = uint64(time.Now().Unix())
+	}
 	return events.OCMCoreShareDelete{
+		ShareID:         req.GetId(),
 		ExecutantUserID: utils.ReadPlainFromOpaque(r.GetOpaque(), "executantuserid"),
 		GranteeUserID:   utils.ReadPlainFromOpaque(r.GetOpaque(), "granteeuserid"),
 		ResourceName:    utils.ReadPlainFromOpaque(r.GetOpaque(), "resourcename"),
+		CTime: &types.Timestamp{
+			Seconds: timestampIntInSec,
+		},
 	}
 }
 
