@@ -217,7 +217,6 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		opaque = utils.AppendJSONToOpaque(opaque, "granteeuserid", granteeUser.Id)
 		opaque = utils.AppendJSONToOpaque(opaque, "shareruserid", sharerUserId)
 		res.Opaque = opaque
-		spew.Dump(res)
 	} else {
 		var notFound errtypes.NotFound
 		if errors.As(err, &notFound) {
