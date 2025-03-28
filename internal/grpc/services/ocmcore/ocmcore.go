@@ -28,7 +28,7 @@ import (
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/ocm/share"
 	"github.com/owncloud/reva/v2/pkg/ocm/share/repository/registry"
@@ -111,7 +111,7 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		return nil, errtypes.NotSupported("share type not supported")
 	}
 
-	now := &typesv1beta1.Timestamp{
+	now := &typespb.Timestamp{
 		Seconds: uint64(time.Now().Unix()),
 	}
 
@@ -185,18 +185,38 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		return nil, errtypes.UserRequired("missing remote user id in a metadata")
 	}
 
-	user := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
-
-	err := s.repo.DeleteReceivedShare(ctx, user, &ocm.ShareReference{
+	share, err := s.repo.GetReceivedShare(ctx, &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}, &ocm.ShareReference{
 		Spec: &ocm.ShareReference_Id{
 			Id: &ocm.ShareId{
 				OpaqueId: req.GetId(),
 			},
 		},
 	})
+	if err != nil {
+		return nil, errtypes.InternalError("unable to get share details")
+	}
+
+	granteeUser := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
+	sharerUserId := share.GetOwner()
+	resourceName := share.Name
+	nowInSeconds := uint64(time.Now().Unix())
+
+	err = s.repo.DeleteReceivedShare(ctx, granteeUser, &ocm.ShareReference{
+		Spec: &ocm.ShareReference_Id{
+			Id: &ocm.ShareId{
+				OpaqueId: req.GetId(),
+			},
+		},
+	})
+
 	res := &ocmcore.DeleteOCMCoreShareResponse{}
 	if err == nil {
 		res.Status = status.NewOK(ctx)
+		opaque := utils.AppendPlainToOpaque(nil, "timestamp", fmt.Sprintf("%d", nowInSeconds))
+		opaque = utils.AppendPlainToOpaque(opaque, "resourcename", resourceName)
+		opaque = utils.AppendJSONToOpaque(opaque, "granteeuserid", granteeUser.Id)
+		opaque = utils.AppendJSONToOpaque(opaque, "shareruserid", sharerUserId)
+		res.Opaque = opaque
 	} else {
 		var notFound errtypes.NotFound
 		if errors.As(err, &notFound) {

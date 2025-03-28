@@ -19,6 +19,7 @@
 package eventsmiddleware
 
 import (
+	"strconv"
 	"time"
 
 	group "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
@@ -27,6 +28,7 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
@@ -201,14 +203,39 @@ func OCMCoreShareCreated(r *ocmcore.CreateOCMCoreShareResponse, req *ocmcore.Cre
 		}
 	}
 	return events.OCMCoreShareCreated{
-		ShareID:       r.GetId(),
-		Executant:     executant.GetId(),
-		Sharer:        req.GetSender(),
-		GranteeUserID: req.GetShareWith(),
-		ItemID:        req.GetResourceId(),
-		ResourceName:  req.GetName(),
-		CTime:         r.GetCreated(),
-		Permissions:   permissions,
+		ShareID:      r.GetId(),
+		Executant:    executant.GetId(),
+		Sharer:       req.GetSender(),
+		Grantee:      req.GetShareWith(),
+		ItemID:       req.GetResourceId(),
+		ResourceName: req.GetName(),
+		CTime:        r.GetCreated(),
+		Permissions:  permissions,
+	}
+}
+
+func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.DeleteOCMCoreShareRequest, executant *user.User) events.OCMCoreShareDelete {
+	timestampStrInSec := utils.ReadPlainFromOpaque(r.GetOpaque(), "timestamp")
+	timestampIntInSec, err := strconv.ParseUint(timestampStrInSec, 10, 64)
+	if err != nil {
+		// fallback to event received "now". 0 would show wrong date in user notification
+		timestampIntInSec = uint64(time.Now().Unix())
+	}
+	var (
+		sharerUserId  *user.UserId
+		granteeUserId *user.UserId
+	)
+	_ = utils.ReadJSONFromOpaque(r.GetOpaque(), "shareruserid", &sharerUserId)
+	_ = utils.ReadJSONFromOpaque(r.GetOpaque(), "granteeuserid", &granteeUserId)
+
+	return events.OCMCoreShareDelete{
+		ShareID:      req.GetId(),
+		Sharer:       sharerUserId,
+		Grantee:      granteeUserId,
+		ResourceName: utils.ReadPlainFromOpaque(r.GetOpaque(), "resourcename"),
+		CTime: &types.Timestamp{
+			Seconds: timestampIntInSec,
+		},
 	}
 }
 

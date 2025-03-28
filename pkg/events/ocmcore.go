@@ -28,19 +28,35 @@ import (
 
 // OCMCoreShareCreated is emitted when an ocm share is received
 type OCMCoreShareCreated struct {
-	ShareID       string
-	Executant     *user.UserId
-	Sharer        *user.UserId
-	GranteeUserID *user.UserId
-	ItemID        string
-	ResourceName  string
-	Permissions   *provider.ResourcePermissions
-	CTime         *types.Timestamp
+	ShareID      string
+	Executant    *user.UserId
+	Sharer       *user.UserId
+	Grantee      *user.UserId
+	ItemID       string
+	ResourceName string
+	Permissions  *provider.ResourcePermissions
+	CTime        *types.Timestamp
 }
 
 // Unmarshal to fulfill umarshaller interface
 func (OCMCoreShareCreated) Unmarshal(v []byte) (interface{}, error) {
 	e := OCMCoreShareCreated{}
+	err := json.Unmarshal(v, &e)
+	return e, err
+}
+
+// OCMCoreShareDelete is emitted when an ocm share is requested for delete
+type OCMCoreShareDelete struct {
+	ShareID      string
+	Sharer       *user.UserId
+	Grantee      *user.UserId
+	ResourceName string
+	CTime        *types.Timestamp
+}
+
+// Unmarshal to fulfill umarshaller interface
+func (OCMCoreShareDelete) Unmarshal(v []byte) (interface{}, error) {
+	e := OCMCoreShareDelete{}
 	err := json.Unmarshal(v, &e)
 	return e, err
 }
