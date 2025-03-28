@@ -150,20 +150,12 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		return nil, errtypes.NotSupported("share type not supported")
 	}
 
-	// Get an authenticated context for storage operations
-	authCtx, err := s.getAuthenticatedContext(ctx)
-	if err != nil {
-		return &ocmcore.CreateOCMCoreShareResponse{
-			Status: status.NewInternal(ctx, fmt.Sprintf("failed to get authenticated context: %v", err)),
-		}, nil
-	}
-
 	now := &typespb.Timestamp{
 		Seconds: uint64(time.Now().Unix()),
 	}
 
 	// Use the original context for user resolution
-	share, err := s.repo.StoreReceivedShare(authCtx, &ocm.ReceivedShare{
+	share, err := s.repo.StoreReceivedShare(ctx, &ocm.ReceivedShare{
 		RemoteShareId: req.ResourceId,
 		Name:          req.Name,
 		Grantee: &providerpb.Grantee{
@@ -246,8 +238,6 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 
 	granteeUser := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
 	sharerUserId := share.GetOwner()
-	granteeJson, _ := json.Marshal(granteeUser.Id)
-	sharerJson, _ := json.Marshal(sharerUserId)
 	resourceName := share.Name
 	nowInSeconds := uint64(time.Now().Unix())
 
@@ -262,26 +252,12 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 	res := &ocmcore.DeleteOCMCoreShareResponse{}
 	if err == nil {
 		res.Status = status.NewOK(ctx)
-		res.Opaque = &typespb.Opaque{
-			Map: map[string]*typespb.OpaqueEntry{
-				"shareruserid": {
-					Decoder: "json",
-					Value:   sharerJson,
-				},
-				"granteeuserid": {
-					Decoder: "json",
-					Value:   granteeJson,
-				},
-				"resourcename": {
-					Decoder: "plain",
-					Value:   []byte(resourceName),
-				},
-				"timestamp": {
-					Decoder: "plain",
-					Value:   []byte(fmt.Sprintf("%d", nowInSeconds)),
-				},
-			},
-		}
+		opaque := utils.AppendPlainToOpaque(nil, "timestamp", fmt.Sprintf("%d", nowInSeconds))
+		opaque = utils.AppendPlainToOpaque(opaque, "resourcename", resourceName)
+		opaque = utils.AppendJSONToOpaque(opaque, "granteeuserid", granteeUser.Id)
+		opaque = utils.AppendJSONToOpaque(opaque, "shareruserid", sharerUserId)
+		res.Opaque = opaque
+		spew.Dump(res)
 	} else {
 		var notFound errtypes.NotFound
 		if errors.As(err, &notFound) {
