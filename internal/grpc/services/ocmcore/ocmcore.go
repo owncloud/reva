@@ -20,12 +20,10 @@ package ocmcore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
@@ -37,8 +35,6 @@ import (
 	ocmuser "github.com/owncloud/reva/v2/pkg/ocm/user"
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
-	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/owncloud/reva/v2/pkg/sharedconf"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/owncloud/reva/v2/pkg/utils/cfg"
 	"github.com/rs/zerolog"
@@ -61,31 +57,13 @@ type config struct {
 }
 
 type service struct {
-	conf            *config
-	repo            share.Repository
-	gatewaySelector pool.Selectable[gateway.GatewayAPIClient]
+	conf *config
+	repo share.Repository
 }
 
 func (c *config) ApplyDefaults() {
 	if c.Driver == "" {
 		c.Driver = "json"
-	}
-	if c.GatewayEndpoint == "" {
-		c.GatewayEndpoint = sharedconf.GetGatewaySVC("")
-	}
-	if c.UserProviderEndpoint == "" {
-		c.UserProviderEndpoint = "localhost:9146"
-	}
-	// Only use sharedconf.GetGatewaySVC for the gateway endpoint
-	c.GatewayEndpoint = sharedconf.GetGatewaySVC(c.GatewayEndpoint)
-	// Don't use sharedconf.GetGatewaySVC for the user provider endpoint
-	// c.UserProviderEndpoint = sharedconf.GetGatewaySVC(c.UserProviderEndpoint)
-
-	// Set default GRPC client options if not set
-	if c.GRPCClientOptions == nil {
-		c.GRPCClientOptions = map[string]interface{}{
-			"tls_mode": "insecure",
-		}
 	}
 }
 
@@ -107,26 +85,14 @@ func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Se
 		return nil, err
 	}
 
-	c.ApplyDefaults()
-
 	repo, err := getShareRepository(&c)
 	if err != nil {
 		return nil, err
 	}
 
-	// Initialize gateway selector with shared configuration options
-	gatewaySelector, err := pool.GatewaySelector(
-		c.GatewayEndpoint,
-		pool.WithTLSMode(pool.TLSInsecure),
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	service := &service{
-		conf:            &c,
-		repo:            repo,
-		gatewaySelector: gatewaySelector,
+		conf: &c,
+		repo: repo,
 	}
 
 	return service, nil
