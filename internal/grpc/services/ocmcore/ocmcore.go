@@ -28,8 +28,11 @@ import (
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/events"
+	"github.com/owncloud/reva/v2/pkg/events/stream"
 	"github.com/owncloud/reva/v2/pkg/ocm/share"
 	"github.com/owncloud/reva/v2/pkg/ocm/share/repository/registry"
 	ocmuser "github.com/owncloud/reva/v2/pkg/ocm/user"
@@ -46,14 +49,26 @@ func init() {
 	rgrpc.Register("ocmcore", New)
 }
 
+type EventOptions struct {
+	Endpoint             string `mapstructure:"natsaddress"`
+	Cluster              string `mapstructure:"natsclusterid"`
+	TLSInsecure          bool   `mapstructure:"tlsinsecure"`
+	TLSRootCACertificate string `mapstructure:"tlsrootcacertificate"`
+	EnableTLS            bool   `mapstructure:"enabletls"`
+	AuthUsername         string `mapstructure:"authusername"`
+	AuthPassword         string `mapstructure:"authpassword"`
+}
+
 type config struct {
 	Driver  string                            `mapstructure:"driver"`
 	Drivers map[string]map[string]interface{} `mapstructure:"drivers"`
+	Events  EventOptions                      `mapstructure:"events"`
 }
 
 type service struct {
-	conf *config
-	repo share.Repository
+	conf        *config
+	repo        share.Repository
+	eventStream events.Stream
 }
 
 func (c *config) ApplyDefaults() {
@@ -90,6 +105,14 @@ func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Se
 		repo: repo,
 	}
 
+	if c.Events.Endpoint != "" {
+		es, err := stream.NatsFromConfig("ocmcore-handler", false, stream.NatsConfig(c.Events))
+		if err != nil {
+			return nil, err
+		}
+		service.eventStream = es
+	}
+
 	return service, nil
 }
 
@@ -111,7 +134,7 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		return nil, errtypes.NotSupported("share type not supported")
 	}
 
-	now := &typesv1beta1.Timestamp{
+	now := &typespb.Timestamp{
 		Seconds: uint64(time.Now().Unix()),
 	}
 
@@ -139,6 +162,31 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		return &ocmcore.CreateOCMCoreShareResponse{
 			Status: status.NewInternal(ctx, err.Error()),
 		}, nil
+	}
+
+	var permissions *providerpb.ResourcePermissions
+	for _, p := range req.GetProtocols() {
+		if p.GetWebdavOptions() != nil {
+			permissions = p.GetWebdavOptions().GetPermissions().GetPermissions()
+			break
+		}
+	}
+
+	if s.eventStream != nil {
+		if err := events.Publish(ctx, s.eventStream, events.OCMCoreShareCreated{
+			ShareID:       share.Id.OpaqueId,
+			Executant:     req.GetSender(),
+			Sharer:        req.GetSender(),
+			GranteeUserID: req.GetShareWith(),
+			ItemID:        req.GetResourceId(),
+			ResourceName:  req.GetName(),
+			CTime:         now,
+			Permissions:   permissions,
+		}); err != nil {
+			log := appctx.GetLogger(ctx)
+			log.Error().Err(err).
+				Msg("failed to publish the ocmcore share created event")
+		}
 	}
 
 	return &ocmcore.CreateOCMCoreShareResponse{
@@ -185,18 +233,38 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		return nil, errtypes.UserRequired("missing remote user id in a metadata")
 	}
 
-	user := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
-
-	err := s.repo.DeleteReceivedShare(ctx, user, &ocm.ShareReference{
+	share, err := s.repo.GetReceivedShare(ctx, &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}, &ocm.ShareReference{
 		Spec: &ocm.ShareReference_Id{
 			Id: &ocm.ShareId{
 				OpaqueId: req.GetId(),
 			},
 		},
 	})
+	if err != nil {
+		return nil, errtypes.InternalError("unable to get share details")
+	}
+
+	granteeUser := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
+	sharerUserId := share.GetOwner()
+	resourceName := share.Name
+	nowInSeconds := uint64(time.Now().Unix())
+
+	err = s.repo.DeleteReceivedShare(ctx, granteeUser, &ocm.ShareReference{
+		Spec: &ocm.ShareReference_Id{
+			Id: &ocm.ShareId{
+				OpaqueId: req.GetId(),
+			},
+		},
+	})
+
 	res := &ocmcore.DeleteOCMCoreShareResponse{}
 	if err == nil {
 		res.Status = status.NewOK(ctx)
+		opaque := utils.AppendPlainToOpaque(nil, "timestamp", fmt.Sprintf("%d", nowInSeconds))
+		opaque = utils.AppendPlainToOpaque(opaque, "resourcename", resourceName)
+		opaque = utils.AppendJSONToOpaque(opaque, "granteeuserid", granteeUser.Id)
+		opaque = utils.AppendJSONToOpaque(opaque, "shareruserid", sharerUserId)
+		res.Opaque = opaque
 	} else {
 		var notFound errtypes.NotFound
 		if errors.As(err, &notFound) {
