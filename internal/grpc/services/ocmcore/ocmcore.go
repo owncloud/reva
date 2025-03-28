@@ -154,7 +154,6 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		Seconds: uint64(time.Now().Unix()),
 	}
 
-	// Use the original context for user resolution
 	share, err := s.repo.StoreReceivedShare(ctx, &ocm.ReceivedShare{
 		RemoteShareId: req.ResourceId,
 		Name:          req.Name,
@@ -267,20 +266,4 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		}
 	}
 	return res, nil
-}
-
-// Helper function to get authenticated context
-func (s *service) getAuthenticatedContext(ctx context.Context) (context.Context, error) {
-	if s.conf.ServiceAccountID == "" || s.conf.ServiceAccountSecret == "" {
-		return nil, fmt.Errorf("service account credentials not configured")
-	}
-
-	// Get a gateway client
-	gatewayClient, err := s.gatewaySelector.Next()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get gateway client: %w", err)
-	}
-
-	// Get an authenticated context using the service account
-	return utils.GetServiceUserContextWithContext(ctx, gatewayClient, s.conf.ServiceAccountID, s.conf.ServiceAccountSecret)
 }
