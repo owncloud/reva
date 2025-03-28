@@ -218,7 +218,7 @@ func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.Dele
 	timestampStrInSec := utils.ReadPlainFromOpaque(r.GetOpaque(), "timestamp")
 	timestampIntInSec, err := strconv.ParseUint(timestampStrInSec, 10, 64)
 	if err != nil {
-		// fallback to event received "now". 0 would be weird for the user
+		// fallback to event received "now". 0 would show wrong date in user notification
 		timestampIntInSec = uint64(time.Now().Unix())
 	}
 	var (
