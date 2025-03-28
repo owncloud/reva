@@ -47,13 +47,8 @@ func init() {
 }
 
 type config struct {
-	Driver               string                            `mapstructure:"driver"`
-	Drivers              map[string]map[string]interface{} `mapstructure:"drivers"`
-	UserProviderEndpoint string                            `mapstructure:"user_provider_endpoint" env:"OCIS_USER_PROVIDER_ENDPOINT" desc:"The endpoint of the user provider service."`
-	GatewayEndpoint      string                            `mapstructure:"gateway_endpoint" env:"OCIS_GATEWAY_ENDPOINT" desc:"The endpoint of the gateway service."`
-	ServiceAccountID     string                            `mapstructure:"service_account_id" env:"OCIS_SERVICE_ACCOUNT_ID" desc:"The ID of the service account to use for authentication."`
-	ServiceAccountSecret string                            `mapstructure:"service_account_secret" env:"OCIS_SERVICE_ACCOUNT_SECRET" desc:"The secret of the service account to use for authentication."`
-	GRPCClientOptions    map[string]interface{}            `mapstructure:"grpc_client_options"`
+	Driver  string                            `mapstructure:"driver"`
+	Drivers map[string]map[string]interface{} `mapstructure:"drivers"`
 }
 
 type service struct {
