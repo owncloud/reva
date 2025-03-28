@@ -203,14 +203,14 @@ func OCMCoreShareCreated(r *ocmcore.CreateOCMCoreShareResponse, req *ocmcore.Cre
 		}
 	}
 	return events.OCMCoreShareCreated{
-		ShareID:       r.GetId(),
-		Executant:     executant.GetId(),
-		Sharer:        req.GetSender(),
-		GranteeUserID: req.GetShareWith(),
-		ItemID:        req.GetResourceId(),
-		ResourceName:  req.GetName(),
-		CTime:         r.GetCreated(),
-		Permissions:   permissions,
+		ShareID:      r.GetId(),
+		Executant:    executant.GetId(),
+		Sharer:       req.GetSender(),
+		Grantee:      req.GetShareWith(),
+		ItemID:       req.GetResourceId(),
+		ResourceName: req.GetName(),
+		CTime:        r.GetCreated(),
+		Permissions:  permissions,
 	}
 }
 
@@ -221,11 +221,18 @@ func OCMCoreShareDelete(r *ocmcore.DeleteOCMCoreShareResponse, req *ocmcore.Dele
 		// fallback to event received "now". 0 would be weird for the user
 		timestampIntInSec = uint64(time.Now().Unix())
 	}
+	var (
+		sharerUserId  *user.UserId
+		granteeUserId *user.UserId
+	)
+	_ = utils.ReadJSONFromOpaque(r.GetOpaque(), "shareruserid", &sharerUserId)
+	_ = utils.ReadJSONFromOpaque(r.GetOpaque(), "granteeuserid", &granteeUserId)
+
 	return events.OCMCoreShareDelete{
-		ShareID:         req.GetId(),
-		ExecutantUserID: utils.ReadPlainFromOpaque(r.GetOpaque(), "executantuserid"),
-		GranteeUserID:   utils.ReadPlainFromOpaque(r.GetOpaque(), "granteeuserid"),
-		ResourceName:    utils.ReadPlainFromOpaque(r.GetOpaque(), "resourcename"),
+		ShareID:      req.GetId(),
+		Sharer:       sharerUserId,
+		Grantee:      granteeUserId,
+		ResourceName: utils.ReadPlainFromOpaque(r.GetOpaque(), "resourcename"),
 		CTime: &types.Timestamp{
 			Seconds: timestampIntInSec,
 		},

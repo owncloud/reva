@@ -20,10 +20,12 @@ package ocmcore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
@@ -35,6 +37,8 @@ import (
 	ocmuser "github.com/owncloud/reva/v2/pkg/ocm/user"
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
+	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
+	"github.com/owncloud/reva/v2/pkg/sharedconf"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/owncloud/reva/v2/pkg/utils/cfg"
 	"github.com/rs/zerolog"
@@ -47,18 +51,41 @@ func init() {
 }
 
 type config struct {
-	Driver  string                            `mapstructure:"driver"`
-	Drivers map[string]map[string]interface{} `mapstructure:"drivers"`
+	Driver               string                            `mapstructure:"driver"`
+	Drivers              map[string]map[string]interface{} `mapstructure:"drivers"`
+	UserProviderEndpoint string                            `mapstructure:"user_provider_endpoint" env:"OCIS_USER_PROVIDER_ENDPOINT" desc:"The endpoint of the user provider service."`
+	GatewayEndpoint      string                            `mapstructure:"gateway_endpoint" env:"OCIS_GATEWAY_ENDPOINT" desc:"The endpoint of the gateway service."`
+	ServiceAccountID     string                            `mapstructure:"service_account_id" env:"OCIS_SERVICE_ACCOUNT_ID" desc:"The ID of the service account to use for authentication."`
+	ServiceAccountSecret string                            `mapstructure:"service_account_secret" env:"OCIS_SERVICE_ACCOUNT_SECRET" desc:"The secret of the service account to use for authentication."`
+	GRPCClientOptions    map[string]interface{}            `mapstructure:"grpc_client_options"`
 }
 
 type service struct {
-	conf *config
-	repo share.Repository
+	conf            *config
+	repo            share.Repository
+	gatewaySelector pool.Selectable[gateway.GatewayAPIClient]
 }
 
 func (c *config) ApplyDefaults() {
 	if c.Driver == "" {
 		c.Driver = "json"
+	}
+	if c.GatewayEndpoint == "" {
+		c.GatewayEndpoint = sharedconf.GetGatewaySVC("")
+	}
+	if c.UserProviderEndpoint == "" {
+		c.UserProviderEndpoint = "localhost:9146"
+	}
+	// Only use sharedconf.GetGatewaySVC for the gateway endpoint
+	c.GatewayEndpoint = sharedconf.GetGatewaySVC(c.GatewayEndpoint)
+	// Don't use sharedconf.GetGatewaySVC for the user provider endpoint
+	// c.UserProviderEndpoint = sharedconf.GetGatewaySVC(c.UserProviderEndpoint)
+
+	// Set default GRPC client options if not set
+	if c.GRPCClientOptions == nil {
+		c.GRPCClientOptions = map[string]interface{}{
+			"tls_mode": "insecure",
+		}
 	}
 }
 
@@ -80,14 +107,26 @@ func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Se
 		return nil, err
 	}
 
+	c.ApplyDefaults()
+
 	repo, err := getShareRepository(&c)
 	if err != nil {
 		return nil, err
 	}
 
+	// Initialize gateway selector with shared configuration options
+	gatewaySelector, err := pool.GatewaySelector(
+		c.GatewayEndpoint,
+		pool.WithTLSMode(pool.TLSInsecure),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	service := &service{
-		conf: &c,
-		repo: repo,
+		conf:            &c,
+		repo:            repo,
+		gatewaySelector: gatewaySelector,
 	}
 
 	return service, nil
@@ -111,11 +150,20 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 		return nil, errtypes.NotSupported("share type not supported")
 	}
 
+	// Get an authenticated context for storage operations
+	authCtx, err := s.getAuthenticatedContext(ctx)
+	if err != nil {
+		return &ocmcore.CreateOCMCoreShareResponse{
+			Status: status.NewInternal(ctx, fmt.Sprintf("failed to get authenticated context: %v", err)),
+		}, nil
+	}
+
 	now := &typespb.Timestamp{
 		Seconds: uint64(time.Now().Unix()),
 	}
 
-	share, err := s.repo.StoreReceivedShare(ctx, &ocm.ReceivedShare{
+	// Use the original context for user resolution
+	share, err := s.repo.StoreReceivedShare(authCtx, &ocm.ReceivedShare{
 		RemoteShareId: req.ResourceId,
 		Name:          req.Name,
 		Grantee: &providerpb.Grantee{
@@ -196,31 +244,33 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		return nil, errtypes.InternalError("unable to get share details")
 	}
 
-	user := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
+	granteeUser := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
+	sharerUserId := share.GetOwner()
+	granteeJson, _ := json.Marshal(granteeUser.Id)
+	sharerJson, _ := json.Marshal(sharerUserId)
 	resourceName := share.Name
-	granteeOpaqueID := share.Grantee.GetUserId().OpaqueId
-	executantOpaqueID := share.Owner.OpaqueId
 	nowInSeconds := uint64(time.Now().Unix())
 
-	err = s.repo.DeleteReceivedShare(ctx, user, &ocm.ShareReference{
+	err = s.repo.DeleteReceivedShare(ctx, granteeUser, &ocm.ShareReference{
 		Spec: &ocm.ShareReference_Id{
 			Id: &ocm.ShareId{
 				OpaqueId: req.GetId(),
 			},
 		},
 	})
+
 	res := &ocmcore.DeleteOCMCoreShareResponse{}
 	if err == nil {
 		res.Status = status.NewOK(ctx)
 		res.Opaque = &typespb.Opaque{
 			Map: map[string]*typespb.OpaqueEntry{
-				"executantuserid": {
-					Decoder: "plain",
-					Value:   []byte(executantOpaqueID),
+				"shareruserid": {
+					Decoder: "json",
+					Value:   sharerJson,
 				},
 				"granteeuserid": {
-					Decoder: "plain",
-					Value:   []byte(granteeOpaqueID),
+					Decoder: "json",
+					Value:   granteeJson,
 				},
 				"resourcename": {
 					Decoder: "plain",
@@ -241,4 +291,20 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 		}
 	}
 	return res, nil
+}
+
+// Helper function to get authenticated context
+func (s *service) getAuthenticatedContext(ctx context.Context) (context.Context, error) {
+	if s.conf.ServiceAccountID == "" || s.conf.ServiceAccountSecret == "" {
+		return nil, fmt.Errorf("service account credentials not configured")
+	}
+
+	// Get a gateway client
+	gatewayClient, err := s.gatewaySelector.Next()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get gateway client: %w", err)
+	}
+
+	// Get an authenticated context using the service account
+	return utils.GetServiceUserContextWithContext(ctx, gatewayClient, s.conf.ServiceAccountID, s.conf.ServiceAccountSecret)
 }
