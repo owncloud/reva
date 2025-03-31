@@ -29,7 +29,6 @@ import (
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/events/stream"
@@ -246,10 +245,6 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 	}
 
 	granteeUser := &userpb.User{Id: ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee})}
-	sharerUserId := share.GetOwner()
-	resourceName := share.Name
-	nowInSeconds := uint64(time.Now().Unix())
-
 	err = s.repo.DeleteReceivedShare(ctx, granteeUser, &ocm.ShareReference{
 		Spec: &ocm.ShareReference_Id{
 			Id: &ocm.ShareId{
@@ -261,11 +256,20 @@ func (s *service) DeleteOCMCoreShare(ctx context.Context, req *ocmcore.DeleteOCM
 	res := &ocmcore.DeleteOCMCoreShareResponse{}
 	if err == nil {
 		res.Status = status.NewOK(ctx)
-		opaque := utils.AppendPlainToOpaque(nil, "timestamp", fmt.Sprintf("%d", nowInSeconds))
-		opaque = utils.AppendPlainToOpaque(opaque, "resourcename", resourceName)
-		opaque = utils.AppendJSONToOpaque(opaque, "granteeuserid", granteeUser.Id)
-		opaque = utils.AppendJSONToOpaque(opaque, "shareruserid", sharerUserId)
-		res.Opaque = opaque
+
+		if s.eventStream != nil {
+			if err := events.Publish(ctx, s.eventStream, events.OCMCoreShareDelete{
+				ShareID:      share.Id.OpaqueId,
+				Sharer:       share.GetOwner(),
+				Grantee:      ocmuser.RemoteID(&userpb.UserId{OpaqueId: grantee}),
+				ResourceName: share.Name,
+				CTime:        &typespb.Timestamp{Seconds: uint64(time.Now().Unix())},
+			}); err != nil {
+				s.log.Error().Err(err).
+					Msg("failed to publish the ocmcore share deleted event")
+			}
+		}
+
 	} else {
 		var notFound errtypes.NotFound
 		if errors.As(err, &notFound) {
