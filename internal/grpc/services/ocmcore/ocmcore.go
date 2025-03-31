@@ -48,6 +48,7 @@ func init() {
 	rgrpc.Register("ocmcore", New)
 }
 
+// EventOptions are the configurable options for events
 type EventOptions struct {
 	Endpoint             string `mapstructure:"natsaddress"`
 	Cluster              string `mapstructure:"natsclusterid"`
