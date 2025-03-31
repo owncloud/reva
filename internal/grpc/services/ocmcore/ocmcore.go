@@ -69,6 +69,7 @@ type service struct {
 	conf        *config
 	repo        share.Repository
 	eventStream events.Stream
+	log         *zerolog.Logger
 }
 
 func (c *config) ApplyDefaults() {
@@ -89,7 +90,7 @@ func getShareRepository(c *config) (share.Repository, error) {
 }
 
 // New creates a new ocm core svc.
-func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Service, error) {
+func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.Service, error) {
 	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
@@ -103,6 +104,7 @@ func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Se
 	service := &service{
 		conf: &c,
 		repo: repo,
+		log:  log,
 	}
 
 	if c.Events.Endpoint != "" {
@@ -183,8 +185,7 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 			CTime:         now,
 			Permissions:   permissions,
 		}); err != nil {
-			log := appctx.GetLogger(ctx)
-			log.Error().Err(err).
+			s.log.Error().Err(err).
 				Msg("failed to publish the ocmcore share created event")
 		}
 	}
