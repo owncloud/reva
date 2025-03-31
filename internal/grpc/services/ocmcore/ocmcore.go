@@ -176,12 +176,12 @@ func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCM
 	if s.eventStream != nil {
 		if err := events.Publish(ctx, s.eventStream, events.OCMCoreShareCreated{
 			ShareID:       share.Id.OpaqueId,
-			Executant:     req.GetSender(),
-			Sharer:        req.GetSender(),
-			GranteeUserID: req.GetShareWith(),
-			ItemID:        req.GetResourceId(),
-			ResourceName:  req.GetName(),
-			CTime:         now,
+			Executant:     share.Creator,
+			Sharer:        share.Creator,
+			GranteeUserID: share.Grantee.GetUserId(),
+			ItemID:        share.RemoteShareId,
+			ResourceName:  share.Name,
+			CTime:         share.Ctime,
 			Permissions:   permissions,
 		}); err != nil {
 			s.log.Error().Err(err).
