@@ -2,6 +2,8 @@ module github.com/owncloud/reva/v2
 
 go 1.22.7
 
+toolchain go1.24.1
+
 require (
 	bou.ke/monkey v1.0.2
 	contrib.go.opencensus.io/exporter/prometheus v0.4.2
@@ -99,7 +101,7 @@ require (
 	golang.org/x/text v0.21.0
 	google.golang.org/genproto v0.0.0-20241015192408-796eee8c2d53
 	google.golang.org/grpc v1.68.0
-	google.golang.org/protobuf v1.35.2
+	google.golang.org/protobuf v1.36.6
 )
 
 require (
