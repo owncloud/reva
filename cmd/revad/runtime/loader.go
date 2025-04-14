@@ -20,34 +20,35 @@ package runtime
 
 import (
 	// These are all the extensions points for REVA
-	_ "github.com/owncloud/reva/v2/internal/grpc/interceptors/loader"
-	_ "github.com/owncloud/reva/v2/internal/grpc/services/loader"
-	_ "github.com/owncloud/reva/v2/internal/http/interceptors/auth/credential/loader"
-	_ "github.com/owncloud/reva/v2/internal/http/interceptors/auth/token/loader"
-	_ "github.com/owncloud/reva/v2/internal/http/interceptors/auth/tokenwriter/loader"
-	_ "github.com/owncloud/reva/v2/internal/http/interceptors/loader"
-	_ "github.com/owncloud/reva/v2/internal/http/services/loader"
-	_ "github.com/owncloud/reva/v2/pkg/app/provider/loader"
-	_ "github.com/owncloud/reva/v2/pkg/app/registry/loader"
-	_ "github.com/owncloud/reva/v2/pkg/appauth/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/auth/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/auth/registry/loader"
-	_ "github.com/owncloud/reva/v2/pkg/cbox/loader"
-	_ "github.com/owncloud/reva/v2/pkg/datatx/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/group/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/metrics/driver/loader"
-	_ "github.com/owncloud/reva/v2/pkg/ocm/invite/repository/loader"
-	_ "github.com/owncloud/reva/v2/pkg/ocm/provider/authorizer/loader"
-	_ "github.com/owncloud/reva/v2/pkg/ocm/share/repository/loader"
-	_ "github.com/owncloud/reva/v2/pkg/permission/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/preferences/loader"
-	_ "github.com/owncloud/reva/v2/pkg/publicshare/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/rhttp/datatx/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/share/cache/warmup/loader"
-	_ "github.com/owncloud/reva/v2/pkg/share/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/storage/favorite/loader"
-	_ "github.com/owncloud/reva/v2/pkg/storage/fs/loader"
-	_ "github.com/owncloud/reva/v2/pkg/storage/registry/loader"
-	_ "github.com/owncloud/reva/v2/pkg/token/manager/loader"
-	_ "github.com/owncloud/reva/v2/pkg/user/manager/loader"
+	_ "github.com/owncloud/reva/v2/internal/grpc/interceptors/loader"                 // used by all reva services
+	_ "github.com/owncloud/reva/v2/internal/grpc/services/loader"                     // used by all reva services
+	_ "github.com/owncloud/reva/v2/internal/http/interceptors/auth/credential/loader" // used by ocm (?)
+	_ "github.com/owncloud/reva/v2/internal/http/interceptors/loader"                 // used by all reva services
+	_ "github.com/owncloud/reva/v2/internal/http/services/loader"                     // used by multiple reva services
+	_ "github.com/owncloud/reva/v2/pkg/app/provider/loader"                           // used by app-provider
+	_ "github.com/owncloud/reva/v2/pkg/app/registry/loader"                           // used by app-registry
+	_ "github.com/owncloud/reva/v2/pkg/appauth/manager/loader"                        // used by auth-app
+	_ "github.com/owncloud/reva/v2/pkg/auth/manager/loader"                           // used by all reva services
+	_ "github.com/owncloud/reva/v2/pkg/auth/registry/loader"                          // used by gateway, storage-system
+	_ "github.com/owncloud/reva/v2/pkg/group/manager/loader"                          // used by groups
+	_ "github.com/owncloud/reva/v2/pkg/ocm/invite/repository/loader"                  // used by ocm
+	_ "github.com/owncloud/reva/v2/pkg/ocm/provider/authorizer/loader"                // used by ocm
+	_ "github.com/owncloud/reva/v2/pkg/ocm/share/repository/loader"                   // used by ocm
+	_ "github.com/owncloud/reva/v2/pkg/permission/manager/loader"                     // used by storage-system
+	_ "github.com/owncloud/reva/v2/pkg/publicshare/manager/loader"                    // used by sharing (?)
+	_ "github.com/owncloud/reva/v2/pkg/rhttp/datatx/manager/loader"                   // used by storage-users, storage-system, frontend, gateway, ocm
+	_ "github.com/owncloud/reva/v2/pkg/share/cache/warmup/loader"                     // used by frontend
+	_ "github.com/owncloud/reva/v2/pkg/share/manager/loader"                          // used by sharing
+	_ "github.com/owncloud/reva/v2/pkg/storage/fs/loader"                             // used by storage-users, storage-system and others
+	_ "github.com/owncloud/reva/v2/pkg/storage/registry/loader"                       // used by gateway, storage-system
+	_ "github.com/owncloud/reva/v2/pkg/user/manager/loader"                           // used by users
+	// Not needed?
+	// _ "github.com/owncloud/reva/v2/internal/http/interceptors/auth/token/loader"
+	// _ "github.com/owncloud/reva/v2/internal/http/interceptors/auth/tokenwriter/loader"
+	// _ "github.com/owncloud/reva/v2/pkg/cbox/loader" (?)
+	// _ "github.com/owncloud/reva/v2/pkg/datatx/manager/loader" (?)
+	// _ "github.com/owncloud/reva/v2/pkg/metrics/driver/loader"
+	// _ "github.com/owncloud/reva/v2/pkg/preferences/loader"
+	// _ "github.com/owncloud/reva/v2/pkg/storage/favorite/loader"
+	// _ "github.com/owncloud/reva/v2/pkg/token/manager/loader"
 )
