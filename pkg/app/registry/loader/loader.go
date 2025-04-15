@@ -20,7 +20,6 @@ package loader
 
 import (
 	// Load core app registry drivers.
-	_ "github.com/owncloud/reva/v2/pkg/app/registry/micro"
 	_ "github.com/owncloud/reva/v2/pkg/app/registry/static"
 	// Add your own here
 )
