@@ -22,7 +22,5 @@ import (
 	// Load core share manager drivers.
 	_ "github.com/owncloud/reva/v2/pkg/publicshare/manager/cs3"
 	_ "github.com/owncloud/reva/v2/pkg/publicshare/manager/json"
-	_ "github.com/owncloud/reva/v2/pkg/publicshare/manager/memory"
-	_ "github.com/owncloud/reva/v2/pkg/publicshare/manager/owncloudsql"
 	// Add your own here
 )
