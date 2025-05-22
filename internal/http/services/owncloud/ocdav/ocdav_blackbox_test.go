@@ -32,6 +32,7 @@ import (
 	cs3rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	cs3storageprovider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	cs3types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/config"
@@ -620,6 +621,14 @@ var _ = Describe("ocdav", func() {
 						Path:       "./newfile",
 					},
 				}
+
+				// Mock the new Stat call for space permission check before move
+				client.On("Stat", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.StatRequest) bool {
+					return utils.ResourceIDEqual(req.Ref.ResourceId, mReq.Source.ResourceId) && req.Ref.Path == ""
+				})).Return(&cs3storageprovider.StatResponse{
+					Status: status.NewOK(ctx),
+					Info:   &cs3storageprovider.ResourceInfo{Id: mReq.Source.ResourceId},
+				}, nil).Once()
 			})
 
 			When("the gateway returns OK when moving file", func() {
@@ -1024,6 +1033,19 @@ var _ = Describe("ocdav", func() {
 							StorageId: "provider-1", OpaqueId: "dstId", SpaceId: "userspace"}, Path: "./dstFileName"},
 					}
 
+					// Mock space permission check
+					client.On("Stat", mock.Anything, mock.MatchedBy(func(req *provider.StatRequest) bool {
+						return req.Ref.ResourceId.StorageId == "provider-1" && req.Ref.ResourceId.SpaceId == "userspace" && req.Ref.ResourceId.OpaqueId == ""
+					})).Return(&provider.StatResponse{
+						Status: status.NewOK(ctx),
+						Info: &provider.ResourceInfo{
+							Id: &provider.ResourceId{
+								StorageId: "provider-1",
+								SpaceId:   "userspace",
+							},
+						},
+					}, nil)
+
 					client.On("Move", mock.Anything, expReq).Return(&cs3storageprovider.MoveResponse{
 						Status: status.NewOK(ctx),
 					}, nil)
@@ -1053,6 +1075,20 @@ var _ = Describe("ocdav", func() {
 						Destination: &cs3storageprovider.Reference{ResourceId: &cs3storageprovider.ResourceId{
 							StorageId: "provider-1", OpaqueId: "dstId", SpaceId: "userspace"}, Path: "."},
 					}
+
+					// Mock space permission check
+					client.On("Stat", mock.Anything, mock.MatchedBy(func(req *provider.StatRequest) bool {
+						return req.Ref.ResourceId.StorageId == "provider-1" && req.Ref.ResourceId.SpaceId == "userspace" && req.Ref.ResourceId.OpaqueId == "srcId"
+					})).Return(&provider.StatResponse{
+						Status: status.NewOK(ctx),
+						Info: &provider.ResourceInfo{
+							Id: &provider.ResourceId{
+								StorageId: "provider-1",
+								SpaceId:   "userspace",
+								OpaqueId:  "srcId",
+							},
+						},
+					}, nil)
 
 					client.On("Move", mock.Anything, expReq).Return(&cs3storageprovider.MoveResponse{
 						Status: status.NewOK(ctx),
