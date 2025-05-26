@@ -65,7 +65,7 @@ var (
 		InitiateFileDownload: true,
 		InitiateFileUpload:   true,
 		ListContainer:        true,
-		ListGrants:           true,
+		ListGrants:           false,
 		ListRecycle:          true,
 		RestoreRecycleItem:   true,
 		Move:                 true,
