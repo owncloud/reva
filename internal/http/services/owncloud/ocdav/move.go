@@ -292,6 +292,8 @@ func (s *svc) handleMove(ctx context.Context, w http.ResponseWriter, r *http.Req
 		if !overwrite {
 			log.Warn().Bool("overwrite", overwrite).Msg("dst already exists")
 			w.WriteHeader(http.StatusPreconditionFailed) // 412, see https://tools.ietf.org/html/rfc4918#section-9.9.4
+			b, err := errors.Marshal(http.StatusPreconditionFailed, "destination already exists", "", "")
+			errors.HandleWebdavError(&log, w, b, err)
 			return
 		}
 		// delete existing tree
@@ -324,6 +326,8 @@ func (s *svc) handleMove(ctx context.Context, w http.ResponseWriter, r *http.Req
 				// 409 if intermediate dir is missing, see https://tools.ietf.org/html/rfc4918#section-9.8.5
 				log.Debug().Interface("parent", dst).Interface("status", intStatRes.Status).Msg("conflict")
 				w.WriteHeader(http.StatusConflict)
+				b, err := errors.Marshal(http.StatusConflict, "intermediate directory does not exist", "", "")
+				errors.HandleWebdavError(&log, w, b, err)
 			} else {
 				errors.HandleErrorStatus(&log, w, intStatRes.Status)
 			}

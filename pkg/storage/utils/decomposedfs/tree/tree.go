@@ -241,6 +241,18 @@ func (t *Tree) Move(ctx context.Context, oldNode *node.Node, newNode *node.Node)
 	}
 	// if target exists delete it without trashing it
 	if newNode.Exists {
+		// Create a version of the existing file before replacing it
+		if !t.options.DisableVersioning {
+			// Create a version node
+			versionID := uuid.New().String()
+			versionPath := filepath.Join(newNode.InternalPath() + node.RevisionIDDelimiter + versionID)
+			if err := os.MkdirAll(filepath.Dir(versionPath), 0700); err != nil {
+				return errors.Wrap(err, "Decomposedfs: Move: error creating version directory")
+			}
+			if err := os.Rename(newNode.InternalPath(), versionPath); err != nil {
+				return errors.Wrap(err, "Decomposedfs: Move: error creating version")
+			}
+		}
 		// TODO make sure all children are deleted
 		if err := os.RemoveAll(newNode.InternalPath()); err != nil {
 			return errors.Wrap(err, "Decomposedfs: Move: error deleting target node "+newNode.ID)

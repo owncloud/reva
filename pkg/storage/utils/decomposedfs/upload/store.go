@@ -233,6 +233,8 @@ func (store OcisStore) CreateNodeForUpload(ctx context.Context, session *OcisSes
 		// so we have to check if the node has been created meanwhile (well, only in case the upload does not know the nodeid ... or the NodeExists array that is checked by session.NodeExists())
 		// FIXME look at the disk again to see if the file has been created in between, or just try initializing a new node and do the update existing node as a fallback. <- the latter!
 
+		// Set Exists flag to true since we know the node exists
+		n.Exists = true
 		unlock, err = store.updateExistingNode(ctx, session, n, session.SpaceID(), uint64(session.Size()))
 		if err != nil {
 			appctx.GetLogger(ctx).Error().Err(err).Msg("failed to update existing node")
@@ -363,7 +365,7 @@ func (store OcisStore) updateExistingNode(ctx context.Context, session *OcisSess
 		}
 	}
 
-	if !store.disableVersioning {
+	if !store.disableVersioning && n.Exists {
 		versionPath := session.store.lu.InternalPath(spaceID, n.ID+node.RevisionIDDelimiter+oldNodeMtime.UTC().Format(time.RFC3339Nano))
 
 		// create version node

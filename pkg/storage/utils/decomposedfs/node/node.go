@@ -384,6 +384,14 @@ func ReadNode(ctx context.Context, lu PathLookup, spaceID, nodeID string, canLis
 	case err != nil:
 		return nil, err
 	}
+
+	// Check if the file actually exists
+	if _, err := os.Stat(nodePath); err != nil {
+		if os.IsNotExist(err) {
+			return n, nil // file doesn't exist, node defaults to exists = false
+		}
+		return nil, err
+	}
 	n.Exists = true
 
 	n.Name = attrs.String(prefixes.NameAttr)
