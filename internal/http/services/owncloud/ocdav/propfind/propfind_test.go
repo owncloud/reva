@@ -21,6 +21,7 @@ package propfind_test
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,7 @@ import (
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	sprovider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/config"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/net"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/propfind"
@@ -1686,11 +1688,193 @@ var _ = Describe("PropfindWithoutDepthInfinity", func() {
 
 			spaceID := storagespace.FormatResourceID(&sprovider.ResourceId{StorageId: "provider-1", SpaceId: "foospace", OpaqueId: "root"})
 			handler.HandleSpacesPropfind(rr, req, spaceID)
-			Expect(rr.Code).To(Equal(http.StatusBadRequest))
+			Expect(rr.Code).To(Equal(http.StatusMultiStatus))
 
 			_, _, err = readResponse(rr.Result().Body)
-			Expect(err).To(HaveOccurred())
+			Expect(err).ToNot(HaveOccurred())
 
+		})
+	})
+})
+
+var _ = Describe("PropfindWithBrokenItems", func() {
+	var (
+		handler *propfind.Handler
+		client  *mocks.GatewayAPIClient
+		ctx     context.Context
+	)
+
+	JustBeforeEach(func() {
+		ctx = context.WithValue(context.Background(), net.CtxKeyBaseURI, "http://127.0.0.1:3000")
+		client = &mocks.GatewayAPIClient{}
+		sel := selector{
+			client: client,
+		}
+
+		cfg := &config.Config{
+			FilesNamespace:              "/users/{{.Username}}",
+			WebdavNamespace:             "/users/{{.Username}}",
+			AllowPropfindDepthInfinitiy: true,
+			NameValidation: config.NameValidation{
+				MaxLength:    255,
+				InvalidChars: []string{"\f", "\r", "\n", "\\"},
+			},
+		}
+
+		handler = propfind.NewHandler("127.0.0.1:3000", sel, cfg)
+	})
+
+	Describe("PROPFIND on space with broken items", func() {
+		It("should return 500 for broken items but not crash", func() {
+			/*
+			   	reva/internal/http/services/owncloud/ocdav/propfind/propfind.go:229
+			   	HandlePathPropfind(w, r, ns)
+			   	reva/internal/http/services/owncloud/ocdav/propfind/propfind.go:548
+			   	getResourceInfos(...)
+			   	reva/internal/http/services/owncloud/ocdav/propfind/propfind.go:532
+			   	statSpace(...)
+			   	provider.GatewayAPIClient.Stat(ctx, req)
+			   	(gRPC call, implemented in the gateway service)
+			   	reva/internal/grpc/services/storageprovider/storageprovider.go:769
+			   	Stat(ctx, req *provider.StatRequest)
+			   	reva/pkg/storage/utils/decomposedfs/decomposedfs.go:894
+			   	GetMD(ctx, ref, mdKeys, fieldMask)
+			   	reva/pkg/storage/utils/decomposedfs/node/node.go:307
+			   	ReadNode(ctx, lu, spaceID, nodeID, canListDisabledSpace, spaceRoot, skipParentCheck)
+			   	reva/pkg/storage/utils/decomposedfs/node/node.go:559
+			   	Xattrs(ctx)
+			   	reva/pkg/storage/utils/decomposedfs/node/xattrs.go:114
+			   	XattrsWithReader(ctx, r)
+			   	reva/pkg/storage/utils/decomposedfs/node/xattrs.go:178
+			   XattrString(ctx, prefixes.NameAttr)
+			*/
+			// Mock ListStorageSpaces
+			client.On("ListStorageSpaces", mock.Anything, mock.Anything).Return(&sprovider.ListStorageSpacesResponse{
+				Status: status.NewOK(ctx),
+				StorageSpaces: []*sprovider.StorageSpace{
+					{
+						Id:   &sprovider.StorageSpaceId{OpaqueId: storagespace.FormatResourceID(&sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "root"})},
+						Root: &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "root"},
+						Name: "personalspace",
+						Opaque: &typesv1beta1.Opaque{
+							Map: map[string]*typesv1beta1.OpaqueEntry{
+								"path": {
+									Decoder: "plain",
+									Value:   []byte("/users/testuser"),
+								},
+							},
+						},
+					},
+				},
+			}, nil)
+
+			// Mock root container stat
+			client.On("Stat", mock.Anything, mock.MatchedBy(func(req *sprovider.StatRequest) bool {
+				return utils.ResourceIDEqual(req.Ref.ResourceId, &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "root"})
+			})).Return(&sprovider.StatResponse{
+				Status: status.NewOK(ctx),
+				Info: &sprovider.ResourceInfo{
+					Id:   &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "root"},
+					Type: sprovider.ResourceType_RESOURCE_TYPE_CONTAINER,
+					Path: ".",
+					Name: ".",
+					Size: uint64(200),
+				},
+			}, nil)
+
+			// Mock list container with good and broken files
+			client.On("ListContainer", mock.Anything, mock.MatchedBy(func(req *sprovider.ListContainerRequest) bool {
+				return utils.ResourceIDEqual(req.Ref.ResourceId, &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "root"})
+			})).Return(&sprovider.ListContainerResponse{
+				Status: status.NewOK(ctx),
+				Infos: []*sprovider.ResourceInfo{
+					{
+						Id:       &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "goodfile"},
+						Type:     sprovider.ResourceType_RESOURCE_TYPE_FILE,
+						Path:     "goodfile",
+						Name:     "goodfile",
+						Size:     uint64(100),
+						MimeType: "text/plain",
+					},
+					{
+						Id:       &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "brokenfile"},
+						Type:     sprovider.ResourceType_RESOURCE_TYPE_FILE,
+						Path:     "brokenfile",
+						Name:     "brokenfile",
+						Size:     uint64(100),
+						MimeType: "text/plain",
+					},
+					{
+						Id:       &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "orphanfile"},
+						Type:     sprovider.ResourceType_RESOURCE_TYPE_FILE,
+						Path:     "orphanfile",
+						Name:     "orphanfile",
+						Size:     uint64(100),
+						MimeType: "text/plain",
+					},
+				},
+			}, nil)
+
+			// Mock stat for good file
+			client.On("Stat", mock.Anything, mock.MatchedBy(func(req *sprovider.StatRequest) bool {
+				return utils.ResourceIDEqual(req.Ref.ResourceId, &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "goodfile"})
+			})).Return(&sprovider.StatResponse{
+				Status: status.NewOK(ctx),
+				Info: &sprovider.ResourceInfo{
+					Id:       &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "goodfile"},
+					Type:     sprovider.ResourceType_RESOURCE_TYPE_FILE,
+					Path:     "goodfile",
+					Name:     "goodfile",
+					Size:     uint64(100),
+					MimeType: "text/plain",
+				},
+			}, nil)
+
+			// Mock stat for broken file - return internal error
+			client.On("Stat", mock.Anything, mock.MatchedBy(func(req *sprovider.StatRequest) bool {
+				return utils.ResourceIDEqual(req.Ref.ResourceId, &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "brokenfile"})
+			})).Return(&sprovider.StatResponse{
+				Status: status.NewInternal(ctx, "broken file"),
+				Info:   nil,
+			}, nil)
+
+			// Mock stat for orphan file - return internal error with missing parent message
+			client.On("Stat", mock.Anything, mock.MatchedBy(func(req *sprovider.StatRequest) bool {
+				return utils.ResourceIDEqual(req.Ref.ResourceId, &sprovider.ResourceId{StorageId: "provider-1", SpaceId: "personalspace", OpaqueId: "orphanfile"})
+			})).Return(&sprovider.StatResponse{
+				Status: status.NewInternal(ctx, "Missing parent ID on node"),
+				Info:   nil,
+			}, nil)
+
+			// Create and send PROPFIND request
+			req := httptest.NewRequest("PROPFIND", "http://127.0.0.1:3000/users/testuser", strings.NewReader(`<?xml version="1.0" encoding="utf-8" ?>
+			   <d:propfind xmlns:d="DAV:">
+			     <d:prop>
+			       <d:resourcetype/>
+			       <d:getcontentlength/>
+			     </d:prop>
+			   </d:propfind>`))
+			req.Header.Set("Depth", "1")
+			// Ensure context has baseURI
+			req = req.WithContext(context.WithValue(ctx, net.CtxKeyBaseURI, "http://127.0.0.1:3000"))
+
+			rec := httptest.NewRecorder()
+			handler.HandlePathPropfind(rec, req, "")
+
+			// Verify response is MultiStatus (207)
+			Expect(rec.Code).To(Equal(http.StatusMultiStatus))
+
+			// Read and parse response
+			buf, err := io.ReadAll(rec.Body)
+			Expect(err).To(BeNil())
+
+			res := &propfind.MultiStatusResponseUnmarshalXML{}
+			err = xml.Unmarshal(buf, res)
+			Expect(err).To(BeNil())
+			Expect(res).NotTo(BeNil())
+
+			fmt.Println("\n\n PROPFIND on space with broken items")
+			spew.Dump(res)
 		})
 	})
 })

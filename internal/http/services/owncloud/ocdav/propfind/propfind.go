@@ -37,6 +37,8 @@ import (
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/davecgh/go-spew/spew"
+	"github.com/iancoleman/strcase"
 	"github.com/owncloud/reva/v2/internal/grpc/services/storageprovider"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/config"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/errors"
@@ -52,7 +54,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rhttp/router"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
-	"github.com/iancoleman/strcase"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -227,6 +228,9 @@ func NewHandler(publicURL string, selector pool.Selectable[gateway.GatewayAPICli
 // HandlePathPropfind handles a path based propfind request
 // ns is the namespace that is prefixed to the path in the cs3 namespace
 func (p *Handler) HandlePathPropfind(w http.ResponseWriter, r *http.Request, ns string) {
+
+	fmt.Println("HandlePathPropfind", r.URL.Path)
+
 	ctx, span := appctx.GetTracerProvider(r.Context()).Tracer(tracerName).Start(r.Context(), fmt.Sprintf("%s %v", r.Method, r.URL.Path))
 	defer span.End()
 
@@ -289,6 +293,8 @@ func (p *Handler) HandlePathPropfind(w http.ResponseWriter, r *http.Request, ns 
 	}
 
 	resourceInfos, sendTusHeaders, ok := p.getResourceInfos(ctx, w, r, pf, spaces, fn, depth, sublog)
+	fmt.Println("HandlePathPropfind dump", r.URL.Path, ok)
+	spew.Dump(resourceInfos)
 	if !ok {
 		// getResourceInfos handles responses in case of an error so we can just return here.
 		return
@@ -565,10 +571,16 @@ func (p *Handler) getResourceInfos(ctx context.Context, w http.ResponseWriter, r
 		if space.RootInfo == nil {
 			spaceRef, err := spacelookup.MakeStorageSpaceReference(space.Id.OpaqueId, ".")
 			if err != nil {
+				log.Error().Err(err).Msg("error creating space reference")
 				continue
 			}
 			info, status, err := p.statSpace(ctx, &spaceRef, metadataKeys, fieldMaskPaths)
+			fmt.Println("statSpace 1", spaceRef.String(), status.GetCode(), err)
+			spew.Dump(status)
+			spew.Dump(info)
+			spew.Dump(err)
 			if err != nil || status.GetCode() != rpc.Code_CODE_OK {
+				log.Error().Err(err).Interface("status", status).Msg("error stating space")
 				continue
 			}
 			space.RootInfo = info
@@ -586,7 +598,12 @@ func (p *Handler) getResourceInfos(ctx context.Context, w http.ResponseWriter, r
 		} else {
 			var status *rpc.Status
 			info, status, err = p.statSpace(ctx, spaceRef, metadataKeys, fieldMaskPaths)
+			fmt.Println("statSpace 1", spaceRef.String(), status.GetCode(), err)
+			spew.Dump(status)
+			spew.Dump(info)
+			spew.Dump(err)
 			if err != nil || status.GetCode() != rpc.Code_CODE_OK {
+				log.Error().Err(err).Interface("status", status).Msg("error stating resource")
 				continue
 			}
 		}
@@ -1061,6 +1078,7 @@ func MultistatusResponse(ctx context.Context, pf *XML, mds []*provider.ResourceI
 // ns is the CS3 namespace that needs to be removed from the CS3 path before
 // prefixing it with the baseURI
 func mdToPropResponse(ctx context.Context, pf *XML, md *provider.ResourceInfo, publicURL, ns string, linkshares map[string]struct{}, returnMinimal bool) (*ResponseXML, error) {
+	fmt.Println("mdToPropResponse 1", publicURL, md.Path)
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "md_to_prop_response")
 	span.SetAttributes(attribute.KeyValue{Key: "publicURL", Value: attribute.StringValue(publicURL)})
 	span.SetAttributes(attribute.KeyValue{Key: "ns", Value: attribute.StringValue(ns)})
@@ -1077,6 +1095,7 @@ func mdToPropResponse(ctx context.Context, pf *XML, md *provider.ResourceInfo, p
 		ref += "/"
 	}
 
+	fmt.Println("mdToPropResponse 4", ref)
 	response := ResponseXML{
 		Href:     net.EncodePath(ref),
 		Propstat: []PropstatXML{},
@@ -1711,6 +1730,7 @@ func mdToPropResponse(ctx context.Context, pf *XML, md *provider.ResourceInfo, p
 		response.Propstat = append(response.Propstat, propstatNotFound)
 	}
 
+	fmt.Println("mdToPropResponse 10", publicURL)
 	return &response, nil
 }
 
