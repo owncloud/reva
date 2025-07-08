@@ -23,7 +23,7 @@ require (
 	github.com/emvi/iso-639-1 v1.1.0
 	github.com/eventials/go-tus v0.0.0-20220610120217-05d0564bb571
 	github.com/gdexlab/go-render v1.0.1
-	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/render v1.0.3
 	github.com/go-ldap/ldap/v3 v3.4.11
 	github.com/go-micro/plugins/v4/events/natsjs v1.2.2
@@ -35,7 +35,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/go-sql-driver/mysql v1.8.1
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gofrs/flock v0.12.1
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/golang/protobuf v1.5.4
@@ -46,13 +46,13 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/hashicorp/go-hclog v1.6.3
-	github.com/hashicorp/go-plugin v1.6.2
+	github.com/hashicorp/go-plugin v1.6.3
 	github.com/huandu/xstrings v1.5.0
 	github.com/iancoleman/strcase v0.3.0
 	github.com/jedib0t/go-pretty v4.3.0+incompatible
 	github.com/jellydator/ttlcache/v2 v2.11.1
 	github.com/juliangruber/go-intersect v1.1.0
-	github.com/mattn/go-sqlite3 v1.14.24
+	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/maxymania/go-system v0.0.0-20170110133659-647cc364bf0b
 	github.com/mileusna/useragent v1.3.5
 	github.com/minio/minio-go/v7 v7.0.94
@@ -67,10 +67,10 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/xattr v0.4.10
 	github.com/prometheus/alertmanager v0.27.0
-	github.com/prometheus/client_golang v1.20.5
+	github.com/prometheus/client_golang v1.21.1
 	github.com/rogpeppe/go-internal v1.14.1
 	github.com/rs/cors v1.11.1
-	github.com/rs/zerolog v1.33.0
+	github.com/rs/zerolog v1.34.0
 	github.com/segmentio/kafka-go v0.4.47
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/sethvargo/go-password v0.3.1
@@ -80,7 +80,7 @@ require (
 	github.com/studio-b12/gowebdav v0.9.0
 	github.com/test-go/testify v1.1.4
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tus/tusd/v2 v2.6.0
+	github.com/tus/tusd/v2 v2.8.0
 	github.com/wk8/go-ordered-map v1.0.0
 	go-micro.dev/v4 v4.11.0
 	go.etcd.io/etcd/client/v3 v3.5.16
@@ -91,13 +91,13 @@ require (
 	go.opentelemetry.io/otel/sdk v1.36.0
 	go.opentelemetry.io/otel/trace v1.36.0
 	golang.org/x/crypto v0.38.0
-	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
-	golang.org/x/oauth2 v0.28.0
+	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8
+	golang.org/x/oauth2 v0.30.0
 	golang.org/x/sync v0.15.0
 	golang.org/x/sys v0.33.0
 	golang.org/x/term v0.32.0
 	golang.org/x/text v0.25.0
-	google.golang.org/genproto v0.0.0-20241015192408-796eee8c2d53
+	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb
 	google.golang.org/grpc v1.72.1
 	google.golang.org/protobuf v1.36.6
 )
@@ -185,7 +185,7 @@ require (
 	github.com/pkg/term v1.2.0-beta.2 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.55.0 // indirect
+	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/prometheus/statsd_exporter v0.22.8 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
@@ -218,7 +218,7 @@ require (
 	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	golang.org/x/tools v0.30.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20250218202821-56aae31c358a // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250519155744-55703ea1f237 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
