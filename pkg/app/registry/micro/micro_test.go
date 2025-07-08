@@ -30,7 +30,8 @@ import (
 )
 
 func init() {
-	_ = oreg.GetRegistry(oreg.Inmemory())
+	oreg.Configure("memory")
+	_ = oreg.GetRegistry()
 }
 
 func TestFindProviders(t *testing.T) {

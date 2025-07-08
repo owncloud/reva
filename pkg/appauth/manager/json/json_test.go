@@ -1,3 +1,6 @@
+//go:build !arm64
+// +build !arm64
+
 // Copyright 2018-2021 CERN
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -173,8 +176,7 @@ func TestGenerateAppPassword(t *testing.T) {
 				Ctime:    now,
 				Utime:    now,
 			},
-		},
-	}
+		}}
 
 	dummyDataJSON, _ := json.Marshal(dummyData)
 
