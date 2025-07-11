@@ -6,7 +6,7 @@ require (
 	bou.ke/monkey v1.0.2
 	contrib.go.opencensus.io/exporter/prometheus v0.4.2
 	github.com/BurntSushi/toml v1.4.0
-	github.com/CiscoM31/godata v1.0.11
+	github.com/CiscoM31/godata v1.0.10
 	github.com/Masterminds/sprig v2.22.0+incompatible
 	github.com/armon/go-radix v1.0.0
 	github.com/aws/aws-sdk-go v1.55.7
