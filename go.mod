@@ -60,7 +60,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.10.27
 	github.com/nats-io/nats.go v1.43.0
 	github.com/onsi/ginkgo v1.16.5
-	github.com/onsi/ginkgo/v2 v2.23.3
+	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
 	github.com/owncloud/ocis/v2 v2.0.1-0.20250122072425-665072d86d1a
 	github.com/pablodz/inotifywaitgo v0.0.7
@@ -150,7 +150,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
-	github.com/google/pprof v0.0.0-20241210010833-40e02aabc2ad // indirect
+	github.com/google/pprof v0.0.0-20250403155104-27863c87afa6 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 // indirect
 	github.com/hashicorp/yamux v0.1.1 // indirect
 	github.com/imdario/mergo v0.3.15 // indirect
@@ -212,6 +212,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.37.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	go.uber.org/zap v1.23.0 // indirect
 	golang.org/x/mod v0.25.0 // indirect
