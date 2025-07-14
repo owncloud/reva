@@ -19,6 +19,9 @@ package ocdav
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	sprovider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -95,5 +98,42 @@ func TestNameMaxLength(t *testing.T) {
 	for _, tt := range tests {
 		rule := isShorterThan(tt.MaxLength)
 		require.Equal(t, tt.Error, rule(name), tt.MaxLength)
+	}
+}
+
+func TestIsBodyEmpty(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        io.ReadCloser
+		expectEmpty bool
+	}{
+		{
+			name:        "nil body",
+			body:        nil,
+			expectEmpty: true,
+		},
+		{
+			name:        "http.NoBody",
+			body:        http.NoBody,
+			expectEmpty: true,
+		},
+		{
+			name:        "empty reader",
+			body:        io.NopCloser(strings.NewReader("")),
+			expectEmpty: true,
+		},
+		{
+			name:        "non-empty reader",
+			body:        io.NopCloser(strings.NewReader("not empty")),
+			expectEmpty: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &http.Request{Body: tt.body}
+			isEmpty := isBodyEmpty(req)
+			require.Equal(t, tt.expectEmpty, isEmpty)
+		})
 	}
 }
