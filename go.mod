@@ -63,7 +63,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
 	github.com/owncloud/ocis/v2 v2.0.1-0.20250122072425-665072d86d1a
-	github.com/pablodz/inotifywaitgo v0.0.7
+	github.com/pablodz/inotifywaitgo v0.0.9
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/xattr v0.4.12
 	github.com/prometheus/alertmanager v0.28.1
