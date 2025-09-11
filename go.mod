@@ -1,6 +1,6 @@
 module github.com/owncloud/reva/v2
 
-go 1.24
+go 1.24.0
 
 require (
 	bou.ke/monkey v1.0.2
@@ -92,7 +92,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.37.0
 	golang.org/x/crypto v0.41.0
 	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8
-	golang.org/x/oauth2 v0.30.0
+	golang.org/x/oauth2 v0.31.0
 	golang.org/x/sync v0.16.0
 	golang.org/x/sys v0.35.0
 	golang.org/x/term v0.34.0
