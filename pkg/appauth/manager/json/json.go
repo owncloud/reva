@@ -199,41 +199,25 @@ func (mgr *jsonManager) InvalidateAppPassword(ctx context.Context, password stri
 	if _, ok := appPasswords[password]; !ok {
 		return errtypes.NotFound("password not found")
 	}
-	delete(mgr.passwords[userID.String()], password)
 
-	// if user has 0 passwords, delete user key from state map
-	if len(mgr.passwords[userID.String()]) == 0 {
-		delete(mgr.passwords, userID.String())
-	}
-
+	mgr.remove(userID.String(), password)
 	return mgr.save()
 }
 
-func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserId, password string) (*apppb.AppPassword, error) {
+func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserId, password string, hash string) (*apppb.AppPassword, error) {
 	mgr.Lock()
 	defer mgr.Unlock()
 
-	appPassword, ok := mgr.passwords[userID.String()]
+	appPasswords, ok := mgr.passwords[userID.String()]
 	if !ok {
-		return nil, errtypes.NotFound("password not found")
+		return nil, errtypes.NotFound("user has no tokens")
 	}
 
-	for hash, pw := range appPassword {
-		err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-		if err == nil {
-			// password found
-			if pw.Expiration != nil && pw.Expiration.Seconds != 0 && uint64(time.Now().Unix()) > pw.Expiration.Seconds {
-				// password expired
-				return nil, errtypes.NotFound("password not found")
-			}
-			// password not expired
-			// update last used time
-			pw.Utime = now()
-			if err := mgr.save(); err != nil {
-				return nil, errors.Wrap(err, "error saving file")
-			}
-
-			return pw, nil
+	pw, ok := appPasswords[hash]
+	if !ok {
+		pw, ok = mgr.findPassword(appPasswords, password)
+		if !ok {
+			return nil, errtypes.NotFound("password not found")
 		}
 	} else {
 		// hash found - double check password
@@ -242,11 +226,32 @@ func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserI
 		}
 	}
 
-	return nil, errtypes.NotFound("password not found")
+	if pw.Expiration != nil && pw.Expiration.Seconds != 0 && uint64(time.Now().Unix()) > pw.Expiration.Seconds {
+		// password expired
+		mgr.remove(userID.String(), pw.Password)
+		return nil, errtypes.NotFound("password not found")
+	}
+	// password not expired
+	// update last used time
+	pw.Utime = now()
+	if err := mgr.save(); err != nil {
+		return nil, errors.Wrap(err, "error saving file")
+	}
+
+	return pw, nil
 }
 
 func now() *typespb.Timestamp {
 	return &typespb.Timestamp{Seconds: uint64(time.Now().Unix())}
+}
+
+func (mgr *jsonManager) remove(userid string, pw string) {
+	delete(mgr.passwords[userid], pw)
+
+	// if user has 0 passwords, delete user key from state map
+	if len(mgr.passwords[userid]) == 0 {
+		delete(mgr.passwords, userid)
+	}
 }
 
 func (mgr *jsonManager) save() error {
@@ -260,4 +265,15 @@ func (mgr *jsonManager) save() error {
 	}
 
 	return nil
+}
+
+// NOTE: this is inefficient as it needs to rehash the password on every iteration.
+// can be omitted by sending the hash with the GetAppPassword request.
+func (mgr *jsonManager) findPassword(appPasswords map[string]*apppb.AppPassword, password string) (*apppb.AppPassword, bool) {
+	for hash, pw := range appPasswords {
+		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err == nil {
+			return pw, true
+		}
+	}
+	return nil, false
 }

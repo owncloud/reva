@@ -42,7 +42,7 @@ type Manager interface {
 	// ListAppPasswords lists the application passwords created by a user.
 	ListAppPasswords(ctx context.Context) ([]*apppb.AppPassword, error)
 	// InvalidateAppPassword invalidates a generated password.
-	InvalidateAppPassword(ctx context.Context, secret string) error
+	InvalidateAppPassword(ctx context.Context, hash string) error
 	// GetAppPassword retrieves the password information by the combination of username and password.
-	GetAppPassword(ctx context.Context, user *userpb.UserId, secret string) (*apppb.AppPassword, error)
+	GetAppPassword(ctx context.Context, user *userpb.UserId, secret string, hash string) (*apppb.AppPassword, error)
 }

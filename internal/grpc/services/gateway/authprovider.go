@@ -52,6 +52,7 @@ func (s *svc) Authenticate(ctx context.Context, req *gateway.AuthenticateRequest
 	}
 
 	authProviderReq := &authpb.AuthenticateRequest{
+		Opaque:       req.Opaque,
 		ClientId:     req.ClientId,
 		ClientSecret: req.ClientSecret,
 	}

@@ -147,7 +147,7 @@ func (s *service) InvalidateAppPassword(ctx context.Context, req *appauthpb.Inva
 }
 
 func (s *service) GetAppPassword(ctx context.Context, req *appauthpb.GetAppPasswordRequest) (*appauthpb.GetAppPasswordResponse, error) {
-	pwd, err := s.am.GetAppPassword(ctx, req.User, req.Password)
+	pwd, err := s.am.GetAppPassword(ctx, req.User, req.Password, utils.ReadPlainFromOpaque(req.Opaque, "hash"))
 	if err != nil {
 		return &appauthpb.GetAppPasswordResponse{
 			Status: status.NewInternal(ctx, "error getting app password via username/password"),
