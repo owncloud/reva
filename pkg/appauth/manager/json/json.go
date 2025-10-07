@@ -30,11 +30,11 @@ import (
 	authpb "github.com/cs3org/go-cs3apis/cs3/auth/provider/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appauth"
 	"github.com/owncloud/reva/v2/pkg/appauth/manager/registry"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/sethvargo/go-password/password"
 	"golang.org/x/crypto/bcrypt"
@@ -129,7 +129,7 @@ func loadOrCreate(file string) (*jsonManager, error) {
 	return m, nil
 }
 
-func (mgr *jsonManager) GenerateAppPassword(ctx context.Context, scope map[string]*authpb.Scope, label string, expiration *typespb.Timestamp) (*apppb.AppPassword, error) {
+func (mgr *jsonManager) GenerateAppPassword(ctx context.Context, scope map[string]*authpb.Scope, label string, expiration *typespb.Timestamp) (*appauth.ExtendedAppPassword, error) {
 	token, err := password.Generate(mgr.config.TokenStrength, mgr.config.TokenStrength/2, 0, false, false)
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating new token")
@@ -168,7 +168,10 @@ func (mgr *jsonManager) GenerateAppPassword(ctx context.Context, scope map[strin
 
 	clonedAppPass := proto.Clone(appPass).(*apppb.AppPassword)
 	clonedAppPass.Password = token
-	return clonedAppPass, nil
+	return &appauth.ExtendedAppPassword{
+		AppPassword: clonedAppPass,
+		Hash:        password,
+	}, nil
 }
 
 func (mgr *jsonManager) ListAppPasswords(ctx context.Context) ([]*apppb.AppPassword, error) {
@@ -231,6 +234,11 @@ func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserI
 			}
 
 			return pw, nil
+		}
+	} else {
+		// hash found - double check password
+		if err := bcrypt.CompareHashAndPassword([]byte(pw.Password), []byte(password)); err == nil {
+			return nil, errtypes.NotFound("password not found")
 		}
 	}
 
