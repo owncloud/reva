@@ -36,7 +36,7 @@ require (
 	github.com/go-playground/validator/v10 v10.28.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/go-sql-driver/mysql v1.9.3
-	github.com/gofrs/flock v0.12.1
+	github.com/gofrs/flock v0.13.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/golang/protobuf v1.5.4
 	github.com/gomodule/redigo v1.9.2
@@ -94,7 +94,7 @@ require (
 	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8
 	golang.org/x/oauth2 v0.31.0
 	golang.org/x/sync v0.17.0
-	golang.org/x/sys v0.36.0
+	golang.org/x/sys v0.37.0
 	golang.org/x/term v0.35.0
 	golang.org/x/text v0.29.0
 	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb
