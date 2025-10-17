@@ -49,7 +49,8 @@ func TestAuthorizer_IsProviderAllowed(t *testing.T) {
 				providerInfo: &ocmprovider.ProviderInfo{
 					Domain: "some.unknown.domain",
 				},
-				expectedError: errtypes.NotFound("some.unknown.domain"),
+				verifyRequestHostname: true,
+				expectedError:         errtypes.NotFound("some.unknown.domain"),
 			},
 			"authorized without host name verification": {
 				providerInfo: &ocmprovider.ProviderInfo{
@@ -65,7 +66,8 @@ func TestAuthorizer_IsProviderAllowed(t *testing.T) {
 				providerInfo: &ocmprovider.ProviderInfo{
 					Domain: "server-two",
 				},
-				expectedError: error(errtypes.NotFound("server-two")),
+				verifyRequestHostname: true,
+				expectedError:         error(errtypes.NotFound("server-two")),
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
