@@ -2,30 +2,27 @@ package user
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 )
 
-// LocalUserFederatedID creates a federated id for local users by
+// FederatedID creates a federated id for local users by
 // 1. stripping the protocol from the domain and
 // 2. if the domain is different from the idp, add the idp to the opaque id
-func LocalUserFederatedID(id *userpb.UserId, domain string) *userpb.UserId {
-	if u, err := url.Parse(domain); err == nil && u.Host != "" {
-		domain = u.Host
+func FederatedID(id *userpb.UserId, domain string) *userpb.UserId {
+	opaqueId := id.OpaqueId
+	if !strings.Contains(id.OpaqueId, "@") {
+		opaqueId = id.OpaqueId + "@" + id.Idp
 	}
 
 	u := &userpb.UserId{
-		Type:     userpb.UserType_USER_TYPE_FEDERATED,
-		Idp:      id.Idp,
-		OpaqueId: id.OpaqueId,
+		Type: userpb.UserType_USER_TYPE_FEDERATED,
+		//  Idp:      id.Idp
+		Idp:      domain,
+		OpaqueId: opaqueId,
 	}
 
-	if id.Idp != "" && domain != "" && id.Idp != domain {
-		u.OpaqueId = id.OpaqueId + "@" + id.Idp
-		u.Idp = domain
-	}
 	return u
 }
 
