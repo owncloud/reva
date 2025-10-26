@@ -1,0 +1,29 @@
+[
+  {
+    "federation": "EOSC Federation",
+    "servers": [
+      {
+        "displayName": "CERNBox",
+        "url": "https://qa.cernbox.cern.ch"
+      },
+      {
+        "displayName": "ownCloud Demo",
+        "url": "https://oc.example.org"
+      }
+    ]
+  },
+  {
+    "federation": "Azadeh Afzar Federation",
+    "servers": [
+      {
+        "displayName": "Tehran Center",
+        "url": "https://1.ocis.cloud.test.azadehafzar.io"
+      },
+      {
+        "displayName": "Mahdi Home",
+        "url": "https://2.ocis.cloud.test.azadehafzar.io"
+      }
+    ]
+  }
+]
+
