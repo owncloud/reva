@@ -97,7 +97,12 @@ func (c *OCMClient) discover(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "error doing OCM discovery request")
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing response body")
+		}
+	}(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		log.Warn().Str("sender", url).Int("status", resp.StatusCode).Msg("discovery returned")
 		return nil, errtypes.BadRequest("Remote does not offer a valid OCM discovery endpoint")
