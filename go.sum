@@ -420,8 +420,8 @@ github.com/klauspost/cpuid/v2 v2.2.8 h1:+StwCXwm9PdpiEkPyzBXIy+M9KUb4ODm0Zarf1kS
 github.com/klauspost/cpuid/v2 v2.2.8/go.mod h1:Lcz8mBdAVJIBVzewtcLocK12l3Y+JytZYpaMropDUws=
 github.com/kobergj/go-micro/v4 v4.0.0-20250117084952-d07d30666b7c h1:21N6rhk5dzUxYhJYiBsyqoRrIowpetooAS5mDwHayeE=
 github.com/kobergj/go-micro/v4 v4.0.0-20250117084952-d07d30666b7c/go.mod h1:eE/tD53n3KbVrzrWxKLxdkGw45Fg1qaNLWjpJMvIUF4=
-github.com/kobergj/gowebdav v0.0.0-20250102091030-aa65266db202 h1:A1xJ2NKgiYFiaHiLl9B5yw/gUBACSs9crDykTS3GuQI=
-github.com/kobergj/gowebdav v0.0.0-20250102091030-aa65266db202/go.mod h1:bHA7t77X/QFExdeAnDzK6vKM34kEZAcE1OX4MfiwjkE=
+github.com/kobergj/gowebdav v0.0.0-20251030165916-532350997dde h1:HYcp4J4xYe2m9KSUVbTccJb14TpSs+ldCfDFgqsXedI=
+github.com/kobergj/gowebdav v0.0.0-20251030165916-532350997dde/go.mod h1:bHA7t77X/QFExdeAnDzK6vKM34kEZAcE1OX4MfiwjkE=
 github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20240807130109-f62bb67e8c90 h1:pfI8Z5yavO6fU6vDGlWhZ4BgDlvj8c6xB7J57HfTPwA=
 github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20240807130109-f62bb67e8c90/go.mod h1:pjcozWijkNPbEtX5SIQaxEW/h8VAVZYTLx+70bmB3LY=
 github.com/konsorten/go-windows-terminal-sequences v1.0.1/go.mod h1:T0+1ngSBFLxvqU3pZ+m/2kptfBszLMUkC4ZK/EgS/cQ=
