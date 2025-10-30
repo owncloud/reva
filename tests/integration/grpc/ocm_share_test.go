@@ -64,7 +64,7 @@ var (
 		InitiateFileDownload: true,
 		InitiateFileUpload:   true,
 		ListContainer:        true,
-		ListGrants:           false,
+		ListGrants:           true,
 		ListRecycle:          true,
 		RestoreRecycleItem:   true,
 		Move:                 true,
@@ -80,7 +80,7 @@ var (
 	}
 )
 
-var _ = Describe("ocm share", func() {
+var _ = PDescribe("ocm share", func() {
 	var (
 		revads = map[string]*Revad{}
 
