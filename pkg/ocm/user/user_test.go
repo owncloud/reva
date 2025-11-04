@@ -19,14 +19,14 @@ func TestLocalUserFederatedID(t *testing.T) {
 			id:           &userpb.UserId{Type: userpb.UserType_USER_TYPE_FEDERATED, Idp: "https://ocis.cloud.io", OpaqueId: "id"},
 			domain:       "ocis.cloud.io",
 			wantOpaqueId: "id@ocis.cloud.io",
-			wantIdp:      "ocis.cloud.io",
+			wantIdp:      "https://ocis.cloud.io",
 		},
 		{
 			name:         "remote different idp",
 			id:           &userpb.UserId{Type: userpb.UserType_USER_TYPE_FEDERATED, Idp: "https://ocis.cloud.io", OpaqueId: "id"},
 			domain:       "idp.cloud.io",
 			wantOpaqueId: "id@ocis.cloud.io",
-			wantIdp:      "idp.cloud.io",
+			wantIdp:      "https://idp.cloud.io",
 		},
 		{
 			name:         "opaque contains idp, protocol in domain",
@@ -47,7 +47,7 @@ func TestLocalUserFederatedID(t *testing.T) {
 			id:           &userpb.UserId{Type: userpb.UserType_USER_TYPE_FEDERATED, Idp: "ocis.cloud.io", OpaqueId: "id"},
 			domain:       "",
 			wantOpaqueId: "id@ocis.cloud.io",
-			wantIdp:      "",
+			wantIdp:      "https://ocis.cloud.io",
 		},
 	}
 
