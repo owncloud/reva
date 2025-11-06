@@ -1,5 +1,5 @@
-Bugfix: Fix the OCM WebDAV protocol entity mismatch
+Bugfix: OCM Specification Compliance
 
-Fixed the OCM WebDAV protocol entity mismatch
+OCM Specification Compliance
 
-https://github.com/owncloud/reva/pull/425
+https://github.com/owncloud/reva/pull/435

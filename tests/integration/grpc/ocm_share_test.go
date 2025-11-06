@@ -21,7 +21,6 @@ package grpc_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -36,6 +35,7 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	storagep "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/owncloud/ocis/v2/services/webdav/pkg/net"
 	"github.com/owncloud/reva/v2/internal/http/services/datagateway"
 	"github.com/owncloud/reva/v2/pkg/conversions"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
@@ -46,7 +46,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/fs/ocis"
 	jwt "github.com/owncloud/reva/v2/pkg/token/manager/jwt"
 	"github.com/owncloud/reva/v2/tests/helpers"
-	"github.com/owncloud/ocis/v2/services/webdav/pkg/net"
 	"github.com/pkg/errors"
 	"github.com/studio-b12/gowebdav"
 	"google.golang.org/grpc/metadata"
@@ -126,8 +125,8 @@ var _ = PDescribe("ocm share", func() {
 		}
 		federatedEinsteinID = &userpb.UserId{
 			Type:     userpb.UserType_USER_TYPE_FEDERATED,
-			Idp:      "cernbox.cern.ch",
-			OpaqueId: base64.URLEncoding.EncodeToString([]byte("4c510ada-c86b-4815-8820-42cdf82c3d51@https://cernbox.cern.ch")),
+			Idp:      "https://cernbox.cern.ch",
+			OpaqueId: "4c510ada-c86b-4815-8820-42cdf82c3d51@cernbox.cern.ch",
 		}
 		marie = &userpb.User{
 			Id: &userpb.UserId{
@@ -141,8 +140,8 @@ var _ = PDescribe("ocm share", func() {
 		}
 		federatedMarieID = &userpb.UserId{
 			Type:     userpb.UserType_USER_TYPE_FEDERATED,
-			Idp:      "cesnet.cz",
-			OpaqueId: base64.URLEncoding.EncodeToString([]byte("f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c@https://cesnet.cz")),
+			Idp:      "https://cesnet.cz",
+			OpaqueId: "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c@cesnet.cz",
 		}
 	)
 
@@ -215,7 +214,7 @@ var _ = PDescribe("ocm share", func() {
 			Expect(invRes.UserId.Type).To(Equal(userpb.UserType_USER_TYPE_FEDERATED))
 			// Federated users use the OCM provider id which MUST NOT contain the protocol
 			Expect(invRes.UserId.Idp).To(Equal("cernbox.cern.ch"))
-			// The OpaqueId is the base64 encoded user id and the provider id to provent collisions with other users on the graph API
+			// The OpaqueId is the base64 encoded user id and the provider id to prevent collisions with other users on the graph API
 			Expect(invRes.UserId.OpaqueId).To(Equal(federatedEinsteinID.OpaqueId))
 		})
 
