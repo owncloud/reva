@@ -28,13 +28,13 @@ import (
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/auth"
 	"github.com/owncloud/reva/v2/pkg/auth/manager/registry"
 	"github.com/owncloud/reva/v2/pkg/auth/scope"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 )
 
@@ -43,11 +43,14 @@ func init() {
 }
 
 type manager struct {
-	c *config
+	c   *config
+	bfp *BruteForceProtection
 }
 
 type config struct {
-	GatewayAddr string `mapstructure:"gateway_addr"`
+	GatewayAddr           string        `mapstructure:"gateway_addr"`
+	BruteForceTimeGap     time.Duration `mapstructure:"brute_force_time_gap"`
+	BruteForceMaxAttempts int           `mapstructure:"brute_force_max_attempts"`
 }
 
 func parseConfig(m map[string]interface{}) (*config, error) {
@@ -66,6 +69,7 @@ func New(m map[string]interface{}) (auth.Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	mgr.bfp = NewBruteForceProtection(mgr.c.BruteForceTimeGap, mgr.c.BruteForceMaxAttempts)
 	return mgr, nil
 }
 
@@ -79,6 +83,12 @@ func (m *manager) Configure(ml map[string]interface{}) error {
 }
 
 func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user.User, map[string]*authpb.Scope, error) {
+	if !m.bfp.Verify(token) && !m.bfp.CleanInfo(token) {
+		// brute force protection fail to verify the token even after
+		// cleaning the info
+		return nil, nil, errtypes.TooManyRequests("Too many failed requests")
+	}
+
 	gwConn, err := pool.GetGatewayServiceClient(m.c.GatewayAddr)
 	if err != nil {
 		return nil, nil, err
@@ -122,6 +132,9 @@ func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_NOT_FOUND:
 		return nil, nil, errtypes.NotFound(publicShareResponse.Status.Message)
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_PERMISSION_DENIED:
+		if secret != "" && secret != "|" { // FIXME: needs better detection
+			m.bfp.AddAttempt(token)
+		}
 		return nil, nil, errtypes.InvalidCredentials(publicShareResponse.Status.Message)
 	case publicShareResponse.Status.Code != rpcv1beta1.Code_CODE_OK:
 		return nil, nil, errtypes.InternalError(publicShareResponse.Status.Message)
