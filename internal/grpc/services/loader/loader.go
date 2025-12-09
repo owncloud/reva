@@ -25,16 +25,13 @@ import (
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/appregistry"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/authprovider"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/authregistry"
-	_ "github.com/owncloud/reva/v2/internal/grpc/services/datatx"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/gateway"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/groupprovider"
-	_ "github.com/owncloud/reva/v2/internal/grpc/services/helloworld"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/ocmcore"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/ocminvitemanager"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/ocmproviderauthorizer"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/ocmshareprovider"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/permissions"
-	_ "github.com/owncloud/reva/v2/internal/grpc/services/preferences"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/publicshareprovider"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/publicstorageprovider"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/sharesstorageprovider"
@@ -42,5 +39,9 @@ import (
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/storageregistry"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/userprovider"
 	_ "github.com/owncloud/reva/v2/internal/grpc/services/usershareprovider"
+	// No need ?
+	// _ "github.com/owncloud/reva/v2/internal/grpc/services/datatx"
+	// _ "github.com/owncloud/reva/v2/internal/grpc/services/helloworld"
+	// _ "github.com/owncloud/reva/v2/internal/grpc/services/preferences"
 	// Add your own service here
 )
