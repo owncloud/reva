@@ -26,15 +26,9 @@ type BruteForceProtection struct {
 }
 
 // NewBruteForceProtection creates a new instance of BruteForceProtection
+// If either the timeGap or maxAttempts are 0, the BruteForceProtection
+// won't register any failed attempt and it will act as if it is disabled.
 func NewBruteForceProtection(timeGap time.Duration, maxAttempts int) *BruteForceProtection {
-	if timeGap == 0 {
-		timeGap = 1 * time.Hour
-	}
-
-	if maxAttempts == 0 {
-		maxAttempts = 5
-	}
-
 	return &BruteForceProtection{
 		rwmutex:     &sync.RWMutex{},
 		attemptMap:  make(map[string][]*attemptData),
@@ -44,7 +38,13 @@ func NewBruteForceProtection(timeGap time.Duration, maxAttempts int) *BruteForce
 }
 
 // AddAttempt register a new failed attempt for the provided public share
+// If the time gap or the max attempts are 0, the failed attempt won't be
+// registered
 func (bfp *BruteForceProtection) AddAttempt(shareToken string) {
+	if bfp.timeGap <= 0 || bfp.maxAttempts <= 0 {
+		return
+	}
+
 	bfp.rwmutex.Lock()
 	defer bfp.rwmutex.Unlock()
 
