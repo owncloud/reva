@@ -1,8 +1,12 @@
 package publicshares
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"github.com/owncloud/reva/v2/pkg/rgrpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // attemptData contains the data we need to store for each failed attempt.
@@ -117,4 +121,44 @@ func (bfp *BruteForceProtection) checkProtection(shareToken string) bool {
 	}
 
 	return len(bfp.attemptMap[shareToken]) <= bfp.maxAttempts
+}
+
+// outgoingContextKey is the key that will be used to mark that the brute
+// force protection shouldn't consider the password for the share token
+// (context value) as a failed attempt even if the password is wrong.
+// The key is intended to auto-propagate across all the GRPC services.
+const outgoingContextKey = rgrpc.AutoPropPrefix + "bfp-skip"
+
+// MarkSkipAttemptContext will mark the share token so it will be skipped
+// for the brute force protection. This means that the password for the
+// share token won't be counted as a failed attempt even if the password
+// is wrong.
+// This "skip" will be valid within the returned context.
+// The context key used should auto-propagate across all the GRPC services,
+// assuming the metadata interceptors are in place (check
+// internal/grpc/interceptors/metadata/metadata.go)
+func MarkSkipAttemptContext(ctx context.Context, shareToken string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, outgoingContextKey, shareToken)
+}
+
+// CheckSkipAttempt will check whether we should skip the brute force
+// protection for the share token based on the context data.
+// If you want to skip the protection, the MarkSkipAttemptContext method
+// should have been called for the provided share token, and the returned
+// context needs to be used.
+// This method will return true if the context contains data marking the
+// share token as "to skip" (from the MarkSkipAttemptContext method). If there
+// is no such data, it will return false.
+func CheckSkipAttempt(ctx context.Context, shareToken string) bool {
+	possibleValues := metadata.ValueFromIncomingContext(ctx, outgoingContextKey)
+	if possibleValues == nil || len(possibleValues) < 1 {
+		return false
+	}
+
+	for _, value := range possibleValues {
+		if value == shareToken {
+			return true
+		}
+	}
+	return false
 }
