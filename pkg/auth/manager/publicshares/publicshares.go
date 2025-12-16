@@ -132,7 +132,7 @@ func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_NOT_FOUND:
 		return nil, nil, errtypes.NotFound(publicShareResponse.Status.Message)
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_PERMISSION_DENIED:
-		if secret != "" && secret != "|" { // FIXME: needs better detection
+		if secret != "" && secret != "|" && !CheckSkipAttempt(ctx, token) { // FIXME: needs better detection
 			m.bfp.AddAttempt(token)
 		}
 		return nil, nil, errtypes.InvalidCredentials(publicShareResponse.Status.Message)
