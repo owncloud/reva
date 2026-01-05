@@ -1,0 +1,5 @@
+Bugfix: Delete old space images
+
+When a new space image is set, we now delete the old space image to avoid wasting storage space.
+
+https://github.com/owncloud/reva/pull/480
