@@ -677,19 +677,10 @@ func (fs *Decomposedfs) UpdateStorageSpace(ctx context.Context, req *provider.Up
 		}
 	}
 
-	// housekeeping: if the space image is being updated, remove the old one
-	if newImageID, ok := metadata[prefixes.SpaceImageAttr]; ok {
-		oldImageID, err := spaceNode.XattrString(ctx, prefixes.SpaceImageAttr)
-		if err == nil && oldImageID != "" && oldImageID != string(newImageID) {
-			delRef := &provider.Reference{
-				ResourceId: &provider.ResourceId{
-					SpaceId:  spaceID,
-					OpaqueId: oldImageID,
-				},
-			}
-			fs.Delete(ctx, delRef)
-			// silently ignore failed deletion
-		}
+	// capture old image id to delete it after successful update
+	var oldImageID string
+	if v, e := spaceNode.XattrString(ctx, prefixes.SpaceImageAttr); e == nil {
+		oldImageID = v
 	}
 
 	metadata[prefixes.TreeMTimeAttr] = []byte(time.Now().UTC().Format(time.RFC3339Nano))
@@ -697,6 +688,21 @@ func (fs *Decomposedfs) UpdateStorageSpace(ctx context.Context, req *provider.Up
 	err = spaceNode.SetXattrsWithContext(ctx, metadata, true)
 	if err != nil {
 		return nil, err
+	}
+
+	// housekeeping: if the space image is being updated, remove the old one
+	if newImageID, ok := metadata[prefixes.SpaceImageAttr]; ok {
+		if oldImageID != "" && oldImageID != string(newImageID) {
+			delRef := &provider.Reference{
+				ResourceId: &provider.ResourceId{
+					SpaceId:  spaceID,
+					OpaqueId: oldImageID,
+				},
+			}
+			// delete old image after new image was successfully set
+			_ = fs.Delete(ctx, delRef)
+			// silently ignore failed deletion
+		}
 	}
 
 	if restore {
