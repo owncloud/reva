@@ -230,7 +230,6 @@ func NewViewerRole() *Role {
 	r.ocsPermissions = PermissionRead
 	r.cS3ResourcePermissions.GetQuota = true
 	r.cS3ResourcePermissions.InitiateFileDownload = true
-	r.cS3ResourcePermissions.ListRecycle = true // why?
 	return r
 }
 
@@ -258,8 +257,6 @@ func NewEditorLiteRole() *Role {
 	r := NewViewerRole()
 	r.Name = RoleEditorLite
 	r.ocsPermissions = PermissionCreate
-	r.cS3ResourcePermissions.GetQuota = false    // why ?
-	r.cS3ResourcePermissions.ListRecycle = false // why ?
 	r.cS3ResourcePermissions.CreateContainer = true
 	r.cS3ResourcePermissions.InitiateFileUpload = true
 	r.cS3ResourcePermissions.Move = true
@@ -271,8 +268,6 @@ func NewEditorRole() *Role {
 	r := NewEditorLiteRole()
 	r.Name = RoleEditor
 	r.ocsPermissions = PermissionRead | PermissionCreate | PermissionWrite | PermissionDelete
-	r.cS3ResourcePermissions.GetQuota = true    // readded viewer can do this too
-	r.cS3ResourcePermissions.ListRecycle = true // readded viewer can do this too
 	r.cS3ResourcePermissions.Delete = true
 	r.cS3ResourcePermissions.RestoreRecycleItem = true
 	return r
@@ -291,7 +286,7 @@ func NewEditorListGrantsWithVersionsRole() *Role {
 	r := NewEditorListGrantsRole()
 	r.Name = RoleEditorListGrantsWithVersions
 	r.cS3ResourcePermissions.ListFileVersions = true
-	// r.cS3ResourcePermissions.RestoreFileVersion = true // missing?
+	r.cS3ResourcePermissions.RestoreFileVersion = true
 	return r
 }
 
@@ -303,7 +298,6 @@ func NewFileEditorRole() *Role {
 	r.Name = RoleFileEditor
 	r.ocsPermissions = PermissionRead | PermissionWrite
 	r.cS3ResourcePermissions.InitiateFileUpload = true
-	r.cS3ResourcePermissions.RestoreRecycleItem = true // why? why restore and not delete and/or list?
 	return r
 }
 
@@ -319,7 +313,7 @@ func NewFileEditorListGrantsRole() *Role {
 func NewFileEditorListGrantsWithVersionsRole() *Role {
 	role := NewFileEditorListGrantsRole()
 	role.cS3ResourcePermissions.ListFileVersions = true
-	// r.cS3ResourcePermissions.RestoreFileVersion = true // missing?
+	role.cS3ResourcePermissions.RestoreFileVersion = true
 	return role
 }
 
@@ -334,38 +328,33 @@ func NewSpaceViewerRole() *Role {
 	return r
 }
 
-// NewSpaceEditorWithoutTrashbinRole creates an editor role without list/restore resources in trashbin on a space.
-func NewSpaceEditorWithoutTrashbinRole() *Role {
+// NewSpaceEditorWithoutVersionsRole creates an editor without list/restore versions role
+func NewSpaceEditorWithoutVersionsRole() *Role {
 	r := NewSpaceViewerRole()
-	r.Name = RoleSpaceEditorWithoutTrashbin
-	r.ocsPermissions = PermissionRead | PermissionCreate | PermissionWrite | PermissionDelete
-	r.cS3ResourcePermissions.ListRecycle = false // why?
+	r.Name = RoleSpaceEditorWithoutVersions
 	r.cS3ResourcePermissions.CreateContainer = true
-	r.cS3ResourcePermissions.Delete = true
 	r.cS3ResourcePermissions.InitiateFileUpload = true
 	r.cS3ResourcePermissions.Move = true
-	r.cS3ResourcePermissions.ListFileVersions = true   // sure about this?
-	r.cS3ResourcePermissions.RestoreFileVersion = true // sure about this?
 	return r
 }
 
-// NewSpaceEditorWithoutVersionsRole creates an editor without list/restore versions role
-func NewSpaceEditorWithoutVersionsRole() *Role {
-	r := NewSpaceEditorWithoutTrashbinRole()
-	r.Name = RoleSpaceEditorWithoutVersions
-	r.cS3ResourcePermissions.ListRecycle = true // readded viewer can do this
-	r.cS3ResourcePermissions.RestoreRecycleItem = true
-	r.cS3ResourcePermissions.ListFileVersions = false
-	r.cS3ResourcePermissions.RestoreFileVersion = false
+// NewSpaceEditorWithoutTrashbinRole creates an editor role without list/restore resources in trashbin on a space.
+func NewSpaceEditorWithoutTrashbinRole() *Role {
+	r := NewSpaceEditorWithoutVersionsRole()
+	r.Name = RoleSpaceEditorWithoutTrashbin
+	r.ocsPermissions = PermissionRead | PermissionCreate | PermissionWrite | PermissionDelete
+	r.cS3ResourcePermissions.ListFileVersions = true
+	r.cS3ResourcePermissions.RestoreFileVersion = true
 	return r
 }
 
 // NewSpaceEditorRole creates an editor role
 func NewSpaceEditorRole() *Role {
-	r := NewEditorListGrantsWithVersionsRole()
+	r := NewSpaceEditorWithoutTrashbinRole()
 	r.Name = RoleSpaceEditor
-	r.cS3ResourcePermissions.ListFileVersions = true
-	r.cS3ResourcePermissions.RestoreFileVersion = true
+	r.cS3ResourcePermissions.ListRecycle = true
+	r.cS3ResourcePermissions.Delete = true
+	r.cS3ResourcePermissions.RestoreRecycleItem = true
 	return r
 }
 
