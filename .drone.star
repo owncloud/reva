@@ -148,6 +148,8 @@ def coverage():
                     },
                 },
                 "commands": [
+                    "apk update",
+                    "apk add --no-cache inotify-tools",
                     "make test",
                 ],
             },
