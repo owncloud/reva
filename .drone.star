@@ -148,6 +148,8 @@ def coverage():
                     },
                 },
                 "commands": [
+                    "apt-get update || true",
+                    "apt-get install -y inotify-tools || apk add --no-cache inotify-tools",
                     "make test",
                 ],
             },

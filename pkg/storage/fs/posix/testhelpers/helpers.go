@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -103,7 +104,7 @@ func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
 		"treesize_accounting":        true,
 		"personalspacepath_template": "users/{{.User.Username}}",
 		"generalspacepath_template":  "projects/{{.SpaceId}}",
-		"watch_fs":                   true,
+		"watch_fs":                   runtime.GOOS == "linux", // inotifywait is Linux-only
 	}
 	// make it possible to override single config values
 	for k, v := range config {
