@@ -34,8 +34,10 @@ import (
 	"github.com/owncloud/reva/v2/pkg/auth/scope"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
+	"github.com/owncloud/reva/v2/pkg/store"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/pkg/errors"
+	microstore "go-micro.dev/v4/store"
 )
 
 func init() {
@@ -51,6 +53,12 @@ type config struct {
 	GatewayAddr           string        `mapstructure:"gateway_addr"`
 	BruteForceTimeGap     time.Duration `mapstructure:"brute_force_time_gap"`
 	BruteForceMaxAttempts int           `mapstructure:"brute_force_max_attempts"`
+	StoreType             string        `mapstructure:"store_type"`
+	StoreNodes            []string      `mapstructure:"store_nodes"`
+	StoreDatabase         string        `mapstructure:"store_database"`
+	StoreTable            string        `mapstructure:"store_table"`
+	StoreUsername         string        `mapstructure:"store_username"`
+	StorePassword         string        `mapstructure:"store_password"`
 }
 
 func parseConfig(m map[string]interface{}) (*config, error) {
@@ -69,7 +77,15 @@ func New(m map[string]interface{}) (auth.Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	mgr.bfp = NewBruteForceProtection(mgr.c.BruteForceTimeGap, mgr.c.BruteForceMaxAttempts)
+
+	revaStore := store.Create(
+		store.Store(mgr.c.StoreType),
+		microstore.Nodes(mgr.c.StoreNodes...),
+		microstore.Database(mgr.c.StoreDatabase),
+		microstore.Table(mgr.c.StoreTable),
+		store.Authentication(mgr.c.StoreUsername, mgr.c.StorePassword),
+	)
+	mgr.bfp = NewBruteForceProtection(revaStore, mgr.c.BruteForceTimeGap, mgr.c.BruteForceMaxAttempts)
 	return mgr, nil
 }
 
@@ -83,7 +99,7 @@ func (m *manager) Configure(ml map[string]interface{}) error {
 }
 
 func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user.User, map[string]*authpb.Scope, error) {
-	if !m.bfp.Verify(token) && !m.bfp.CleanInfo(token) {
+	if !m.bfp.Verify(token) {
 		// brute force protection fail to verify the token even after
 		// cleaning the info
 		return nil, nil, errtypes.TooManyRequests("Too many failed requests")
@@ -133,7 +149,10 @@ func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user
 		return nil, nil, errtypes.NotFound(publicShareResponse.Status.Message)
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_PERMISSION_DENIED:
 		if secret != "" && secret != "|" && !CheckSkipAttempt(ctx, token) { // FIXME: needs better detection
-			m.bfp.AddAttempt(token)
+			allowed, _ := m.bfp.AddAttemptAndCheckAllow(token)
+			if !allowed {
+				return nil, nil, errtypes.TooManyRequests("Too many failed requests")
+			}
 		}
 		return nil, nil, errtypes.InvalidCredentials(publicShareResponse.Status.Message)
 	case publicShareResponse.Status.Code != rpcv1beta1.Code_CODE_OK:

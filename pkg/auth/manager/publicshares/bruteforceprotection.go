@@ -2,17 +2,24 @@ package publicshares
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
+	microstore "go-micro.dev/v4/store"
 	"google.golang.org/grpc/metadata"
+)
+
+const (
+	maxWriteRetries = 10
 )
 
 // attemptData contains the data we need to store for each failed attempt.
 // Right now, only the timestamp of the failed attempt is needed
 type attemptData struct {
-	Timestamp int64
+	Timestamp int64 `json:"timestamp"`
 }
 
 // BruteForceProtection implements a rate-limit-based protection for the
@@ -27,26 +34,30 @@ type BruteForceProtection struct {
 	attemptMap  map[string][]*attemptData
 	timeGap     time.Duration
 	maxAttempts int
+	store       microstore.Store
 }
 
 // NewBruteForceProtection creates a new instance of BruteForceProtection
 // If either the timeGap or maxAttempts are 0, the BruteForceProtection
 // won't register any failed attempt and it will act as if it is disabled.
-func NewBruteForceProtection(timeGap time.Duration, maxAttempts int) *BruteForceProtection {
+func NewBruteForceProtection(store microstore.Store, timeGap time.Duration, maxAttempts int) *BruteForceProtection {
 	return &BruteForceProtection{
 		rwmutex:     &sync.RWMutex{},
 		attemptMap:  make(map[string][]*attemptData),
 		timeGap:     timeGap,
 		maxAttempts: maxAttempts,
+		store:       store,
 	}
 }
 
-// AddAttempt register a new failed attempt for the provided public share
+// AddAttemptAndCheckAllow register a new failed attempt for the provided public share
 // If the time gap or the max attempts are 0, the failed attempt won't be
-// registered
-func (bfp *BruteForceProtection) AddAttempt(shareToken string) {
+// registered.
+// The function returns a boolean whether there are more failed attempts
+// available (allowing access), and an error if something wrong happens.
+func (bfp *BruteForceProtection) AddAttemptAndCheckAllow(shareToken string) (bool, error) {
 	if bfp.timeGap <= 0 || bfp.maxAttempts <= 0 {
-		return
+		return true, nil
 	}
 
 	bfp.rwmutex.Lock()
@@ -56,53 +67,56 @@ func (bfp *BruteForceProtection) AddAttempt(shareToken string) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	bfp.attemptMap[shareToken] = append(bfp.attemptMap[shareToken], attempt)
-
-	// clean data if needed
-	bfp.checkProtection(shareToken)
-}
-
-// Verify checks if you're allowed to access to the public share based on the
-// registered failed attempts.
-// If the registered failed attempts are lower or equal than the maximum
-// allowed, this method will return true, meaning you're allowed to access
-// If the failed attempts are greater than the maximum allowed, this method
-// will return false. Note that there could be failed attempts that are no
-// longer applicable, so if this method return false you should call the
-// "CleanInfo" method to remove obsolete attempts.
-func (bfp *BruteForceProtection) Verify(shareToken string) bool {
-	bfp.rwmutex.RLock()
-	defer bfp.rwmutex.RUnlock()
-
-	attemptList, ok := bfp.attemptMap[shareToken]
-	if !ok {
-		// no failed attempt registered
-		return true
+	attemptCount, err := bfp.writeWithRetry(shareToken, attempt)
+	if err != nil {
+		return false, err
 	}
-
-	return len(attemptList) <= bfp.maxAttempts
+	return attemptCount <= bfp.maxAttempts, nil
 }
 
-// CleanInfo will remove obsolete failed attempts for the public share and
-// return whether you're allowed to access to the public share after cleaning
-// the info.
-func (bfp *BruteForceProtection) CleanInfo(shareToken string) bool {
+// Verify will check if access to the share is available.
+// It will also update the stored information (expiring old data).
+// In case of errors, the verification will return false.
+func (bfp *BruteForceProtection) Verify(shareToken string) bool {
 	bfp.rwmutex.Lock()
 	defer bfp.rwmutex.Unlock()
 
-	return bfp.checkProtection(shareToken)
+	attemptList, err := bfp.readFromStore(shareToken)
+	if err != nil {
+		return false
+	}
+
+	updatedList := bfp.cleanAttempts(attemptList)
+	if len(attemptList) != len(updatedList) {
+		if _, err := bfp.writeWithRetry(shareToken, nil); err != nil {
+			return false
+		}
+	}
+
+	return len(updatedList) <= bfp.maxAttempts
 }
 
-// checkProtection return true if the check is successful and you're allowed
-// to access, false otherwise
-func (bfp *BruteForceProtection) checkProtection(shareToken string) bool {
-	// write lock should have been acquired before calling this method
-	minTimestamp := time.Now().Add(-1 * bfp.timeGap).Unix()
-
-	attemptList, ok := bfp.attemptMap[shareToken]
-	if !ok {
-		return true
+// Ensure the attempt is added in the right possition. Since multiple attempts
+// can happen very closely, the attempt at time 73 might have been registered
+// before the attempt at time 72
+func (bfp *BruteForceProtection) insertAttempt(attemptList []*attemptData, attempt *attemptData) []*attemptData {
+	if attempt == nil {
+		return attemptList
 	}
+
+	var i int
+	for i = 0; i < len(attemptList); i++ {
+		if attemptList[i].Timestamp > attempt.Timestamp {
+			break
+		}
+	}
+
+	return append(attemptList[:i], append([]*attemptData{attempt}, attemptList[i:]...)...)
+}
+
+// cleanAttempts will remove obsolete attempt data
+func (bfp *BruteForceProtection) cleanAttempts(attemptList []*attemptData) []*attemptData {
+	minTimestamp := time.Now().Add(-1 * bfp.timeGap).Unix()
 
 	var index int
 	for index = 0; index < len(attemptList); index++ {
@@ -111,16 +125,126 @@ func (bfp *BruteForceProtection) checkProtection(shareToken string) bool {
 		}
 	}
 
-	if index > len(attemptList) {
-		// the attempt info is obsolete
-		delete(bfp.attemptMap, shareToken)
-		return true
-	} else if index != 0 {
-		// remove obsolete info and leave only useful one
-		bfp.attemptMap[shareToken] = bfp.attemptMap[shareToken][index:]
+	return attemptList[index:]
+}
+
+// areEqualLists checks that both lists have the same data
+func (bfp *BruteForceProtection) areEqualLists(a, b []*attemptData) bool {
+	if len(a) != len(b) {
+		return false
 	}
 
-	return len(bfp.attemptMap[shareToken]) <= bfp.maxAttempts
+	for i := 0; i < len(a); i++ { // already checked that the length of both lists are the same
+		if a[i].Timestamp != b[i].Timestamp {
+			return false
+		}
+	}
+	return true
+}
+
+// writeWithRetry will write the attempt data for the share. You can use a
+// nil attempt in order to just update and remove obsolete attempts.
+// This involves several steps:
+// 1. Read the current stored data.
+// 2. Update and insert the attempt in its right position (although unlikely,
+// replicas might have written a different attempt which happens later than
+// the attempt we're writing). Cleanup obsolete data also happens here.
+// 3. Write the data into the store.
+// 4. Re-read the written data to check it wasn't overwritten. This implies
+// checking and comparing the data written and read. If the check is wrong,
+// go back to step 2.
+//
+// This method includes retries (up to maxWriteRetries = 10) in case the check
+// fails.
+//
+// This method will return the number of the elements read for the check (at
+// step 4) and an error if any.
+func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *attemptData) (int, error) {
+	// read the stored data
+	attemptList, err := bfp.readFromStore(shareToken)
+	if err != nil {
+		return 0, err
+	}
+
+	tries := 0
+	for tries = 0; tries < maxWriteRetries; tries++ {
+		updatedList := bfp.cleanAttempts(bfp.insertAttempt(attemptList, attempt))
+		if len(updatedList) == 0 {
+			// if all attempts expired, delete the info
+			// the new attempt shouldn't have expired, so this shouldn't happen
+			if derr := bfp.deleteFromStore(shareToken); derr != nil {
+				return 0, derr
+			}
+		} else {
+
+			// write the updated data into the store
+			if werr := bfp.writeToStore(shareToken, updatedList); werr != nil {
+				return 0, werr
+			}
+		}
+
+		// re-read the data to ensure the data has been correctly updated
+		attemptList, err = bfp.readFromStore(shareToken)
+		if err != nil {
+			return 0, err
+		}
+
+		// TODO: the areEqualLists might be too strict. We might just need
+		// to check that the data we want to add is present despite there
+		// could be additional data from other replicas
+		if bfp.areEqualLists(attemptList, updatedList) {
+			// if both lists are equal, the write was successful
+			break
+		}
+	}
+
+	if tries >= maxWriteRetries {
+		// couldn't write the data
+		return 0, errors.New("Could not ensure the data to be written in the store. Retries spent")
+	}
+	return len(attemptList), nil
+}
+
+// readFromStore will read the data from store and return a list with the failed
+// attempts. If there no failed attempts registered, an empty list will be returned.
+func (bfp *BruteForceProtection) readFromStore(shareToken string) ([]*attemptData, error) {
+	records, err := bfp.store.Read(shareToken)
+	if errors.Is(err, microstore.ErrNotFound) {
+		// if the key isn't found, use an empty list
+		return make([]*attemptData, 0), nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	attemptList := make([]*attemptData, 0)
+	if jerr := json.Unmarshal(records[0].Value, &attemptList); jerr != nil {
+		return nil, jerr
+	}
+
+	return attemptList, nil
+}
+
+// writeToStore will write the attempt list into the store
+func (bfp *BruteForceProtection) writeToStore(shareToken string, attemptList []*attemptData) error {
+	marshalledList, merr := json.Marshal(attemptList)
+	if merr != nil {
+		return merr
+	}
+
+	newRecord := &microstore.Record{
+		Key:   shareToken,
+		Value: marshalledList,
+	}
+	if werr := bfp.store.Write(newRecord); werr != nil {
+		return werr
+	}
+	return nil
+}
+
+// deleteFromStore will delete the attempt list from the store. This should
+// only be called if the attempt list is empty.
+func (bfp *BruteForceProtection) deleteFromStore(shareToken string) error {
+	return bfp.store.Delete(shareToken)
 }
 
 // outgoingContextKey is the key that will be used to mark that the brute
