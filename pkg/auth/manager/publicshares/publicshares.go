@@ -99,7 +99,7 @@ func (m *manager) Configure(ml map[string]interface{}) error {
 }
 
 func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user.User, map[string]*authpb.Scope, error) {
-	if !m.bfp.Verify(token) {
+	if !m.bfp.Verify(ctx, token) {
 		// brute force protection fail to verify the token even after
 		// cleaning the info
 		return nil, nil, errtypes.TooManyRequests("Too many failed requests")
@@ -148,8 +148,11 @@ func (m *manager) Authenticate(ctx context.Context, token, secret string) (*user
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_NOT_FOUND:
 		return nil, nil, errtypes.NotFound(publicShareResponse.Status.Message)
 	case publicShareResponse.Status.Code == rpcv1beta1.Code_CODE_PERMISSION_DENIED:
-		if secret != "" && secret != "|" && !CheckSkipAttempt(ctx, token) { // FIXME: needs better detection
-			allowed, _ := m.bfp.AddAttemptAndCheckAllow(token)
+		if secret != "" && secret != "|" && !CheckSkipAttempt(ctx, token) {
+			// FIXME: needs better detection. There are some scenarios where empty
+			// passwords reach this line with secret = "|", so we consider that
+			// particular string as an empty password for now.
+			allowed, _ := m.bfp.AddAttemptAndCheckAllow(ctx, token)
 			if !allowed {
 				return nil, nil, errtypes.TooManyRequests("Too many failed requests")
 			}

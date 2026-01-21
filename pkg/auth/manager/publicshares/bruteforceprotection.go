@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"sync"
 	"time"
 
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
+	"github.com/rs/zerolog"
 	microstore "go-micro.dev/v4/store"
 	"google.golang.org/grpc/metadata"
 )
@@ -19,6 +22,7 @@ const (
 // attemptData contains the data we need to store for each failed attempt.
 // Right now, only the timestamp of the failed attempt is needed
 type attemptData struct {
+	ID        int   `json:"attemptId"`
 	Timestamp int64 `json:"timestamp"`
 }
 
@@ -30,8 +34,8 @@ type attemptData struct {
 // Note that the time the link should be blocked is undefined and will be
 // somewhere between 0 and the given duration
 type BruteForceProtection struct {
-	rwmutex     *sync.RWMutex
-	attemptMap  map[string][]*attemptData
+	ID          int
+	mutex       *sync.Mutex
 	timeGap     time.Duration
 	maxAttempts int
 	store       microstore.Store
@@ -42,8 +46,8 @@ type BruteForceProtection struct {
 // won't register any failed attempt and it will act as if it is disabled.
 func NewBruteForceProtection(store microstore.Store, timeGap time.Duration, maxAttempts int) *BruteForceProtection {
 	return &BruteForceProtection{
-		rwmutex:     &sync.RWMutex{},
-		attemptMap:  make(map[string][]*attemptData),
+		ID:          rand.Int(),
+		mutex:       &sync.Mutex{},
 		timeGap:     timeGap,
 		maxAttempts: maxAttempts,
 		store:       store,
@@ -55,45 +59,76 @@ func NewBruteForceProtection(store microstore.Store, timeGap time.Duration, maxA
 // registered.
 // The function returns a boolean whether there are more failed attempts
 // available (allowing access), and an error if something wrong happens.
-func (bfp *BruteForceProtection) AddAttemptAndCheckAllow(shareToken string) (bool, error) {
+func (bfp *BruteForceProtection) AddAttemptAndCheckAllow(ctx context.Context, shareToken string) (bool, error) {
 	if bfp.timeGap <= 0 || bfp.maxAttempts <= 0 {
 		return true, nil
 	}
 
-	bfp.rwmutex.Lock()
-	defer bfp.rwmutex.Unlock()
+	bfp.mutex.Lock()
+	defer bfp.mutex.Unlock()
 
 	attempt := &attemptData{
+		ID:        rand.Int(),
 		Timestamp: time.Now().Unix(),
 	}
 
-	attemptCount, err := bfp.writeWithRetry(shareToken, attempt)
+	log := appctx.GetLogger(ctx)
+	sublog := log.With().
+		Int("instanceID", bfp.ID).
+		Str("shareToken", shareToken).
+		Int("attemptID", attempt.ID).
+		Int64("attemptTimestamp", attempt.Timestamp).
+		Logger()
+
+	attemptCount, err := bfp.writeWithRetry(shareToken, attempt, sublog)
 	if err != nil {
+		sublog.Error().Err(err).Msg("Could not include the failed attempt for brute force protection")
 		return false, err
 	}
+
+	sublog.Debug().
+		Int("attemptCount", attemptCount).
+		Bool("stillAccessible", attemptCount <= bfp.maxAttempts).
+		Msg("Failed attempt registered for brute force protection")
+
 	return attemptCount <= bfp.maxAttempts, nil
 }
 
 // Verify will check if access to the share is available.
 // It will also update the stored information (expiring old data).
 // In case of errors, the verification will return false.
-func (bfp *BruteForceProtection) Verify(shareToken string) bool {
-	bfp.rwmutex.Lock()
-	defer bfp.rwmutex.Unlock()
+func (bfp *BruteForceProtection) Verify(ctx context.Context, shareToken string) bool {
+	bfp.mutex.Lock()
+	defer bfp.mutex.Unlock()
+
+	log := appctx.GetLogger(ctx)
+	sublog := log.With().
+		Int("instanceID", bfp.ID).
+		Str("shareToken", shareToken).
+		Logger()
 
 	attemptList, err := bfp.readFromStore(shareToken)
 	if err != nil {
+		sublog.Error().Err(err).Msg("Could not read from the cache store")
 		return false
 	}
 
 	updatedList := bfp.cleanAttempts(attemptList)
 	if len(attemptList) != len(updatedList) {
-		if _, err := bfp.writeWithRetry(shareToken, nil); err != nil {
+		sublog.Debug().Msg("Cleaning obsolete attempts")
+		if _, err := bfp.writeWithRetry(shareToken, nil, sublog); err != nil {
+			sublog.Error().Err(err).Msg("Failed to update the cache store")
 			return false
 		}
 	}
 
-	return len(updatedList) <= bfp.maxAttempts
+	updatedListCount := len(updatedList)
+	sublog.Debug().
+		Int("attemptCount", updatedListCount).
+		Bool("stillAccessible", updatedListCount <= bfp.maxAttempts).
+		Msg("Verification for brute force protection done")
+
+	return updatedListCount <= bfp.maxAttempts
 }
 
 // Ensure the attempt is added in the right possition. Since multiple attempts
@@ -159,10 +194,11 @@ func (bfp *BruteForceProtection) areEqualLists(a, b []*attemptData) bool {
 //
 // This method will return the number of the elements read for the check (at
 // step 4) and an error if any.
-func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *attemptData) (int, error) {
+func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *attemptData, logger zerolog.Logger) (int, error) {
 	// read the stored data
 	attemptList, err := bfp.readFromStore(shareToken)
 	if err != nil {
+		logger.Error().Err(err).Msg("Could not read from store before writing on it")
 		return 0, err
 	}
 
@@ -173,12 +209,14 @@ func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *atte
 			// if all attempts expired, delete the info
 			// the new attempt shouldn't have expired, so this shouldn't happen
 			if derr := bfp.deleteFromStore(shareToken); derr != nil {
+				logger.Error().Err(err).Int("tryNo", tries).Msg("Error deleting from the cache store")
 				return 0, derr
 			}
 		} else {
 
 			// write the updated data into the store
 			if werr := bfp.writeToStore(shareToken, updatedList); werr != nil {
+				logger.Error().Err(err).Int("tryNo", tries).Msg("Error writing to the cache store")
 				return 0, werr
 			}
 		}
@@ -186,6 +224,7 @@ func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *atte
 		// re-read the data to ensure the data has been correctly updated
 		attemptList, err = bfp.readFromStore(shareToken)
 		if err != nil {
+			logger.Error().Err(err).Int("tryNo", tries).Msg("Error reading from the cache store")
 			return 0, err
 		}
 
@@ -196,6 +235,8 @@ func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *atte
 			// if both lists are equal, the write was successful
 			break
 		}
+
+		logger.Info().Int("tryNo", tries).Msg("Attempt data seems to have been overwritten. Retrying")
 	}
 
 	if tries >= maxWriteRetries {

@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+// NewUnary returns a server interceptor that will propagate GRPC metadata
 func NewUnary(autoPropPrefix string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
@@ -29,6 +30,7 @@ func NewUnary(autoPropPrefix string) grpc.UnaryServerInterceptor {
 	}
 }
 
+// NewStream returns a server interceptor that will propagate GRPC metadata
 func NewStream(autoPropPrefix string) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := ss.Context()
@@ -54,6 +56,8 @@ func NewStream(autoPropPrefix string) grpc.StreamServerInterceptor {
 	}
 }
 
+// newWrappedServerStream returns a wrapped server stream in order to customize
+// the GRPC server stream's context. It will use the one provided.
 func newWrappedServerStream(ctx context.Context, ss grpc.ServerStream) *wrappedServerStream {
 	return &wrappedServerStream{ServerStream: ss, newCtx: ctx}
 }
@@ -63,6 +67,7 @@ type wrappedServerStream struct {
 	newCtx context.Context
 }
 
+// Context returns the context of the server stream
 func (ss *wrappedServerStream) Context() context.Context {
 	return ss.newCtx
 }
