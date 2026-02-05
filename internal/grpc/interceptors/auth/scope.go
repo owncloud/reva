@@ -193,7 +193,7 @@ func checkIfNestedResource(ctx context.Context, ref *provider.Reference, shareRo
 		return err
 	}
 
-	if resourcePath == rootPath || strings.HasPrefix(resourcePath, rootPath+"/") {
+	if rootPath == "/" || resourcePath == rootPath || strings.HasPrefix(resourcePath, rootPath+"/") {
 		return nil
 	}
 
