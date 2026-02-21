@@ -27,15 +27,22 @@ import (
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 )
 
+// ExtendedAppPassword extends the CS3 AppPassword to return additional information
+// Returned when creating a new AppPassword
+type ExtendedAppPassword struct {
+	AppPassword *apppb.AppPassword
+	Hash        string
+}
+
 // Manager is the interface that manages application authentication mechanisms.
 type Manager interface {
 	// GenerateAppPassword creates a password with specified scope to be used by
 	// third-party applications.
-	GenerateAppPassword(ctx context.Context, scope map[string]*authpb.Scope, label string, expiration *typespb.Timestamp) (*apppb.AppPassword, error)
+	GenerateAppPassword(ctx context.Context, scope map[string]*authpb.Scope, label string, expiration *typespb.Timestamp) (*ExtendedAppPassword, error)
 	// ListAppPasswords lists the application passwords created by a user.
 	ListAppPasswords(ctx context.Context) ([]*apppb.AppPassword, error)
 	// InvalidateAppPassword invalidates a generated password.
-	InvalidateAppPassword(ctx context.Context, secret string) error
+	InvalidateAppPassword(ctx context.Context, hash string) error
 	// GetAppPassword retrieves the password information by the combination of username and password.
-	GetAppPassword(ctx context.Context, user *userpb.UserId, secret string) (*apppb.AppPassword, error)
+	GetAppPassword(ctx context.Context, user *userpb.UserId, secret string, hash string) (*apppb.AppPassword, error)
 }
