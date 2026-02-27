@@ -26,11 +26,11 @@ import (
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	helpers "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/testhelpers"
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 )
@@ -94,6 +94,26 @@ var _ = Describe("Spaces", func() {
 				Expect(string(resp.StorageSpace.Opaque.Map["spaceAlias"].Value)).To(Equal("project/mission-to-mars"))
 				Expect(resp.StorageSpace.Name).To(Equal("Mission to Mars"))
 				Expect(resp.StorageSpace.SpaceType).To(Equal("project"))
+			})
+			It("protected-project space is created", func() {
+				env.Owner = nil
+				resp, err := env.Fs.CreateStorageSpace(env.Ctx, &provider.CreateStorageSpaceRequest{Name: "Top Secret Project", Type: "protected-project"})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(resp.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+				Expect(resp.StorageSpace).ToNot(Equal(nil))
+				Expect(string(resp.StorageSpace.Opaque.Map["spaceAlias"].Value)).To(Equal("protected-project/top-secret-project"))
+				Expect(resp.StorageSpace.Name).To(Equal("Top Secret Project"))
+				Expect(resp.StorageSpace.SpaceType).To(Equal("protected-project"))
+			})
+			It("protected-personal space is created", func() {
+				env.Owner = nil
+				resp, err := env.Fs.CreateStorageSpace(env.Ctx, &provider.CreateStorageSpaceRequest{Name: "My Protected Home", Type: "protected-personal"})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(resp.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+				Expect(resp.StorageSpace).ToNot(Equal(nil))
+				Expect(string(resp.StorageSpace.Opaque.Map["spaceAlias"].Value)).To(Equal("protected-personal/username"))
+				Expect(resp.StorageSpace.Name).To(Equal("My Protected Home"))
+				Expect(resp.StorageSpace.SpaceType).To(Equal("protected-personal"))
 			})
 		})
 
