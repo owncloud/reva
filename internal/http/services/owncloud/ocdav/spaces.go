@@ -23,16 +23,31 @@ import (
 	"path"
 	"strings"
 
+	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/config"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/errors"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/net"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/propfind"
+	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/spacelookup"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/rhttp/router"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"google.golang.org/protobuf/proto"
+)
+
+const (
+	// _mfaHeader is the header used to forward the MFA authentication status.
+	_mfaHeader = "X-Multi-Factor-Authentication"
+
+	// _mfaRequiredHeader is the response header indicating that MFA step-up authentication is required.
+	_mfaRequiredHeader = "X-Ocis-Mfa-Required"
+
+	_spaceTypePersonal          = "personal"
+	_spaceTypeProject           = "project"
+	_spaceTypeProtectedPersonal = "protected-personal"
+	_spaceTypeProtectedProject  = "protected-project"
 )
 
 // SpacesHandler handles trashbin requests
@@ -53,8 +68,8 @@ func (h *SpacesHandler) init(c *config.Config) error {
 func (h *SpacesHandler) Handler(s *svc, trashbinHandler *TrashbinHandler) http.Handler {
 	config := s.Config()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// ctx := r.Context()
-		// log := appctx.GetLogger(ctx)
+		ctx := r.Context()
+		log := appctx.GetLogger(ctx)
 
 		if r.Method == http.MethodOptions {
 			s.handleOptions(w, r)
@@ -75,6 +90,24 @@ func (h *SpacesHandler) Handler(s *svc, trashbinHandler *TrashbinHandler) http.H
 		}
 
 		spaceID := segment
+
+		// MFA enforcement: look up the space type and require MFA for protected spaces.
+		if client, err := s.gatewaySelector.Next(); err == nil {
+			space, st, err := spacelookup.LookUpStorageSpaceByID(ctx, client, spaceID)
+			if err != nil {
+				log.Error().Err(err).Str("spaceid", spaceID).Msg("error looking up space for MFA check")
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if st != nil && st.GetCode() == rpc.Code_CODE_OK && space != nil && isProtectedSpaceType(space.GetSpaceType()) {
+				if r.Header.Get(_mfaHeader) != "true" {
+					log.Debug().Str("spaceid", spaceID).Str("spacetype", space.GetSpaceType()).Msg("MFA required for protected space")
+					w.Header().Set(_mfaRequiredHeader, "true")
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+			}
+		}
 
 		// TODO initialize status with http.StatusBadRequest
 		// TODO initialize err with errors.ErrUnsupportedMethod
@@ -124,7 +157,7 @@ func (h *SpacesHandler) Handler(s *svc, trashbinHandler *TrashbinHandler) http.H
 			}
 		}
 		if err != nil {
-			appctx.GetLogger(r.Context()).Error().Err(err).Msg(err.Error())
+			log.Error().Err(err).Msg(err.Error())
 		}
 	})
 }
@@ -185,4 +218,14 @@ func splitSpaceAndKey(p string) (space, key string) {
 		key = parts[1]
 	}
 	return
+}
+
+// isUnprotectedSpaceType returns true if the space type is unprotected.
+func isUnprotectedSpaceType(spaceType string) bool {
+	return spaceType == _spaceTypePersonal || spaceType == _spaceTypeProject
+}
+
+// isProtectedSpaceType returns true if the space type requires MFA authentication.
+func isProtectedSpaceType(spaceType string) bool {
+	return spaceType == _spaceTypeProtectedPersonal || spaceType == _spaceTypeProtectedProject
 }

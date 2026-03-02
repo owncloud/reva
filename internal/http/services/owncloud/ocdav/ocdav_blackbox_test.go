@@ -58,6 +58,18 @@ func (s selector) Next(opts ...pool.Option) (gateway.GatewayAPIClient, error) {
 	return s.client, nil
 }
 
+// removeListStorageSpacesMocks removes all ListStorageSpaces mocks
+// from ExpectedCalls so tests can override it with specific space types.
+func removeListStorageSpacesMocks(calls []*mock.Call) []*mock.Call {
+	var filtered []*mock.Call
+	for _, c := range calls {
+		if c.Method != "ListStorageSpaces" {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
 // TODO for now we have to test all of ocdav. when this testsuite is complete we can move
 // the handlers to dedicated packages to reduce the amount of complexity to get a test environment up
 var _ = Describe("ocdav", func() {
@@ -87,8 +99,7 @@ var _ = Describe("ocdav", func() {
 		}
 		mockStat = func(ref *cs3storageprovider.Reference, s *cs3rpc.Status, info *cs3storageprovider.ResourceInfo) {
 			client.On("Stat", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.StatRequest) bool {
-				return utils.ResourceIDEqual(req.Ref.ResourceId, ref.ResourceId) &&
-					(ref.Path == "" || req.Ref.Path == ref.Path)
+				return utils.ResourceIDEqual(req.Ref.ResourceId, ref.ResourceId)
 			})).Return(&cs3storageprovider.StatResponse{
 				Status: s,
 				Info:   info,
@@ -126,6 +137,10 @@ var _ = Describe("ocdav", func() {
 				m["size"] = uint64(0)
 			}
 
+			var st string
+			if v, ok := m["spacetype"]; ok {
+				st = v.(string)
+			}
 			return &cs3storageprovider.ResourceInfo{
 				Id: &cs3storageprovider.ResourceId{
 					StorageId: m["storageid"].(string),
@@ -134,6 +149,9 @@ var _ = Describe("ocdav", func() {
 				},
 				Type: m["type"].(cs3storageprovider.ResourceType),
 				Size: m["size"].(uint64),
+				Space: &cs3storageprovider.StorageSpace{
+					SpaceType: st,
+				},
 			}
 		}
 		mReq *cs3storageprovider.MoveRequest
@@ -221,6 +239,24 @@ var _ = Describe("ocdav", func() {
 				Type: cs3storageprovider.ResourceType_RESOURCE_TYPE_CONTAINER,
 			},
 		}, nil)
+
+		// Fallback for ID-based ListStorageSpaces lookups (used by MFA check in SpacesHandler).
+		// Returns the userspace with non-protected type so MFA is not triggered by default.
+		client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
+			return len(req.Filters) > 0 && req.Filters[0].Type == cs3storageprovider.ListStorageSpacesRequest_Filter_TYPE_ID
+		})).Return(&cs3storageprovider.ListStorageSpacesResponse{
+			Status: status.NewOK(ctx),
+			StorageSpaces: []*cs3storageprovider.StorageSpace{
+				{
+					SpaceType: "personal",
+					Root:      userspace.Root,
+				},
+			},
+		}, nil).Maybe()
+
+		client.On("ListContainer", mock.Anything, mock.Anything).Return(&cs3storageprovider.ListContainerResponse{
+			Status: status.NewOK(ctx),
+		}, nil).Maybe()
 	})
 	AfterEach(func() {
 		dataSvr.Close()
@@ -1063,6 +1099,145 @@ var _ = Describe("ocdav", func() {
 					handler.Handler().ServeHTTP(rr, req)
 					Expect(rr).To(HaveHTTPStatus(http.StatusNoContent))
 				})
+			})
+		})
+
+		Describe("MFA enforcement for protected spaces", func() {
+			It("returns 403 with X-Ocis-Mfa-Required when accessing a protected-personal space without MFA", func() {
+				// Override the fallback mock for this test: return a protected-personal space
+				client.ExpectedCalls = removeListStorageSpacesMocks(client.ExpectedCalls)
+				client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
+					return len(req.Filters) > 0 && req.Filters[0].Type == cs3storageprovider.ListStorageSpacesRequest_Filter_TYPE_ID
+				})).Return(&cs3storageprovider.ListStorageSpacesResponse{
+					Status: status.NewOK(ctx),
+					StorageSpaces: []*cs3storageprovider.StorageSpace{
+						{
+							SpaceType: "protected-personal",
+							Id:        &cs3storageprovider.StorageSpaceId{OpaqueId: "provider-1$userspace!userspace"},
+							Root:      userspace.Root,
+						},
+					},
+				}, nil).Maybe()
+
+				rr := httptest.NewRecorder()
+				req, err := http.NewRequest("PROPFIND", basePath+"/provider-1$userspace!userspace", strings.NewReader(""))
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+				// No MFA header set
+
+				handler.Handler().ServeHTTP(rr, req)
+				Expect(rr).To(HaveHTTPStatus(http.StatusForbidden))
+				Expect(rr.Header().Get("X-Ocis-Mfa-Required")).To(Equal("true"))
+			})
+
+			It("returns 403 with X-Ocis-Mfa-Required when accessing a protected-project space without MFA", func() {
+				// Override the fallback mock for this test: return a protected-project space
+				client.ExpectedCalls = removeListStorageSpacesMocks(client.ExpectedCalls)
+				client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
+					return len(req.Filters) > 0 && req.Filters[0].Type == cs3storageprovider.ListStorageSpacesRequest_Filter_TYPE_ID
+				})).Return(&cs3storageprovider.ListStorageSpacesResponse{
+					Status: status.NewOK(ctx),
+					StorageSpaces: []*cs3storageprovider.StorageSpace{
+						{
+							SpaceType: "protected-project",
+							Id:        &cs3storageprovider.StorageSpaceId{OpaqueId: "provider-1$userspace!userspace"},
+							Root:      userspace.Root,
+						},
+					},
+				}, nil).Maybe()
+
+				rr := httptest.NewRecorder()
+				req, err := http.NewRequest("GET", basePath+"/provider-1$userspace!userspace/file.txt", strings.NewReader(""))
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+				// No MFA header set
+
+				handler.Handler().ServeHTTP(rr, req)
+				Expect(rr).To(HaveHTTPStatus(http.StatusForbidden))
+				Expect(rr.Header().Get("X-Ocis-Mfa-Required")).To(Equal("true"))
+			})
+
+			It("allows access to a protected-personal space when MFA header is set", func() {
+				// Override the fallback mock for this test: return a protected-personal space
+				client.ExpectedCalls = removeListStorageSpacesMocks(client.ExpectedCalls)
+				client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
+					return len(req.Filters) > 0 && req.Filters[0].Type == cs3storageprovider.ListStorageSpacesRequest_Filter_TYPE_ID
+				})).Return(&cs3storageprovider.ListStorageSpacesResponse{
+					Status: status.NewOK(ctx),
+					StorageSpaces: []*cs3storageprovider.StorageSpace{
+						{
+							SpaceType: "protected-personal",
+							Id:        &cs3storageprovider.StorageSpaceId{OpaqueId: "provider-1$userspace!userspace"},
+							Root:      userspace.Root,
+						},
+					},
+				}, nil).Maybe()
+
+				// We need to mock Stat because the request will proceed past MFA check
+				mockStatOK(mockReference("userspace", "."), mockInfo(map[string]interface{}{"opaqueid": "userspace"}))
+
+				rr := httptest.NewRecorder()
+				req, err := http.NewRequest("PROPFIND", basePath+"/provider-1$userspace!userspace", strings.NewReader(""))
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+				req.Header.Set("X-Multi-Factor-Authentication", "true")
+
+				handler.Handler().ServeHTTP(rr, req)
+				// Should proceed past MFA check (207 MultiStatus for PROPFIND)
+				Expect(rr.Code).To(Equal(http.StatusMultiStatus))
+			})
+
+			It("allows access to a non-protected space without MFA", func() {
+				// The fallback mock already returns "personal" type, so no override needed.
+				mockStatOK(mockReference("userspace", "."), mockInfo(map[string]interface{}{"opaqueid": "userspace"}))
+
+				rr := httptest.NewRecorder()
+				req, err := http.NewRequest("PROPFIND", basePath+"/provider-1$userspace!userspace", strings.NewReader(""))
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+				// No MFA header set
+
+				handler.Handler().ServeHTTP(rr, req)
+				// Should proceed past MFA check (207 MultiStatus for PROPFIND)
+				Expect(rr.Code).To(Equal(http.StatusMultiStatus))
+			})
+
+			It("disallows COPY from a protected space to an unprotected space", func() {
+				// We need to mock Stat for source (protected) and destination (unprotected)
+				// The handler produces references with:
+				// StorageId: "provider-1"
+				// SpaceId:   "userspace"
+				// OpaqueId:  "src" (for source) or "dst" (for destination)
+				srcRef := mockReference("src", "./file.txt")
+				dstRef := mockReference("dst", "./copy.txt")
+
+				// Mock source stat as protected-personal
+				mockStatOK(srcRef, mockInfo(map[string]interface{}{
+					"opaqueid":  "src",
+					"spacetype": "protected-personal",
+					"type":      cs3storageprovider.ResourceType_RESOURCE_TYPE_FILE,
+				}))
+
+				// Mock destination stat as personal (unprotected)
+				mockStatOK(dstRef, mockInfo(map[string]interface{}{
+					"opaqueid":  "dst",
+					"spacetype": "personal",
+					"type":      cs3storageprovider.ResourceType_RESOURCE_TYPE_FILE,
+				}))
+
+				client.On("GetPath", mock.Anything, mock.Anything).Return(&cs3storageprovider.GetPathResponse{
+					Status: status.NewOK(ctx),
+					Path:   "/file.txt",
+				}, nil).Maybe()
+
+				rr := httptest.NewRecorder()
+				req, err := http.NewRequest("COPY", basePath+"/provider-1$userspace!src/file.txt", strings.NewReader(""))
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+				req.Header.Set("Destination", basePath+"/provider-1$userspace!dst/copy.txt")
+
+				handler.Handler().ServeHTTP(rr, req)
+				Expect(rr).To(HaveHTTPStatus(http.StatusBadRequest))
 			})
 		})
 
