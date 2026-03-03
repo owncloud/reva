@@ -379,6 +379,37 @@ var _ = Describe("ocdav", func() {
 						"Body must contain sabredav exception and message")
 				})
 			})
+
+			It("returns 403 when accessing a protected space via /webdav without MFA", func() {
+				// Mock the space as protected-personal
+				protectedSpace := *userspace
+				protectedSpace.SpaceType = "protected-personal"
+
+				// Remove existing mocks and add the specific one
+				client.ExpectedCalls = removeListStorageSpacesMocks(client.ExpectedCalls)
+				client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
+					return true
+				})).Return(&cs3storageprovider.ListStorageSpacesResponse{
+					Status:        status.NewOK(ctx),
+					StorageSpaces: []*cs3storageprovider.StorageSpace{&protectedSpace},
+				}, nil)
+
+				// Mock stat to return protected space type
+				mockStatOK(mockReference("root", "./file"), mockInfo(map[string]interface{}{
+					"opaqueid":  "file",
+					"spacetype": "protected-personal",
+					"type":      cs3storageprovider.ResourceType_RESOURCE_TYPE_FILE,
+				}))
+
+				rr = httptest.NewRecorder()
+				req, err = http.NewRequest("GET", basePath, nil)
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+
+				handler.Handler().ServeHTTP(rr, req)
+				Expect(rr).To(HaveHTTPStatus(http.StatusForbidden))
+				Expect(rr.Header().Get("X-Ocis-Mfa-Required")).To(Equal("true"))
+			})
 		})
 
 		Describe("MKCOL", func() {
@@ -1157,7 +1188,42 @@ var _ = Describe("ocdav", func() {
 				Expect(rr.Header().Get("X-Ocis-Mfa-Required")).To(Equal("true"))
 			})
 
-			It("allows access to a protected-personal space when MFA header is set", func() {
+			It("returns 403 with X-Ocis-Mfa-Required when accessing a protected space via /dav/files without MFA", func() {
+				// /dav/files endpoint
+				basePath = "/dav/files/username"
+
+				// Mock the space as protected-personal
+				protectedSpace := *userspace
+				protectedSpace.SpaceType = "protected-personal"
+
+				// Remove existing mocks and add the specific one for path lookup
+				client.ExpectedCalls = removeListStorageSpacesMocks(client.ExpectedCalls)
+				client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
+					p := string(req.Opaque.Map["path"].Value)
+					return strings.HasPrefix(p, "/users/username")
+				})).Return(&cs3storageprovider.ListStorageSpacesResponse{
+					Status:        status.NewOK(ctx),
+					StorageSpaces: []*cs3storageprovider.StorageSpace{&protectedSpace},
+				}, nil)
+
+				// Mock stat to return protected space type
+				mockStatOK(mockReference("userspace", "./file.txt"), mockInfo(map[string]interface{}{
+					"opaqueid":  "file",
+					"spacetype": "protected-personal",
+					"type":      cs3storageprovider.ResourceType_RESOURCE_TYPE_FILE,
+				}))
+
+				rr := httptest.NewRecorder()
+				req, err := http.NewRequest("GET", basePath+"/file.txt", nil)
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+
+				handler.Handler().ServeHTTP(rr, req)
+				Expect(rr).To(HaveHTTPStatus(http.StatusForbidden))
+				Expect(rr.Header().Get("X-Ocis-Mfa-Required")).To(Equal("true"))
+			})
+
+			It("allows access to a protected-personal space via /dav/spaces when MFA header is set", func() {
 				// Override the fallback mock for this test: return a protected-personal space
 				client.ExpectedCalls = removeListStorageSpacesMocks(client.ExpectedCalls)
 				client.On("ListStorageSpaces", mock.Anything, mock.MatchedBy(func(req *cs3storageprovider.ListStorageSpacesRequest) bool {
@@ -1174,17 +1240,31 @@ var _ = Describe("ocdav", func() {
 				}, nil).Maybe()
 
 				// We need to mock Stat because the request will proceed past MFA check
-				mockStatOK(mockReference("userspace", "."), mockInfo(map[string]interface{}{"opaqueid": "userspace"}))
+				mockStatOK(mockReference("userspace", "."), mockInfo(map[string]interface{}{
+					"opaqueid": "userspace",
+					"type":     cs3storageprovider.ResourceType_RESOURCE_TYPE_FILE,
+				}))
 
 				rr := httptest.NewRecorder()
-				req, err := http.NewRequest("PROPFIND", basePath+"/provider-1$userspace!userspace", strings.NewReader(""))
+				req, err := http.NewRequest("GET", basePath+"/provider-1$userspace!userspace/file.txt", strings.NewReader(""))
 				Expect(err).ToNot(HaveOccurred())
 				req = req.WithContext(ctx)
 				req.Header.Set("X-Multi-Factor-Authentication", "true")
 
+				// We need to mock InitiateFileDownload because GET proceeds to it
+				client.On("InitiateFileDownload", mock.Anything, mock.Anything).Return(&cs3gateway.InitiateFileDownloadResponse{
+					Status: status.NewOK(ctx),
+					Protocols: []*cs3gateway.FileDownloadProtocol{
+						{
+							Protocol:         "spaces",
+							DownloadEndpoint: dataSvr.URL,
+							Token:            "token",
+						},
+					},
+				}, nil)
+
 				handler.Handler().ServeHTTP(rr, req)
-				// Should proceed past MFA check (207 MultiStatus for PROPFIND)
-				Expect(rr.Code).To(Equal(http.StatusMultiStatus))
+				Expect(rr.Code).To(Equal(http.StatusCreated)) // dataSvr returns 201 Created
 			})
 
 			It("allows access to a non-protected space without MFA", func() {

@@ -37,19 +37,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	// _mfaHeader is the header used to forward the MFA authentication status.
-	_mfaHeader = "X-Multi-Factor-Authentication"
-
-	// _mfaRequiredHeader is the response header indicating that MFA step-up authentication is required.
-	_mfaRequiredHeader = "X-Ocis-Mfa-Required"
-
-	_spaceTypePersonal          = "personal"
-	_spaceTypeProject           = "project"
-	_spaceTypeProtectedPersonal = "protected-personal"
-	_spaceTypeProtectedProject  = "protected-project"
-)
-
 // SpacesHandler handles trashbin requests
 type SpacesHandler struct {
 	gatewaySvc        string
@@ -99,13 +86,11 @@ func (h *SpacesHandler) Handler(s *svc, trashbinHandler *TrashbinHandler) http.H
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			if st != nil && st.GetCode() == rpc.Code_CODE_OK && space != nil && isProtectedSpaceType(space.GetSpaceType()) {
-				if r.Header.Get(_mfaHeader) != "true" {
-					log.Debug().Str("spaceid", spaceID).Str("spacetype", space.GetSpaceType()).Msg("MFA required for protected space")
-					w.Header().Set(_mfaRequiredHeader, "true")
-					w.WriteHeader(http.StatusForbidden)
-					return
-				}
+			if st.GetCode() == rpc.Code_CODE_OK && isProtectedSpaceType(space.GetSpaceType()) && !isMfaSet(r) {
+				log.Debug().Str("spaceid", spaceID).Str("spacetype", space.GetSpaceType()).Msg("MFA required for protected space")
+				w.Header().Set(mfaRequiredHeader, "true")
+				w.WriteHeader(http.StatusForbidden)
+				return
 			}
 		}
 
@@ -218,14 +203,4 @@ func splitSpaceAndKey(p string) (space, key string) {
 		key = parts[1]
 	}
 	return
-}
-
-// isUnprotectedSpaceType returns true if the space type is unprotected.
-func isUnprotectedSpaceType(spaceType string) bool {
-	return spaceType == _spaceTypePersonal || spaceType == _spaceTypeProject
-}
-
-// isProtectedSpaceType returns true if the space type requires MFA authentication.
-func isProtectedSpaceType(spaceType string) bool {
-	return spaceType == _spaceTypeProtectedPersonal || spaceType == _spaceTypeProtectedProject
 }
