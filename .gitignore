@@ -26,6 +26,8 @@ tools/release/release
 # Ignore pid files
 *.pid
 
+# AI Assistance
+CLAUDE.md
 
 # For Mac OS
 .DS_Store
