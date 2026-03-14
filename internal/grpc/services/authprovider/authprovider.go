@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/auth/provider/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/auth"
 	"github.com/owncloud/reva/v2/pkg/auth/manager/registry"
@@ -31,7 +32,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/plugin"
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
-	"github.com/mitchellh/mapstructure"
+	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
@@ -136,6 +137,7 @@ func (s *service) Authenticate(ctx context.Context, req *provider.AuthenticateRe
 	username := req.ClientId
 	password := req.ClientSecret
 
+	ctx = context.WithValue(ctx, "hash", utils.ReadPlainFromOpaque(req.Opaque, "hash"))
 	u, scope, err := s.authmgr.Authenticate(ctx, username, password)
 	if err != nil {
 		log.Debug().Str("client_id", username).Err(err).Msg("authsvc: error in Authenticate")
