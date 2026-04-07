@@ -22,12 +22,13 @@ import (
 	"context"
 
 	appauthpb "github.com/cs3org/go-cs3apis/cs3/auth/applications/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appauth"
 	"github.com/owncloud/reva/v2/pkg/appauth/manager/registry"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
-	"github.com/mitchellh/mapstructure"
+	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
@@ -113,7 +114,8 @@ func (s *service) GenerateAppPassword(ctx context.Context, req *appauthpb.Genera
 
 	return &appauthpb.GenerateAppPasswordResponse{
 		Status:      status.NewOK(ctx),
-		AppPassword: pwd,
+		Opaque:      utils.AppendPlainToOpaque(nil, "hash", pwd.Hash),
+		AppPassword: pwd.AppPassword,
 	}, nil
 }
 
@@ -145,7 +147,7 @@ func (s *service) InvalidateAppPassword(ctx context.Context, req *appauthpb.Inva
 }
 
 func (s *service) GetAppPassword(ctx context.Context, req *appauthpb.GetAppPasswordRequest) (*appauthpb.GetAppPasswordResponse, error) {
-	pwd, err := s.am.GetAppPassword(ctx, req.User, req.Password)
+	pwd, err := s.am.GetAppPassword(ctx, req.User, req.Password, utils.ReadPlainFromOpaque(req.Opaque, "hash"))
 	if err != nil {
 		return &appauthpb.GetAppPasswordResponse{
 			Status: status.NewInternal(ctx, "error getting app password via username/password"),
