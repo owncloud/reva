@@ -21,7 +21,5 @@ package loader
 import (
 	// Load core share manager drivers.
 	_ "github.com/owncloud/reva/v2/pkg/ocm/provider/authorizer/json"
-	_ "github.com/owncloud/reva/v2/pkg/ocm/provider/authorizer/mentix"
-	_ "github.com/owncloud/reva/v2/pkg/ocm/provider/authorizer/open"
 	// Add your own here.
 )
