@@ -30,10 +30,10 @@ import (
 	"github.com/owncloud/reva/v2/internal/grpc/interceptors/appctx"
 	"github.com/owncloud/reva/v2/internal/grpc/interceptors/auth"
 	"github.com/owncloud/reva/v2/internal/grpc/interceptors/log"
-	"github.com/owncloud/reva/v2/internal/grpc/interceptors/metadata"
 	"github.com/owncloud/reva/v2/internal/grpc/interceptors/recovery"
 	"github.com/owncloud/reva/v2/internal/grpc/interceptors/token"
 	"github.com/owncloud/reva/v2/internal/grpc/interceptors/useragent"
+	"github.com/owncloud/reva/v2/pkg/autoprop"
 	"github.com/owncloud/reva/v2/pkg/sharedconf"
 	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/pkg/errors"
@@ -342,7 +342,8 @@ func (s *Server) getInterceptors(unprotected []string) ([]grpc.ServerOption, err
 		log.NewUnary(),
 		recovery.NewUnary(),
 		authUnary,
-		metadata.NewUnary(AutoPropPrefix),
+		//metadata.NewUnary(AutoPropPrefix),
+		autoprop.GetGoGRPCUnaryServerInterceptor(),
 	}
 
 	for _, t := range unaryTriples {
@@ -385,7 +386,8 @@ func (s *Server) getInterceptors(unprotected []string) ([]grpc.ServerOption, err
 		log.NewStream(),
 		recovery.NewStream(),
 		authStream,
-		metadata.NewStream(AutoPropPrefix),
+		//metadata.NewStream(AutoPropPrefix),
+		autoprop.GetGoGRPCStreamServerInterceptor(),
 	}
 
 	for _, t := range streamTriples {
