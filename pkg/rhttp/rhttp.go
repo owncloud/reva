@@ -32,6 +32,7 @@ import (
 	"github.com/owncloud/reva/v2/internal/http/interceptors/auth"
 	"github.com/owncloud/reva/v2/internal/http/interceptors/log"
 	"github.com/owncloud/reva/v2/internal/http/interceptors/providerauthorizer"
+	"github.com/owncloud/reva/v2/pkg/autoprop"
 	"github.com/owncloud/reva/v2/pkg/rhttp/global"
 	"github.com/owncloud/reva/v2/pkg/rhttp/router"
 	rtrace "github.com/owncloud/reva/v2/pkg/trace"
@@ -297,6 +298,7 @@ func (s *Server) getHandler() (http.Handler, error) {
 	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: authMiddle, Name: "auth"})
 	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: log.New(), Name: "log"})
 	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: appctx.New(s.log, s.tracerProvider), Name: "appctx"})
+	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: autoprop.NewHttpHandler(), Name: "autoprop"})
 
 	for _, triple := range coreMiddlewares {
 		handler = triple.Middleware(traceHandler(triple.Name, handler, s.tracerProvider))
