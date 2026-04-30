@@ -20,13 +20,17 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"reflect"
 
-	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/google/uuid"
+	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"go-micro.dev/v4/events"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/metadata"
 )
 
 var (
@@ -47,6 +51,11 @@ var (
 
 	// MetadatakeyInitiatorID is the key used for the initiator id in the metadata map of the event
 	MetadatakeyInitiatorID = "initiatorid"
+
+	// MetadatakeyExtraInfo is the key used for the extra information associated to the event.
+	// This usually includes information that should be propagated across services.
+	// The information is a map[string][]string encoded as a JSON string
+	MetadatakeyExtraInfo = "extrainfo"
 )
 
 type (
@@ -77,6 +86,7 @@ type (
 		ID          string
 		TraceParent string
 		InitiatorID string
+		ExtraInfo   metadata.MD
 		Event       interface{}
 	}
 )
@@ -112,11 +122,14 @@ func Consume(s Consumer, group string, evs ...Unmarshaller) (<-chan Event, error
 				continue
 			}
 
+			var md metadata.MD
+			json.Unmarshal([]byte(e.Metadata[MetadatakeyExtraInfo]), &md)
 			outchan <- Event{
 				Type:        et,
 				ID:          e.Metadata[MetadatakeyEventID],
 				TraceParent: e.Metadata[MetadatakeyTraceParent],
 				InitiatorID: e.Metadata[MetadatakeyInitiatorID],
+				ExtraInfo:   md,
 				Event:       event,
 			}
 		}
@@ -135,11 +148,14 @@ func ConsumeAll(s Consumer, group string) (<-chan Event, error) {
 	go func() {
 		for {
 			e := <-c
+			var md metadata.MD
+			json.Unmarshal([]byte(e.Metadata[MetadatakeyExtraInfo]), &md)
 			outchan <- Event{
 				Type:        e.Metadata[MetadatakeyEventType],
 				ID:          e.Metadata[MetadatakeyEventID],
 				TraceParent: e.Metadata[MetadatakeyTraceParent],
 				InitiatorID: e.Metadata[MetadatakeyInitiatorID],
+				ExtraInfo:   md,
 				Event:       e.Payload,
 			}
 		}
@@ -150,14 +166,21 @@ func ConsumeAll(s Consumer, group string) (<-chan Event, error) {
 // Publish publishes the ev to the MainQueue from where it is distributed to all subscribers
 // NOTE: needs to use reflect on runtime
 func Publish(ctx context.Context, s Publisher, ev interface{}) error {
+	prevSpan := trace.SpanFromContext(ctx)
+	ctx2, span := TraceEventProducer(ctx, prevSpan.TracerProvider(), ev)
+	defer span.End()
+
 	evName := reflect.TypeOf(ev).String()
-	traceParent := getTraceParentFromCtx(ctx)
-	iid, _ := ctxpkg.ContextGetInitiator(ctx)
+	traceParent := getTraceParentFromCtx(ctx2)
+	iid, _ := ctxpkg.ContextGetInitiator(ctx2)
+	md, _ := metadata.FromOutgoingContext(ctx2)
+	extraInfoBytes, _ := json.Marshal(md)
 	return s.Publish(MainQueueName, ev, events.WithMetadata(map[string]string{
 		MetadatakeyEventType:   evName,
 		MetadatakeyEventID:     uuid.New().String(),
 		MetadatakeyTraceParent: traceParent,
 		MetadatakeyInitiatorID: iid,
+		MetadatakeyExtraInfo:   string(extraInfoBytes),
 	}))
 }
 
@@ -177,4 +200,46 @@ func getTraceParentFromCtx(ctx context.Context) string {
 	tc := propagation.TraceContext{}
 	tc.Inject(ctx, &mc)
 	return mc["traceparent"]
+}
+
+func TraceEventProducer(ctx context.Context, tp trace.TracerProvider, evPayload interface{}) (context.Context, trace.Span) {
+	tracer := tp.Tracer("github.com/owncloud/reva/pkg/events")
+	evType := reflect.TypeOf(evPayload).String()
+	iid, _ := ctxpkg.ContextGetInitiator(ctx)
+
+	newCtx, span := tracer.Start(
+		ctx,
+		"Event "+evType,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("ocis.event.type", evType),
+			attribute.String("ocis.event.initiator", iid),
+		),
+	)
+	return newCtx, span
+}
+
+func TraceEventConsumer(ctx context.Context, tp trace.TracerProvider, ev Event) (context.Context, trace.Span) {
+	tracer := tp.Tracer("github.com/owncloud/reva/pkg/events")
+	return TraceEventConsumerWithTracer(ctx, tracer, ev)
+}
+
+func TraceEventConsumerWithTracer(ctx context.Context, tracer trace.Tracer, ev Event) (context.Context, trace.Span) {
+	evCtx := ev.GetTraceContext(ctx)
+
+	newCtx, span := tracer.Start(
+		ctx,
+		"Event "+ev.Type,
+		trace.WithNewRoot(),
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("ocis.event.type", ev.Type),
+			attribute.String("ocis.event.id", ev.ID),
+			attribute.String("ocis.event.initiator", ev.InitiatorID),
+		),
+		trace.WithLinks(
+			trace.LinkFromContext(evCtx),
+		),
+	)
+	return newCtx, span
 }

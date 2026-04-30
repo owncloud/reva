@@ -29,6 +29,8 @@ import (
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/google/uuid"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
@@ -44,13 +46,13 @@ import (
 	"github.com/owncloud/reva/v2/pkg/share/manager/registry"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata" // nolint:staticcheck // we need the legacy package to convert V1 to V2 messages
 	"github.com/owncloud/reva/v2/pkg/storagespace"
+	revatrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/owncloud/reva/v2/pkg/utils"
-	"github.com/google/uuid"
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/codes"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/genproto/protobuf/field_mask"
+	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -278,7 +280,13 @@ func (m *Manager) ProcessEvents(ch <-chan events.Event) {
 
 		if ev, ok := event.Event.(events.SpaceDeleted); ok {
 			log.Debug().Msgf("space deleted event: %v", ev)
-			go func() { m.purgeSpace(ctx, ev.ID) }()
+			go func() {
+				ctx2, span := events.TraceEventConsumer(ctx, revatrace.DefaultProvider(), event)
+				ctx2 = grpcmetadata.NewOutgoingContext(ctx2, event.ExtraInfo)
+				defer span.End()
+
+				m.purgeSpace(ctx2, ev.ID)
+			}()
 		}
 	}
 }
