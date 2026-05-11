@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [1, 2]  # TODO: parts 3,4 blocked on chunked Transfer-Encoding revad bug — follow-up PR
+        part: [1, 2, 3, 4]  # FIXME: parts 3,4 blocked on chunked Transfer-Encoding revad bug — follow-up PR
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -107,7 +107,27 @@ jobs:
           name: acceptance-ocis-part-${{ matrix.part }}
           path: tmp/testrunner/tests/acceptance/output/
 
-  # TODO: acceptance-tests-s3ng skipped — blocked on Ceph networking — follow-up PR
+  acceptance-tests-s3ng:
+    needs: [unit-tests]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # v2
+        with:
+          php-version: "8.4"
+      - run: python3 tests/acceptance/run-acceptance.py --storage s3ng --total-parts 6 --run-part ${{ matrix.part }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: acceptance-s3ng-part-${{ matrix.part }}
+          path: tmp/testrunner/tests/acceptance/output/
 
   acceptance-tests-posixfs:
     needs: [unit-tests]
@@ -115,7 +135,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [1, 2]  # TODO: parts 3,4 blocked on chunked Transfer-Encoding revad bug — follow-up PR
+        part: [1, 2, 3, 4]  # FIXME: parts 3,4 blocked on chunked Transfer-Encoding revad bug — follow-up PR
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -142,6 +162,7 @@ jobs:
       - litmus
       - cs3api-validator
       - acceptance-tests-ocis
+      - acceptance-tests-s3ng
       - acceptance-tests-posixfs
     runs-on: ubuntu-latest
     steps:
@@ -154,6 +175,7 @@ jobs:
             "${{ needs.litmus.result }}"
             "${{ needs.cs3api-validator.result }}"
             "${{ needs.acceptance-tests-ocis.result }}"
+            "${{ needs.acceptance-tests-s3ng.result }}"
             "${{ needs.acceptance-tests-posixfs.result }}"
           )
           for r in "${results[@]}"; do

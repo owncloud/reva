@@ -185,6 +185,16 @@ def start_redis():
     wait_for_port(REDIS_PORT, timeout=30, label="Redis")
 
 
+def ceph_rgw_ready():
+    """Check RGW is actually responding (not just Docker proxy listening)."""
+    r = subprocess.run(
+        ["curl", "-sf", "--max-time", "2", f"http://localhost:{CEPH_PORT}"],
+        capture_output=True,
+    )
+    # RGW returns XML even for anonymous requests — any HTTP response means it's up
+    return r.returncode == 0
+
+
 def start_ceph():
     print("Starting Ceph...")
     subprocess.run(
@@ -203,9 +213,18 @@ def start_ceph():
          CEPH_IMAGE],
         check=True,
     )
-    wait_for_port(CEPH_PORT, timeout=180, label="Ceph RGW")
-    # Wait for demo bucket creation after RGW starts accepting connections
-    time.sleep(15)
+    # Docker port mapping makes TCP port appear open before RGW binds inside container.
+    # Must use HTTP check to verify RGW is actually responding.
+    start = time.time()
+    while time.time() - start < 180:
+        if ceph_rgw_ready():
+            print("Ceph RGW ready.", flush=True)
+            # Extra wait for demo bucket creation after RGW starts
+            time.sleep(10)
+            return
+        time.sleep(2)
+    subprocess.run(["docker", "logs", "--tail", "50", "ceph"])
+    sys.exit("Timeout waiting for Ceph RGW after 180s")
 
 
 SERVICE_STARTERS = {
