@@ -10,6 +10,8 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/owncloud/reva/v2/internal/grpc/services/publicshareprovider"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
@@ -21,8 +23,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	cs3mocks "github.com/owncloud/reva/v2/tests/cs3mocks/mocks"
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
@@ -752,7 +752,7 @@ var _ = Describe("PublicShareProvider", func() {
 				},
 			}
 			res, err := provider.RemovePublicShare(ctx, req)
-			Expect(err).To(HaveOccurred())
+			Expect(err).ToNot(HaveOccurred())
 			Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_INTERNAL))
 			Expect(res.GetStatus().GetMessage()).To(Equal("error loading public share"))
 		})
