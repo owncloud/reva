@@ -1,6 +1,6 @@
 module github.com/owncloud/reva/v2
 
-go 1.25.7
+go 1.25.10
 
 require (
 	bou.ke/monkey v1.0.2
