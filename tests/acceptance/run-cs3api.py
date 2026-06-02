@@ -114,6 +114,14 @@ def prepare_configs(storage):
     return config_dir
 
 
+def ceph_rgw_ready():
+    r = subprocess.run(
+        ["curl", "-sf", "--max-time", "2", f"http://localhost:{CEPH_PORT}"],
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
 def start_ceph():
     print("Starting Ceph...")
     env_args = []
@@ -126,9 +134,15 @@ def start_ceph():
         env_args + [CEPH_IMAGE],
         check=True,
     )
-    wait_for_port(CEPH_PORT, timeout=180, label="Ceph RGW")
-    # Wait for demo bucket creation after RGW starts accepting connections
-    time.sleep(15)
+    start = time.time()
+    while time.time() - start < 180:
+        if ceph_rgw_ready():
+            print("Ceph RGW ready.", flush=True)
+            time.sleep(10)
+            return
+        time.sleep(2)
+    subprocess.run(["docker", "logs", "--tail", "50", "ceph"])
+    sys.exit("Timeout waiting for Ceph RGW after 180s")
 
 
 def start_revad_services(config_dir, storage):
