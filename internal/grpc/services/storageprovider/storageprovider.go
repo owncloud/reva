@@ -108,6 +108,7 @@ type Service struct {
 	Storage       storage.FS
 	dataServerURL *url.URL
 	availableXS   []*provider.ResourceChecksumPriority
+	pub           events.Publisher
 }
 
 func (s *Service) Close() error {
@@ -175,6 +176,11 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 
 	c.init()
 
+	pub, err := estreamFromConfig(c.Events)
+	if err != nil {
+		return nil, err
+	}
+
 	fs, err := getFS(c, log)
 	if err != nil {
 		return nil, err
@@ -207,6 +213,7 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 		Storage:       fs,
 		dataServerURL: u,
 		availableXS:   xsTypes,
+		pub:           pub,
 	}
 
 	return service, nil
@@ -587,6 +594,20 @@ func (s *Service) ListStorageSpaces(ctx context.Context, req *provider.ListStora
 		if sp.Id == nil || sp.Id.OpaqueId == "" {
 			log.Error().Str("service", "storageprovider").Str("driver", s.conf.Driver).Interface("space", sp).Msg("space is missing space id and root id")
 			continue
+		}
+
+		if s.pub != nil {
+			if entry, ok := sp.GetOpaque().GetMap()["expired_memberships"]; ok {
+				var memberships []events.ExpiredMembership
+				if err := json.Unmarshal(entry.Value, &memberships); err == nil {
+					for _, em := range memberships {
+						if perr := events.PublishMembershipExpired(ctx, s.pub, em); perr != nil {
+							log.Error().Err(perr).Msg("publish SpaceMembershipExpired")
+						}
+					}
+				}
+				delete(sp.Opaque.Map, "expired_memberships")
+			}
 		}
 
 		s.addMissingStorageProviderID(sp.GetRoot(), sp.GetId())

@@ -19,6 +19,7 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
 // SpaceCreated is emitted when a space is created
@@ -189,4 +191,31 @@ func (SpaceMembershipExpired) Unmarshal(v []byte) (interface{}, error) {
 	e := SpaceMembershipExpired{}
 	err := json.Unmarshal(v, &e)
 	return e, err
+}
+
+// ExpiredMembership is the payload for a single expired space grant.
+// Drivers set opaque["expired_memberships"] = json([]ExpiredMembership) in
+// ListStorageSpaces; the storageprovider handler reads it and publishes
+// SpaceMembershipExpired for each entry.
+type ExpiredMembership struct {
+	SpaceOwner   *user.UserId             `json:"space_owner"`
+	SpaceID      *provider.StorageSpaceId `json:"space_id"`
+	SpaceName    string                   `json:"space_name"`
+	ExpiredAtSec int64                    `json:"expired_at_sec"`
+	GranteeUser  *user.UserId             `json:"grantee_user,omitempty"`
+	GranteeGroup *group.GroupId           `json:"grantee_group,omitempty"`
+}
+
+// PublishMembershipExpired emits SpaceMembershipExpired for one expired grant.
+func PublishMembershipExpired(ctx context.Context, s Publisher, em ExpiredMembership) error {
+	ev := SpaceMembershipExpired{
+		SpaceOwner:     em.SpaceOwner,
+		SpaceID:        em.SpaceID,
+		SpaceName:      em.SpaceName,
+		ExpiredAt:      time.Unix(em.ExpiredAtSec, 0),
+		Timestamp:      utils.TSNow(),
+		GranteeUserID:  em.GranteeUser,
+		GranteeGroupID: em.GranteeGroup,
+	}
+	return Publish(ctx, s, ev)
 }

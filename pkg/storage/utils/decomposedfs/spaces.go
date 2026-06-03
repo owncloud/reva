@@ -901,6 +901,7 @@ func (fs *Decomposedfs) StorageSpaceFromNode(ctx context.Context, n *node.Node, 
 	grantMap := make(map[string]*provider.ResourcePermissions, len(grants))
 	grantExpiration := make(map[string]*types.Timestamp)
 	groupMap := make(map[string]struct{})
+	var expiredMemberships []events.ExpiredMembership
 	for _, g := range grants {
 		var id string
 		switch g.Grantee.Type {
@@ -944,25 +945,21 @@ func (fs *Decomposedfs) StorageSpaceFromNode(ctx context.Context, n *node.Node, 
 						}
 					}
 
-					// publish SpaceMembershipExpired event
+					// signal expired membership upward via opaque; storageprovider publishes the event
 					if errDeleteGrant == nil {
-						ev := events.SpaceMembershipExpired{
-							SpaceOwner: n.SpaceOwnerOrManager(ctx),
-							SpaceID:    &provider.StorageSpaceId{OpaqueId: n.SpaceID},
-							SpaceName:  sname,
-							ExpiredAt:  time.Unix(int64(g.Expiration.Seconds), int64(g.Expiration.Nanos)),
-							Timestamp:  utils.TSNow(),
+						em := events.ExpiredMembership{
+							SpaceOwner:   n.SpaceOwnerOrManager(ctx),
+							SpaceID:      &provider.StorageSpaceId{OpaqueId: n.SpaceID},
+							SpaceName:    sname,
+							ExpiredAtSec: int64(g.Expiration.Seconds),
 						}
 						switch {
 						case g.Grantee.Type == provider.GranteeType_GRANTEE_TYPE_USER:
-							ev.GranteeUserID = g.Grantee.GetUserId()
+							em.GranteeUser = g.Grantee.GetUserId()
 						case g.Grantee.Type == provider.GranteeType_GRANTEE_TYPE_GROUP:
-							ev.GranteeGroupID = g.Grantee.GetGroupId()
+							em.GranteeGroup = g.Grantee.GetGroupId()
 						}
-						err = events.Publish(ctx, fs.stream, ev)
-						if err != nil {
-							sublog.Error().Err(err).Msg("error publishing SpaceMembershipExpired event")
-						}
+						expiredMemberships = append(expiredMemberships, em)
 					}
 				}
 
@@ -1039,6 +1036,15 @@ func (fs *Decomposedfs) StorageSpaceFromNode(ctx context.Context, n *node.Node, 
 	space.SpaceType, err = n.SpaceRoot.XattrString(ctx, prefixes.SpaceTypeAttr)
 	if err != nil {
 		appctx.GetLogger(ctx).Debug().Err(err).Msg("space does not have a type attribute")
+	}
+
+	if len(expiredMemberships) > 0 {
+		if b, merr := json.Marshal(expiredMemberships); merr == nil {
+			space.Opaque.Map["expired_memberships"] = &types.OpaqueEntry{
+				Decoder: "json",
+				Value:   b,
+			}
+		}
 	}
 
 	if n.SpaceRoot.IsDisabled(ctx) {
