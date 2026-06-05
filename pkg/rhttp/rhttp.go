@@ -286,6 +286,7 @@ func (s *Server) getHandler() (http.Handler, error) {
 	// add always the logctx middleware as most priority, this middleware is internal
 	// and cannot be configured from the configuration.
 	coreMiddlewares := []*middlewareTriple{}
+	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: autoprop.NewHttpHandler(), Name: "autoprop"})
 
 	providerAuthMiddle, err := addProviderAuthMiddleware(s.conf, s.unprotected)
 	if err != nil {
@@ -298,7 +299,6 @@ func (s *Server) getHandler() (http.Handler, error) {
 	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: authMiddle, Name: "auth"})
 	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: log.New(), Name: "log"})
 	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: appctx.New(s.log, s.tracerProvider), Name: "appctx"})
-	coreMiddlewares = append(coreMiddlewares, &middlewareTriple{Middleware: autoprop.NewHttpHandler(), Name: "autoprop"})
 
 	for _, triple := range coreMiddlewares {
 		handler = triple.Middleware(traceHandler(triple.Name, handler, s.tracerProvider))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -34,25 +35,40 @@ func NewMetaFromJsonString(j string) *Meta {
 }
 
 // AppendMeta appends a new value for the key.
+// The key will be converted to lowercase.
 func (m *Meta) AppendMeta(key, value string) {
 	m.rwmutex.Lock()
 	defer m.rwmutex.Unlock()
 
-	_, ok := m.metadata[key]
+	internalKey := strings.ToLower(key)
+	_, ok := m.metadata[internalKey]
 	if ok {
-		m.metadata[key] = append(m.metadata[key], value)
+		m.metadata[internalKey] = append(m.metadata[internalKey], value)
 	} else {
-		m.metadata[key] = []string{value}
+		m.metadata[internalKey] = []string{value}
 	}
 }
 
+// DeleteMeta deletes the provided key. All the values associated to the
+// key will be deleted.
+// The key will be converted to lowercase.
+func (m *Meta) DeleteMeta(key string) {
+	m.rwmutex.Lock()
+	defer m.rwmutex.Unlock()
+
+	internalKey := strings.ToLower(key)
+	delete(m.metadata, internalKey)
+}
+
 // GetMeta gets the values for the provided key, or a list containing just
-// the default value (def) if the key doesn't exists
+// the default value (def) if the key doesn't exists.
+// The key will be converted to lowercase.
 func (m *Meta) GetMeta(key, def string) []string {
 	m.rwmutex.RLock()
 	defer m.rwmutex.RUnlock()
 
-	val, ok := m.metadata[key]
+	internalKey := strings.ToLower(key)
+	val, ok := m.metadata[internalKey]
 	if !ok {
 		return []string{def}
 	}
@@ -61,13 +77,22 @@ func (m *Meta) GetMeta(key, def string) []string {
 
 // GetMetaWithExists gets the values of a key and "true" if the key exists, or
 // an empty string list and "false" if the key doesn't exist.
-// The `GetMeta` method should be preferred.
+// The key will be converted to lowercase.
 func (m *Meta) GetMetaWithExists(key string) ([]string, bool) {
 	m.rwmutex.RLock()
 	defer m.rwmutex.RUnlock()
 
-	val, ok := m.metadata[key]
+	internalKey := strings.ToLower(key)
+	val, ok := m.metadata[internalKey]
 	return val, ok
+}
+
+// Len gets the number of elements keys in the metadata.
+func (m *Meta) Len() int {
+	m.rwmutex.RLock()
+	defer m.rwmutex.RUnlock()
+
+	return len(m.metadata)
 }
 
 // Create a new Meta instance. All the keys and values will be copied over,
@@ -160,13 +185,24 @@ func SetMetaToContext(ctx context.Context, meta *Meta) context.Context {
 // This can be used right before starting new goroutines: we don't want
 // different goroutines to modify the metadata of eachother.
 func CopyMetaToContext(ctx context.Context) context.Context {
-	meta := GetMetaFromContext(ctx)
+	return CopyMetaFromContextToContext(ctx, ctx)
+}
+
+// CopyMetaFromContextToContext copies the meta from the "in" context to
+// the "out" context. The meta from both contexts can be modified
+// independently.
+// The returned context will be derived from the "out" context.
+// If the "in" context doesn't have a meta, a new meta instance will be
+// used, so the returned context is guaranteed to have a meta, although
+// it could be empty.
+func CopyMetaFromContextToContext(in, out context.Context) context.Context {
+	meta := GetMetaFromContext(in)
 	if meta == nil {
 		meta = NewMeta()
 	}
 
 	copiedMeta := meta.CreateCopy()
-	return SetMetaToContext(ctx, copiedMeta)
+	return SetMetaToContext(out, copiedMeta)
 }
 
 // AppendMetaToContext will add a new key-value to the meta in the context.

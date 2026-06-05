@@ -11,7 +11,7 @@ import (
 func NewGoMicroClientCallWrapper() client.CallWrapper {
 	return func(cf client.CallFunc) client.CallFunc {
 		return func(ctx context.Context, node *registry.Node, req client.Request, rsp interface{}, opts client.CallOptions) error {
-			newCtx := moveOcisMetaToOutgoingContext(ctx)
+			newCtx := moveOcisMetaToGoMicroMetadata(ctx)
 			return cf(newCtx, node, req, rsp, opts)
 		}
 	}
@@ -20,7 +20,7 @@ func NewGoMicroClientCallWrapper() client.CallWrapper {
 func NewGoMicroServerHandlerWrapper() server.HandlerWrapper {
 	return func(h server.HandlerFunc) server.HandlerFunc {
 		return func(ctx context.Context, req server.Request, rsp interface{}) error {
-			newCtx := moveIncomingContextToOcisMeta(ctx)
+			newCtx := moveGoMicroMetadataToOcisMeta(ctx)
 			return h(newCtx, req, rsp)
 		}
 	}
@@ -29,7 +29,7 @@ func NewGoMicroServerHandlerWrapper() server.HandlerWrapper {
 func NewGoMicroServerSubscriberWrapper() server.SubscriberWrapper {
 	return func(next server.SubscriberFunc) server.SubscriberFunc {
 		return func(ctx context.Context, msg server.Message) error {
-			newCtx := moveIncomingContextToOcisMeta(ctx)
+			newCtx := moveGoMicroMetadataToOcisMeta(ctx)
 			return next(newCtx, msg)
 		}
 	}
@@ -49,16 +49,16 @@ type clientWrapper struct {
 }
 
 func (w *clientWrapper) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
-	newCtx := moveOcisMetaToOutgoingContext(ctx)
+	newCtx := moveOcisMetaToGoMicroMetadata(ctx)
 	return w.Client.Call(newCtx, req, rsp, opts...)
 }
 
 func (w *clientWrapper) Stream(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
-	newCtx := moveOcisMetaToOutgoingContext(ctx)
+	newCtx := moveOcisMetaToGoMicroMetadata(ctx)
 	return w.Client.Stream(newCtx, req, opts...)
 }
 
 func (w *clientWrapper) Publish(ctx context.Context, p client.Message, opts ...client.PublishOption) error {
-	newCtx := moveOcisMetaToOutgoingContext(ctx)
+	newCtx := moveOcisMetaToGoMicroMetadata(ctx)
 	return w.Client.Publish(newCtx, p, opts...)
 }

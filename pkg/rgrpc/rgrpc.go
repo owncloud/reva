@@ -336,13 +336,13 @@ func (s *Server) getInterceptors(unprotected []string) ([]grpc.ServerOption, err
 	}
 
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		autoprop.GetGoGRPCUnaryServerInterceptor(),
 		appctx.NewUnary(s.log, s.tracerProvider),
 		token.NewUnary(),
 		useragent.NewUnary(),
 		log.NewUnary(),
 		recovery.NewUnary(),
 		authUnary,
-		autoprop.GetGoGRPCUnaryServerInterceptor(),
 	}
 
 	for _, t := range unaryTriples {
@@ -379,13 +379,13 @@ func (s *Server) getInterceptors(unprotected []string) ([]grpc.ServerOption, err
 	}
 
 	streamInterceptors := []grpc.StreamServerInterceptor{
+		autoprop.GetGoGRPCStreamServerInterceptor(),
 		appctx.NewStream(s.log, s.tracerProvider),
 		token.NewStream(),
 		useragent.NewStream(),
 		log.NewStream(),
 		recovery.NewStream(),
 		authStream,
-		autoprop.GetGoGRPCStreamServerInterceptor(),
 	}
 
 	for _, t := range streamTriples {

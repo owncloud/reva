@@ -5,12 +5,14 @@ import (
 	"net/http"
 	"strings"
 
+	micrometa "go-micro.dev/v4/metadata"
 	"google.golang.org/grpc/metadata"
 )
 
 const (
-	GRPCAutoPropPrefix = "autoprop-"
-	HTTPAutoPropPrefix = "X-OCIS-Autoprop-"
+	GRPCAutoPropPrefix  = "autoprop-"
+	HTTPAutoPropPrefix  = "X-Ocis-Autoprop-"
+	MicroAutoPropPrefix = "M-Ocis-Autoprop-"
 )
 
 // moveOcisMetaToOutgoingContext will copy the values from the oCIS meta to
@@ -69,6 +71,7 @@ func moveOcisMetaToHttpHeaders(r *http.Request, ctx context.Context) {
 	if meta != nil {
 		for key, values := range meta.CreateCopyAsMap(HTTPAutoPropPrefix) {
 			for _, value := range values {
+				// http.CanonicalHeaderKey(...) is done while adding the key-value
 				r.Header.Add(key, value)
 			}
 		}
@@ -82,8 +85,9 @@ func moveHttpHeadersToOcisMeta(r *http.Request, ctx context.Context) context.Con
 		isNew = true
 	}
 
+	canonicalPrefix := http.CanonicalHeaderKey(HTTPAutoPropPrefix)
 	for key, values := range r.Header {
-		if unprefixedKey, hasPrefix := strings.CutPrefix(key, HTTPAutoPropPrefix); hasPrefix {
+		if unprefixedKey, hasPrefix := strings.CutPrefix(key, canonicalPrefix); hasPrefix {
 			for _, value := range values {
 				meta.AppendMeta(unprefixedKey, value)
 			}
@@ -95,5 +99,43 @@ func moveHttpHeadersToOcisMeta(r *http.Request, ctx context.Context) context.Con
 	}
 	// No need to create new context if there is metadata in the context
 	// because it's already updated. Just return the same request
+	return ctx
+}
+
+func moveOcisMetaToGoMicroMetadata(ctx context.Context) context.Context {
+	meta := GetMetaFromContext(ctx)
+	if meta != nil {
+		md := make(micrometa.Metadata, meta.Len())
+		for key, values := range meta.CreateCopyAsMap(MicroAutoPropPrefix) {
+			md.Set(key, strings.Join(values, "|||"))
+		}
+		return micrometa.MergeContext(ctx, md, true)
+	}
+	return ctx
+}
+
+func moveGoMicroMetadataToOcisMeta(ctx context.Context) context.Context {
+	meta, isNew := GetMetaFromContext(ctx), false
+	if meta == nil {
+		meta = NewMeta()
+		isNew = true
+	}
+
+	md, ok := micrometa.FromContext(ctx)
+	if ok {
+		for key, values := range md {
+			if unprefixedKey, hasPrefix := strings.CutPrefix(key, MicroAutoPropPrefix); hasPrefix {
+				for _, value := range strings.Split(values, "|||") {
+					meta.AppendMeta(unprefixedKey, value)
+				}
+			}
+		}
+	}
+
+	if isNew {
+		return SetMetaToContext(ctx, meta)
+	}
+	// No need to create new context if there is metadata in the context
+	// because it's already updated. Just return the previous context
 	return ctx
 }

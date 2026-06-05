@@ -40,6 +40,7 @@ func GetHTTPClient(opts ...Option) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = options.DisableKeepAlive
 	tr.TLSClientConfig = &tls.Config{
+		MinVersion:         options.MinVersion,
 		InsecureSkipVerify: options.Insecure,
 	}
 
