@@ -31,7 +31,14 @@ const (
 	spaceOwnerSlotKey key = iota
 	moveResultSlotKey
 	deleteResultSlotKey
+	deleteStorageSpaceResultSlotKey
+
 )
+
+// DeleteStorageSpaceResultSlot is a mutable container for a *storage.DeleteStorageSpaceResult.
+type DeleteStorageSpaceResultSlot struct {
+	Result *storage.DeleteStorageSpaceResult
+}
 
 // --- space owner ---
 
@@ -133,4 +140,18 @@ func ContextGetDeleteResult(ctx context.Context) *storage.DeleteResult {
 		return slot.result
 	}
 	return nil
+}
+
+// ContextRegisterDeleteStorageSpaceResultSlot stores an empty slot in ctx so the
+// handler can later fill it with a *storage.DeleteStorageSpaceResult.
+func ContextRegisterDeleteStorageSpaceResultSlot(ctx context.Context, slot *DeleteStorageSpaceResultSlot) context.Context {
+	return context.WithValue(ctx, deleteStorageSpaceResultSlotKey, slot)
+}
+
+// ContextSetDeleteStorageSpaceResult fills the slot registered in ctx with the given result.
+// Does nothing if no slot was registered.
+func ContextSetDeleteStorageSpaceResult(ctx context.Context, r *storage.DeleteStorageSpaceResult) {
+	if slot, ok := ctx.Value(deleteStorageSpaceResultSlotKey).(*DeleteStorageSpaceResultSlot); ok {
+		slot.Result = r
+	}
 }
