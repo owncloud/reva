@@ -52,21 +52,21 @@ require (
 	github.com/jedib0t/go-pretty v4.3.0+incompatible
 	github.com/jellydator/ttlcache/v2 v2.11.1
 	github.com/juliangruber/go-intersect v1.1.0
-	github.com/mattn/go-sqlite3 v1.14.44
+	github.com/mattn/go-sqlite3 v1.14.45
 	github.com/maxymania/go-system v0.0.0-20170110133659-647cc364bf0b
 	github.com/mileusna/useragent v1.3.5
 	github.com/minio/minio-go/v7 v7.2.0
 	github.com/mitchellh/mapstructure v1.5.0
-	github.com/nats-io/nats-server/v2 v2.14.1
+	github.com/nats-io/nats-server/v2 v2.14.2
 	github.com/nats-io/nats.go v1.52.0
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.41.0
 	github.com/owncloud/ocis/v2 v2.0.1-0.20250122072425-665072d86d1a
-	github.com/pablodz/inotifywaitgo v0.0.9
+	github.com/pablodz/inotifywaitgo v0.0.12
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/xattr v0.4.12
-	github.com/prometheus/alertmanager v0.32.1
+	github.com/prometheus/alertmanager v0.32.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rogpeppe/go-internal v1.15.0
 	github.com/rs/cors v1.11.1
@@ -83,7 +83,7 @@ require (
 	github.com/tus/tusd/v2 v2.9.2
 	github.com/wk8/go-ordered-map v1.0.0
 	go-micro.dev/v4 v4.11.0
-	go.etcd.io/etcd/client/v3 v3.6.11
+	go.etcd.io/etcd/client/v3 v3.6.12
 	go.opencensus.io v0.24.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0
 	go.opentelemetry.io/otel v1.44.0
@@ -174,8 +174,8 @@ require (
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/jwt/v2 v2.8.1 // indirect
-	github.com/nats-io/nkeys v0.4.15 // indirect
+	github.com/nats-io/jwt/v2 v2.8.2 // indirect
+	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/oklog/run v1.2.0 // indirect
@@ -205,8 +205,8 @@ require (
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	go.etcd.io/etcd/api/v3 v3.6.11 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.6.11 // indirect
+	go.etcd.io/etcd/api/v3 v3.6.12 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.6.12 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
