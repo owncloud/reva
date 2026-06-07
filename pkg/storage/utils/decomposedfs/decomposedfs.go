@@ -1133,6 +1133,15 @@ func (fs *Decomposedfs) Download(ctx context.Context, ref *provider.Reference, o
 		return nil, nil, errtypes.NotFound(f)
 	}
 
+	// Do not serve the blob while the node is still being post-processed
+	// (e.g. virus scan in progress). This must be enforced here, at the
+	// storage layer, so every caller (ocdav, the datagateway /data endpoint,
+	// the archiver, ...) is covered and the check cannot be raced against a
+	// preceding Stat.
+	if n.IsProcessing(ctx) {
+		return nil, nil, errtypes.TooEarly(n.ID)
+	}
+
 	ri, err := n.AsResourceInfo(ctx, rp, nil, []string{"size", "mimetype", "etag"}, true)
 	if err != nil {
 		return nil, nil, err

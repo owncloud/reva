@@ -152,6 +152,14 @@ func (fs *Decomposedfs) DownloadRevision(ctx context.Context, ref *provider.Refe
 		return nil, nil, errtypes.NotFound(f)
 	}
 
+	// Do not serve a revision blob while the node is still being
+	// post-processed (e.g. virus scan in progress). Enforced at the storage
+	// layer so the revision download path cannot be used to bypass the
+	// quarantine.
+	if n.IsProcessing(ctx) {
+		return nil, nil, errtypes.TooEarly(n.ID)
+	}
+
 	contentPath := fs.lu.InternalPath(spaceID, revisionKey)
 
 	blobid, blobsize, err := fs.lu.ReadBlobIDAndSizeAttr(ctx, contentPath, nil)
