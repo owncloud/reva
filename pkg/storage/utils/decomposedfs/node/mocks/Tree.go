@@ -919,6 +919,54 @@ func (_c *Tree_WriteBlob_Call) RunAndReturn(run func(*node.Node, string) error) 
 	return _c
 }
 
+// WriteBlobFromReader provides a mock function with given fields: _a0, r, size
+func (_m *Tree) WriteBlobFromReader(_a0 *node.Node, r io.Reader, size int64) error {
+	ret := _m.Called(_a0, r, size)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WriteBlobFromReader")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(*node.Node, io.Reader, int64) error); ok {
+		r0 = rf(_a0, r, size)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Tree_WriteBlobFromReader_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WriteBlobFromReader'
+type Tree_WriteBlobFromReader_Call struct {
+	*mock.Call
+}
+
+// WriteBlobFromReader is a helper method to define mock.On call
+//   - _a0 *node.Node
+//   - r io.Reader
+//   - size int64
+func (_e *Tree_Expecter) WriteBlobFromReader(_a0 interface{}, r interface{}, size interface{}) *Tree_WriteBlobFromReader_Call {
+	return &Tree_WriteBlobFromReader_Call{Call: _e.mock.On("WriteBlobFromReader", _a0, r, size)}
+}
+
+func (_c *Tree_WriteBlobFromReader_Call) Run(run func(_a0 *node.Node, r io.Reader, size int64)) *Tree_WriteBlobFromReader_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(*node.Node), args[1].(io.Reader), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *Tree_WriteBlobFromReader_Call) Return(_a0 error) *Tree_WriteBlobFromReader_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Tree_WriteBlobFromReader_Call) RunAndReturn(run func(*node.Node, io.Reader, int64) error) *Tree_WriteBlobFromReader_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewTree creates a new instance of Tree. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewTree(t interface {
