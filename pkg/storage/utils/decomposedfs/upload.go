@@ -341,6 +341,18 @@ func (fs *Decomposedfs) InitiateUpload(ctx context.Context, ref *provider.Refere
 	}, nil
 }
 
+// MarkProcessing toggles a processing flag on the resource.
+// TODO: real implementation pending — see OCISDEV-883.
+func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool) error {
+	return errtypes.NotSupported("decomposedfs: mark processing not yet implemented")
+}
+
+// CommitUpload writes the staged bytes from source to the resource at ref.
+// TODO: real implementation pending — see OCISDEV-883.
+func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Reference, source storage.UploadSource) (*provider.ResourceInfo, error) {
+	return nil, errtypes.NotSupported("decomposedfs: commit upload not yet implemented")
+}
+
 // UseIn tells the tus upload middleware which extensions it supports.
 func (fs *Decomposedfs) UseIn(composer *tusd.StoreComposer) {
 	composer.UseCore(fs)
