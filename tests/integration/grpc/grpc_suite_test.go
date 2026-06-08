@@ -295,6 +295,7 @@ func startNats() (address string, stop func(), err error) {
 	}
 	srv.Start()
 	if !srv.ReadyForConnections(5 * time.Second) {
+		srv.Shutdown()
 		return "", nil, fmt.Errorf("nats server not ready within 5s")
 	}
 	return fmt.Sprintf("localhost:%d", p), srv.Shutdown, nil

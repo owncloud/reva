@@ -28,6 +28,7 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	storagep "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -49,6 +50,18 @@ func consumeEvent(ch <-chan revaevents.Event, timeout time.Duration) (revaevents
 	}
 }
 
+func mustDrainEvent(ch <-chan revaevents.Event) {
+	_, err := consumeEvent(ch, 3*time.Second)
+	Expect(err).ToNot(HaveOccurred())
+}
+
+const (
+	// spaceID and ownerID are intentionally equal: in decomposedfs a personal
+	// space is bootstrapped with a root node whose ID equals the owner's user ID.
+	spaceID = "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c"
+	ownerID = "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c"
+)
+
 var _ = Describe("ocis storage provider events", func() {
 	var (
 		revads         map[string]*Revad
@@ -61,12 +74,25 @@ var _ = Describe("ocis storage provider events", func() {
 		user = &userpb.User{
 			Id: &userpb.UserId{
 				Idp:      "0.0.0.0:19000",
-				OpaqueId: "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c",
+				OpaqueId: ownerID,
 				Type:     userpb.UserType_USER_TYPE_PRIMARY,
 			},
 			Username: "einstein",
 		}
 	)
+
+	rootRef := func() *storagep.Reference {
+		return &storagep.Reference{
+			ResourceId: &storagep.ResourceId{SpaceId: spaceID, OpaqueId: spaceID},
+		}
+	}
+
+	pathRef := func(path string) *storagep.Reference {
+		return &storagep.Reference{
+			ResourceId: &storagep.ResourceId{SpaceId: spaceID, OpaqueId: spaceID},
+			Path:       path,
+		}
+	}
 
 	JustBeforeEach(func() {
 		var err error
@@ -106,7 +132,23 @@ var _ = Describe("ocis storage provider events", func() {
 		Expect(err).ToNot(HaveOccurred())
 		eventCh, err = revaevents.Consume(natsStream, "integration-test",
 			revaevents.ContainerCreated{},
+			revaevents.FileTouched{},
+			revaevents.FileLocked{},
+			revaevents.FileUnlocked{},
+			revaevents.FileDownloaded{},
+			revaevents.ItemMoved{},
+			revaevents.ItemTrashed{},
+			revaevents.ItemRestored{},
+			revaevents.ItemPurged{},
 			revaevents.SpaceCreated{},
+			revaevents.SpaceRenamed{},
+			revaevents.SpaceUpdated{},
+			revaevents.SpaceEnabled{},
+			revaevents.SpaceDisabled{},
+			revaevents.SpaceDeleted{},
+			revaevents.SpaceShared{},
+			revaevents.SpaceShareUpdated{},
+			revaevents.SpaceUnshared{},
 		)
 		Expect(err).ToNot(HaveOccurred())
 	})
@@ -120,7 +162,30 @@ var _ = Describe("ocis storage provider events", func() {
 		}
 	})
 
+	// SpaceCreated
+	It("emits SpaceCreated with correct fields", func() {
+		res, err := spacesClient.CreateStorageSpace(ctx, &storagep.CreateStorageSpaceRequest{
+			Owner: user,
+			Type:  "personal",
+			Name:  user.Id.OpaqueId,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+		ev, err := consumeEvent(eventCh, 3*time.Second)
+		Expect(err).ToNot(HaveOccurred())
+
+		typed, ok := ev.Event.(revaevents.SpaceCreated)
+		Expect(ok).To(BeTrue(), "expected SpaceCreated, got %T", ev.Event)
+		Expect(typed.Executant).ToNot(BeNil())
+		Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+		Expect(typed.ID).ToNot(BeNil())
+		Expect(typed.Owner).ToNot(BeNil())
+	})
+
 	Context("with a personal space", func() {
+		var createdSpaceID *storagep.StorageSpaceId
+
 		JustBeforeEach(func() {
 			res, err := spacesClient.CreateStorageSpace(ctx, &storagep.CreateStorageSpaceRequest{
 				Owner: user,
@@ -129,20 +194,13 @@ var _ = Describe("ocis storage provider events", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
-			_, err = consumeEvent(eventCh, 3*time.Second) // discard SpaceCreated
-			Expect(err).ToNot(HaveOccurred())
+			createdSpaceID = res.StorageSpace.Id
+			mustDrainEvent(eventCh)
 		})
 
+		// ContainerCreated
 		It("emits ContainerCreated with correct fields", func() {
-			newDirRef := &storagep.Reference{
-				ResourceId: &storagep.ResourceId{
-					SpaceId:  "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c",
-					OpaqueId: "f7fbf8c8-139b-4376-b307-cf0a8c2d0d9c",
-				},
-				Path: "/newdir",
-			}
-
-			res, err := providerClient.CreateContainer(ctx, &storagep.CreateContainerRequest{Ref: newDirRef})
+			res, err := providerClient.CreateContainer(ctx, &storagep.CreateContainerRequest{Ref: pathRef("/newdir")})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
 
@@ -152,9 +210,438 @@ var _ = Describe("ocis storage provider events", func() {
 			typed, ok := ev.Event.(revaevents.ContainerCreated)
 			Expect(ok).To(BeTrue(), "expected ContainerCreated, got %T", ev.Event)
 			Expect(typed.Executant).ToNot(BeNil())
-			Expect(typed.Executant.OpaqueId).To(Equal(user.Id.OpaqueId))
+			Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
 			Expect(typed.Ref).ToNot(BeNil())
 			Expect(typed.SpaceOwner).ToNot(BeNil())
+		})
+
+		// FileTouched
+		It("emits FileTouched with correct fields", func() {
+			res, err := providerClient.TouchFile(ctx, &storagep.TouchFileRequest{Ref: pathRef("/touched.txt")})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+			ev, err := consumeEvent(eventCh, 3*time.Second)
+			Expect(err).ToNot(HaveOccurred())
+
+			typed, ok := ev.Event.(revaevents.FileTouched)
+			Expect(ok).To(BeTrue(), "expected FileTouched, got %T", ev.Event)
+			Expect(typed.Executant).ToNot(BeNil())
+			Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+			Expect(typed.Ref).ToNot(BeNil())
+			Expect(typed.SpaceOwner).ToNot(BeNil())
+		})
+
+		Context("with an existing file", func() {
+			JustBeforeEach(func() {
+				res, err := providerClient.TouchFile(ctx, &storagep.TouchFileRequest{Ref: pathRef("/lockme.txt")})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+				mustDrainEvent(eventCh)
+			})
+
+			// FileLocked
+			It("emits FileLocked with correct fields", func() {
+				res, err := providerClient.SetLock(ctx, &storagep.SetLockRequest{
+					Ref:  pathRef("/lockme.txt"),
+					Lock: &storagep.Lock{LockId: "test-lock-id", Type: storagep.LockType_LOCK_TYPE_WRITE},
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.FileLocked)
+				Expect(ok).To(BeTrue(), "expected FileLocked, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.Ref).ToNot(BeNil())
+			})
+
+			// FileUnlocked
+			It("emits FileUnlocked with correct fields", func() {
+				_, err := providerClient.SetLock(ctx, &storagep.SetLockRequest{
+					Ref:  pathRef("/lockme.txt"),
+					Lock: &storagep.Lock{LockId: "test-lock-id", Type: storagep.LockType_LOCK_TYPE_WRITE},
+				})
+				Expect(err).ToNot(HaveOccurred())
+				mustDrainEvent(eventCh)
+
+				res, err := providerClient.Unlock(ctx, &storagep.UnlockRequest{
+					Ref:  pathRef("/lockme.txt"),
+					Lock: &storagep.Lock{LockId: "test-lock-id", Type: storagep.LockType_LOCK_TYPE_WRITE},
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.FileUnlocked)
+				Expect(ok).To(BeTrue(), "expected FileUnlocked, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.Ref).ToNot(BeNil())
+			})
+
+			// FileDownloaded
+			It("emits FileDownloaded with correct fields", func() {
+				res, err := providerClient.InitiateFileDownload(ctx, &storagep.InitiateFileDownloadRequest{Ref: pathRef("/lockme.txt")})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.FileDownloaded)
+				Expect(ok).To(BeTrue(), "expected FileDownloaded, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.Ref).ToNot(BeNil())
+			})
+
+			// ItemMoved — emitted by decomposedfs directly, not the gRPC interceptor.
+			// The storageprovider binary must have [grpc.services.storageprovider.events]
+			// configured (separate from [grpc.interceptors.eventsmiddleware]) for this to reach NATS.
+			It("emits ItemMoved with correct fields", func() {
+				res, err := providerClient.Move(ctx, &storagep.MoveRequest{
+					Source:      pathRef("/lockme.txt"),
+					Destination: pathRef("/moved.txt"),
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.ItemMoved)
+				Expect(ok).To(BeTrue(), "expected ItemMoved, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.Ref).ToNot(BeNil())
+				Expect(typed.OldReference).ToNot(BeNil())
+				Expect(typed.SpaceOwner).ToNot(BeNil())
+			})
+
+			// ItemTrashed
+			It("emits ItemTrashed with correct fields", func() {
+				res, err := providerClient.Delete(ctx, &storagep.DeleteRequest{Ref: pathRef("/lockme.txt")})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.ItemTrashed)
+				Expect(ok).To(BeTrue(), "expected ItemTrashed, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.Ref).ToNot(BeNil())
+				Expect(typed.ID).ToNot(BeNil())
+				Expect(typed.SpaceOwner).ToNot(BeNil())
+			})
+		})
+
+		Context("with a trashed item", func() {
+			var recycleKey string
+
+			JustBeforeEach(func() {
+				_, err := providerClient.TouchFile(ctx, &storagep.TouchFileRequest{Ref: pathRef("/tobedeleted.txt")})
+				Expect(err).ToNot(HaveOccurred())
+				mustDrainEvent(eventCh)
+
+				_, err = providerClient.Delete(ctx, &storagep.DeleteRequest{Ref: pathRef("/tobedeleted.txt")})
+				Expect(err).ToNot(HaveOccurred())
+
+				trashedEv, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+				typed, ok := trashedEv.Event.(revaevents.ItemTrashed)
+				Expect(ok).To(BeTrue())
+				recycleKey = typed.ID.GetOpaqueId()
+				Expect(recycleKey).ToNot(BeEmpty())
+			})
+
+			// ItemRestored
+			It("emits ItemRestored with correct fields", func() {
+				res, err := providerClient.RestoreRecycleItem(ctx, &storagep.RestoreRecycleItemRequest{
+					Ref: rootRef(),
+					Key: recycleKey,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.ItemRestored)
+				Expect(ok).To(BeTrue(), "expected ItemRestored, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.Key).ToNot(BeEmpty())
+				Expect(typed.SpaceOwner).ToNot(BeNil())
+			})
+
+			// ItemPurged
+			It("emits ItemPurged with correct fields", func() {
+				res, err := providerClient.PurgeRecycle(ctx, &storagep.PurgeRecycleRequest{
+					Ref: rootRef(),
+					Key: recycleKey,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.ItemPurged)
+				Expect(ok).To(BeTrue(), "expected ItemPurged, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+			})
+		})
+
+		// SpaceRenamed
+		It("emits SpaceRenamed with correct fields", func() {
+			res, err := spacesClient.UpdateStorageSpace(ctx, &storagep.UpdateStorageSpaceRequest{
+				StorageSpace: &storagep.StorageSpace{
+					Id:   createdSpaceID,
+					Name: "renamedspace",
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+			ev, err := consumeEvent(eventCh, 3*time.Second)
+			Expect(err).ToNot(HaveOccurred())
+
+			typed, ok := ev.Event.(revaevents.SpaceRenamed)
+			Expect(ok).To(BeTrue(), "expected SpaceRenamed, got %T", ev.Event)
+			Expect(typed.Executant).ToNot(BeNil())
+			Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+			Expect(typed.Name).To(Equal("renamedspace"))
+			Expect(typed.ID).ToNot(BeNil())
+		})
+
+		// SpaceUpdated — uses description because quota requires an admin-only permission
+		// (Drives.ReadWritePersonalQuota) that the demo permissions driver denies.
+		It("emits SpaceUpdated with correct fields", func() {
+			res, err := spacesClient.UpdateStorageSpace(ctx, &storagep.UpdateStorageSpaceRequest{
+				StorageSpace: &storagep.StorageSpace{
+					Id: createdSpaceID,
+					Opaque: &typespb.Opaque{
+						Map: map[string]*typespb.OpaqueEntry{
+							"description": {Decoder: "plain", Value: []byte("updated description")},
+						},
+					},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+			ev, err := consumeEvent(eventCh, 3*time.Second)
+			Expect(err).ToNot(HaveOccurred())
+
+			typed, ok := ev.Event.(revaevents.SpaceUpdated)
+			Expect(ok).To(BeTrue(), "expected SpaceUpdated, got %T", ev.Event)
+			Expect(typed.Executant).ToNot(BeNil())
+			Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+			Expect(typed.ID).ToNot(BeNil())
+		})
+
+		// SpaceDisabled / SpaceEnabled / SpaceDeleted — use a project space because disabling a
+		// personal space requires the DeleteAllHomeSpaces admin permission. The creator of a
+		// project space is its manager and can disable/re-enable/purge it without admin rights.
+		Context("with a project space", func() {
+			var projID *storagep.StorageSpaceId
+
+			JustBeforeEach(func() {
+				projRes, err := spacesClient.CreateStorageSpace(ctx, &storagep.CreateStorageSpaceRequest{
+					Owner: user,
+					Type:  "project",
+					Name:  "projectspace",
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(projRes.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+				projID = projRes.StorageSpace.Id
+				mustDrainEvent(eventCh)
+			})
+
+			It("emits SpaceDisabled with correct fields", func() {
+				res, err := spacesClient.DeleteStorageSpace(ctx, &storagep.DeleteStorageSpaceRequest{
+					Id: projID,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.SpaceDisabled)
+				Expect(ok).To(BeTrue(), "expected SpaceDisabled, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.ID).ToNot(BeNil())
+			})
+
+			Context("with a disabled project space", func() {
+				JustBeforeEach(func() {
+					_, err := spacesClient.DeleteStorageSpace(ctx, &storagep.DeleteStorageSpaceRequest{Id: projID})
+					Expect(err).ToNot(HaveOccurred())
+					mustDrainEvent(eventCh)
+				})
+
+				It("emits SpaceEnabled with correct fields", func() {
+					res, err := spacesClient.UpdateStorageSpace(ctx, &storagep.UpdateStorageSpaceRequest{
+						StorageSpace: &storagep.StorageSpace{Id: projID},
+						Opaque: &typespb.Opaque{
+							Map: map[string]*typespb.OpaqueEntry{
+								"restore": {Decoder: "plain", Value: []byte("true")},
+							},
+						},
+					})
+					Expect(err).ToNot(HaveOccurred())
+					Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+					ev, err := consumeEvent(eventCh, 3*time.Second)
+					Expect(err).ToNot(HaveOccurred())
+
+					typed, ok := ev.Event.(revaevents.SpaceEnabled)
+					Expect(ok).To(BeTrue(), "expected SpaceEnabled, got %T", ev.Event)
+					Expect(typed.Executant).ToNot(BeNil())
+					Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+					Expect(typed.ID).ToNot(BeNil())
+				})
+
+				// A space must be disabled (soft-deleted) before it can be purged.
+				It("emits SpaceDeleted with correct fields", func() {
+					res, err := spacesClient.DeleteStorageSpace(ctx, &storagep.DeleteStorageSpaceRequest{
+						Id: projID,
+						Opaque: &typespb.Opaque{
+							Map: map[string]*typespb.OpaqueEntry{
+								"purge": {Decoder: "plain", Value: []byte("true")},
+							},
+						},
+					})
+					Expect(err).ToNot(HaveOccurred())
+					Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+					ev, err := consumeEvent(eventCh, 3*time.Second)
+					Expect(err).ToNot(HaveOccurred())
+
+					typed, ok := ev.Event.(revaevents.SpaceDeleted)
+					Expect(ok).To(BeTrue(), "expected SpaceDeleted, got %T", ev.Event)
+					Expect(typed.Executant).ToNot(BeNil())
+					Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+					Expect(typed.ID).ToNot(BeNil())
+				})
+			})
+		})
+
+		Context("space sharing", func() {
+			var (
+				granteeUser = &userpb.UserId{
+					Idp:      "0.0.0.0:19000",
+					OpaqueId: "4c510ada-c86b-4815-8820-42cdf82c3d51",
+					Type:     userpb.UserType_USER_TYPE_PRIMARY,
+				}
+				spaceRef = &storagep.Reference{
+					ResourceId: &storagep.ResourceId{
+						StorageId: spaceID,
+						SpaceId:   spaceID,
+						OpaqueId:  spaceID,
+					},
+				}
+				grant = &storagep.Grant{
+					Grantee: &storagep.Grantee{
+						Type: storagep.GranteeType_GRANTEE_TYPE_USER,
+						Id:   &storagep.Grantee_UserId{UserId: granteeUser},
+					},
+					Permissions: &storagep.ResourcePermissions{GetPath: true},
+				}
+				spaceGrantOpaque = &typespb.Opaque{
+					Map: map[string]*typespb.OpaqueEntry{
+						"spacegrant": {Decoder: "plain", Value: []byte("true")},
+					},
+				}
+			)
+
+			// SpaceShared
+			It("emits SpaceShared with correct fields", func() {
+				res, err := providerClient.AddGrant(ctx, &storagep.AddGrantRequest{
+					Ref:    spaceRef,
+					Grant:  grant,
+					Opaque: spaceGrantOpaque,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.SpaceShared)
+				Expect(ok).To(BeTrue(), "expected SpaceShared, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
+				Expect(typed.GranteeUserID).ToNot(BeNil())
+				Expect(typed.GranteeUserID.OpaqueId).To(Equal(granteeUser.OpaqueId))
+				Expect(typed.ID).ToNot(BeNil())
+			})
+
+			// SpaceShareUpdated
+			It("emits SpaceShareUpdated with correct fields", func() {
+				_, err := providerClient.AddGrant(ctx, &storagep.AddGrantRequest{
+					Ref: spaceRef, Grant: grant, Opaque: spaceGrantOpaque,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				mustDrainEvent(eventCh)
+
+				res, err := providerClient.UpdateGrant(ctx, &storagep.UpdateGrantRequest{
+					Ref: spaceRef,
+					Grant: &storagep.Grant{
+						Grantee:     grant.Grantee,
+						Permissions: &storagep.ResourcePermissions{GetPath: true, Stat: true},
+					},
+					Opaque: spaceGrantOpaque,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.SpaceShareUpdated)
+				Expect(ok).To(BeTrue(), "expected SpaceShareUpdated, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.GranteeUserID).ToNot(BeNil())
+				Expect(typed.ID).ToNot(BeNil())
+			})
+
+			// SpaceUnshared
+			It("emits SpaceUnshared with correct fields", func() {
+				_, err := providerClient.AddGrant(ctx, &storagep.AddGrantRequest{
+					Ref: spaceRef, Grant: grant, Opaque: spaceGrantOpaque,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				mustDrainEvent(eventCh)
+
+				res, err := providerClient.RemoveGrant(ctx, &storagep.RemoveGrantRequest{
+					Ref:    spaceRef,
+					Grant:  grant,
+					Opaque: spaceGrantOpaque,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
+
+				ev, err := consumeEvent(eventCh, 3*time.Second)
+				Expect(err).ToNot(HaveOccurred())
+
+				typed, ok := ev.Event.(revaevents.SpaceUnshared)
+				Expect(ok).To(BeTrue(), "expected SpaceUnshared, got %T", ev.Event)
+				Expect(typed.Executant).ToNot(BeNil())
+				Expect(typed.GranteeUserID).ToNot(BeNil())
+				Expect(typed.ID).ToNot(BeNil())
+			})
 		})
 	})
 })
