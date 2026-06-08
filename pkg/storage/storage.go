@@ -114,6 +114,10 @@ type FS interface {
 	InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error)
 	// Upload creates or updates a resource of type file with a new revision
 	Upload(ctx context.Context, req UploadRequest, uploadFunc UploadFinishedFunc) (*provider.ResourceInfo, error)
+	// MarkProcessing toggles a processing flag on the resource.
+	MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool) error
+	// CommitUpload writes the staged bytes from source to the resource at ref.
+	CommitUpload(ctx context.Context, ref *provider.Reference, source UploadSource) (*provider.ResourceInfo, error)
 
 	// Revisions
 
@@ -205,6 +209,16 @@ type DeleteStorageSpaceResult struct {
 	// FinalMembers is the grant map of the space at the time of deletion,
 	// keyed by user/group opaque id.
 	FinalMembers map[string]provider.ResourcePermissions
+}
+
+// UploadSource carries the staged bytes for a CommitUpload call.
+// Body is read once, sequentially; the driver takes ownership and is
+// responsible for closing it. Metadata mirrors tusd.FileInfo.MetaData
+// (mtime, mime, checksum, providerID, lockid, if-match, …).
+type UploadSource struct {
+	Body     io.ReadCloser
+	Length   int64
+	Metadata map[string]string
 }
 
 // UnscopeFunc is a function that unscopes a user
