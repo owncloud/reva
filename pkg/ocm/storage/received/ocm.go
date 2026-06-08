@@ -100,6 +100,19 @@ func (BearerAuthenticator) Close() error {
 	return nil
 }
 
+// noRedirectRoundTripper wraps an http.RoundTripper and tags every outgoing
+// request with gowebdav's XInhibitRedirect header. The default CheckRedirect
+// installed by gowebdav.NewAuthClient then returns http.ErrUseLastResponse on
+// any 3xx response, so the http.Client never follows the redirect.
+type noRedirectRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (t *noRedirectRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set(gowebdav.XInhibitRedirect, "1")
+	return t.base.RoundTrip(req)
+}
+
 // New creates an OCM storage driver.
 func New(m map[string]interface{}, _ events.Stream, _ *zerolog.Logger) (storage.FS, error) {
 	var c config
@@ -204,11 +217,13 @@ func (d *driver) webdavClient(ctx context.Context, forUser *userpb.UserId, ref *
 	// FIXME: it's still not clear from the OCM APIs how to use the shared secret
 	// will use as a token in the bearer authentication as this is the reva implementation
 	c := gowebdav.NewAuthClient(endpoint, gowebdav.NewPreemptiveAuth(BearerAuthenticator{Token: secret}))
+	base := http.DefaultTransport
 	if d.c.Insecure {
-		c.SetTransport(&http.Transport{
+		base = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		})
+		}
 	}
+	c.SetTransport(&noRedirectRoundTripper{base: base})
 
 	return c, share, rel, nil
 }
