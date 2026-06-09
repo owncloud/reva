@@ -534,6 +534,11 @@ var _ = Describe("ocis storage provider events", func() {
 					Expect(typed.Executant).ToNot(BeNil())
 					Expect(typed.Executant.OpaqueId).To(Equal(ownerID))
 					Expect(typed.ID).ToNot(BeNil())
+					Expect(typed.SpaceName).To(Equal("projectspace"))
+					Expect(typed.FinalMembers).To(HaveLen(1))
+					ownerPerms, ok := typed.FinalMembers[ownerID] //nolint:govet
+					Expect(ok).To(BeTrue(), "expected ownerID %q in FinalMembers", ownerID)
+					Expect(ownerPerms.AddGrant).To(BeTrue())
 				})
 			})
 		})
