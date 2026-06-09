@@ -5,4 +5,4 @@ in the gRPC auth interceptor. Previously, internal services like userlog and
 notifications failed to stat vault resources because their service account
 tokens lacked MFA context, causing share notifications to be silently discarded.
 
-https://github.com/owncloud/reva/pull/TODO
+https://github.com/owncloud/reva/pull/624
