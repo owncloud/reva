@@ -25,11 +25,13 @@ import (
 	"encoding/xml"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
@@ -109,8 +111,9 @@ type noRedirectRoundTripper struct {
 }
 
 func (t *noRedirectRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set(gowebdav.XInhibitRedirect, "1")
-	return t.base.RoundTrip(req)
+	clonedRequest := req.Clone(req.Context())
+	clonedRequest.Header.Set(gowebdav.XInhibitRedirect, "1")
+	return t.base.RoundTrip(clonedRequest)
 }
 
 // New creates an OCM storage driver.
@@ -217,11 +220,21 @@ func (d *driver) webdavClient(ctx context.Context, forUser *userpb.UserId, ref *
 	// FIXME: it's still not clear from the OCM APIs how to use the shared secret
 	// will use as a token in the bearer authentication as this is the reva implementation
 	c := gowebdav.NewAuthClient(endpoint, gowebdav.NewPreemptiveAuth(BearerAuthenticator{Token: secret}))
-	base := http.DefaultTransport
+	base := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32, // Bamped up from 2 to keep connections hot
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	if d.c.Insecure {
-		base = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
+		base.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	c.SetTransport(&noRedirectRoundTripper{base: base})
 
