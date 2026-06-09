@@ -28,6 +28,7 @@ import (
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/google/uuid"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/pkg/errors"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
@@ -342,9 +343,24 @@ func (fs *Decomposedfs) InitiateUpload(ctx context.Context, ref *provider.Refere
 }
 
 // MarkProcessing toggles a processing flag on the resource.
-// TODO: real implementation pending — see OCISDEV-883.
 func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool) error {
-	return errtypes.NotSupported("decomposedfs: mark processing not yet implemented")
+	n, err := fs.lu.NodeFromResource(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if !n.Exists {
+		return errtypes.NotFound(ref.String())
+	}
+	if processing {
+		if n.IsProcessing(ctx) {
+			return errtypes.ResourceProcessing(ref.String())
+		}
+		return n.SetXattr(ctx, prefixes.StatusPrefix, []byte(node.ProcessingStatus))
+	}
+	if !n.IsProcessing(ctx) {
+		return nil
+	}
+	return n.RemoveXattr(ctx, prefixes.StatusPrefix, true)
 }
 
 // CommitUpload writes the staged bytes from source to the resource at ref.
