@@ -99,8 +99,8 @@ func (m *Meta) Len() int {
 // and the new instance will be completely separated (both the old and new
 // instances can be modified separately)
 func (m *Meta) CreateCopy() *Meta {
-	m.rwmutex.Lock()
-	defer m.rwmutex.Unlock()
+	m.rwmutex.RLock()
+	defer m.rwmutex.RUnlock()
 
 	data := make(map[string][]string, len(m.metadata))
 	for k, v := range m.metadata {
@@ -118,8 +118,8 @@ func (m *Meta) CreateCopy() *Meta {
 // it as a map[string][]string.
 // The returned instance can be modified independently
 func (m *Meta) CreateCopyAsMap(prefix string) map[string][]string {
-	m.rwmutex.Lock()
-	defer m.rwmutex.Unlock()
+	m.rwmutex.RLock()
+	defer m.rwmutex.RUnlock()
 
 	data := make(map[string][]string, len(m.metadata))
 	for k, v := range m.metadata {

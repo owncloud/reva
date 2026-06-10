@@ -67,7 +67,6 @@ func NewRequest(ctx context.Context, method, url string, body io.Reader) (*http.
 		httpReq.Header.Set(ctxpkg.TokenHeader, tkn)
 	}
 
-	autoprop.AppendToHttpRequest(httpReq, ctx)
 	httpReq = httpReq.WithContext(ctx)
 	return httpReq, nil
 }

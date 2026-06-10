@@ -27,9 +27,10 @@ func SetMFA(ctx context.Context) context.Context {
 
 // RemoveMFA removes the MFA status from the context.
 // The meta associated to the provided context will be copied, and the MFA
-// status will be removed from the copied context. Previous MFA status
-// will still be available in the old context if needed.
-// The copied context will be returned.
+// status will be removed from the copied context. The copied context
+// will be returned.
+//
+// WARNING: Previous MFA status will still be available in the old context.
 func RemoveMFA(ctx context.Context) context.Context {
 	ctx2 := autoprop.CopyMetaToContext(ctx) // ensures ctx2 to have a meta
 	meta := autoprop.GetMetaFromContext(ctx2)

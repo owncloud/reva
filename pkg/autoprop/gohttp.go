@@ -27,8 +27,9 @@ type autoPropRoundTripper struct {
 // the autopropagation data from the context into the request headers before
 // sending the modified request to the base RoundTripper
 func (rt *autoPropRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
-	moveOcisMetaToHttpHeaders(r, r.Context())
-	return rt.base.RoundTrip(r)
+	r2 := r.Clone(r.Context())
+	moveOcisMetaToHttpHeaders(r2, r.Context())
+	return rt.base.RoundTrip(r2)
 }
 
 // NewHttpRoundTripper creates a new instance of the autoPropRoundTripper.
