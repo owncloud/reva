@@ -521,7 +521,27 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 
 			revFile, err := os.OpenFile(versionPath, os.O_CREATE|os.O_EXCL, 0600)
 			if err != nil {
-				return nil, errors.Wrap(err, "Decomposedfs: failed to create revision file")
+				if !errors.Is(err, os.ErrExist) {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to create revision file")
+				}
+				// EEXIST: a revision archive at this mtime already exists from a
+				// prior CommitUpload run. If the archive is byte-identical to the
+				// live node, it is a leftover from an idempotent retry and can be
+				// safely reset; otherwise we refuse rather than clobber history.
+				if err := validateRevisionChecksums(ctx, fs.lu, old, versionPath); err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: existing revision archive does not match current node")
+				}
+				bID, _, err := fs.lu.ReadBlobIDAndSizeAttr(ctx, versionPath, nil)
+				if err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to read blob id of existing revision")
+				}
+				if err := fs.tp.DeleteBlob(&node.Node{BlobID: bID, SpaceID: n.SpaceID}); err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to delete stale revision blob")
+				}
+				revFile, err = os.Create(versionPath)
+				if err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to truncate revision file")
+				}
 			}
 			revFile.Close()
 
@@ -587,6 +607,31 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		Etag:  etag,
 		Mtime: utils.TimeToTS(mtime),
 	}, nil
+}
+
+// validateRevisionChecksums returns nil iff every checksum xattr (md5, sha1,
+// adler32) on the live node n equals the same xattr on the archive at
+// versionPath. Used to detect a leftover archive from an idempotent retry.
+func validateRevisionChecksums(ctx context.Context, lu node.PathLookup, n *node.Node, versionPath string) error {
+	for _, algo := range []string{"md5", "sha1", "adler32"} {
+		key := prefixes.ChecksumPrefix + algo
+
+		live, err := n.Xattr(ctx, key)
+		if err != nil {
+			return err
+		}
+		archived, err := lu.MetadataBackend().Get(ctx, versionPath, key)
+		if err != nil {
+			return err
+		}
+		if len(live) == 0 || len(archived) == 0 {
+			return errors.New("checksum not found")
+		}
+		if string(live) != string(archived) {
+			return errors.New("checksum mismatch on " + algo)
+		}
+	}
+	return nil
 }
 
 // UseIn tells the tus upload middleware which extensions it supports.
