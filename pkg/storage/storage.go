@@ -212,9 +212,6 @@ type DeleteStorageSpaceResult struct {
 }
 
 // UploadSource carries the staged bytes for a CommitUpload call.
-// Body is read once, sequentially; the driver takes ownership and is
-// responsible for closing it. Metadata mirrors tusd.FileInfo.MetaData
-// (mtime, mime, checksum, providerID, lockid, if-match, …).
 type UploadSource struct {
 	Body     io.ReadCloser
 	Length   int64
