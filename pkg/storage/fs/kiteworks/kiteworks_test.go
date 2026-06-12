@@ -183,11 +183,11 @@ var _ = Describe("kiteworks driver", func() {
 		notSupported := func(err error) bool { return errors.As(err, new(errtypes.NotSupported)) }
 
 		It("rejects CreateDir", func() {
-			err := d.CreateDir(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID, OpaqueId: fix.spaceID}})
+			_, err := d.CreateDir(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID, OpaqueId: fix.spaceID}})
 			Expect(err).To(Satisfy(notSupported))
 		})
 		It("rejects TouchFile", func() {
-			err := d.TouchFile(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}}, false, "")
+			_, err := d.TouchFile(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}}, false, "")
 			Expect(err).To(Satisfy(notSupported))
 		})
 		It("rejects Delete", func() {
@@ -196,10 +196,11 @@ var _ = Describe("kiteworks driver", func() {
 		})
 		It("rejects Move", func() {
 			ref := &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}}
-			Expect(d.Move(fix.ctx, ref, ref)).To(Satisfy(notSupported))
+			_, err := d.Move(fix.ctx, ref, ref)
+			Expect(err).To(Satisfy(notSupported))
 		})
 		It("rejects SetLock", func() {
-			err := d.SetLock(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}}, &provider.Lock{LockId: "x"})
+			_, err := d.SetLock(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}}, &provider.Lock{LockId: "x"})
 			Expect(err).To(Satisfy(notSupported))
 		})
 		It("rejects AddGrant", func() {
