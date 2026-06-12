@@ -24,6 +24,12 @@ type fixture struct {
 	fileContent string // empty on real box; exact expected content in mock mode
 }
 
+func skipIfRealBox() {
+	if os.Getenv("KITEWORKS") != "" {
+		Skip("mock-only test")
+	}
+}
+
 func firstFileID(items []*provider.ResourceInfo) string {
 	for _, item := range items {
 		if item.Type == provider.ResourceType_RESOURCE_TYPE_FILE {
@@ -120,9 +126,7 @@ var _ = Describe("kiteworks driver", func() {
 			})
 
 			It("returns expected children in mock mode", func() {
-				if os.Getenv("KITEWORKS") != "" {
-					Skip("mock-only test")
-				}
+				skipIfRealBox()
 				ref := &provider.Reference{
 					ResourceId: &provider.ResourceId{SpaceId: fix.spaceID, OpaqueId: fix.spaceID},
 				}
@@ -176,6 +180,29 @@ var _ = Describe("kiteworks driver", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(path).ToNot(BeEmpty())
 			})
+		})
+	})
+
+	Context("error propagation", func() {
+		It("GetMD propagates non-404 server errors", func() {
+			skipIfRealBox()
+			ref := &provider.Reference{
+				ResourceId: &provider.ResourceId{SpaceId: "error-500", OpaqueId: "error-500"},
+			}
+			_, err := d.GetMD(fix.ctx, ref, nil, nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err).ToNot(Satisfy(func(e error) bool { return errors.As(e, new(errtypes.NotFound)) }))
+		})
+
+		It("Download resolves root ref where OpaqueId is empty", func() {
+			skipIfRealBox()
+			ref := &provider.Reference{
+				ResourceId: &provider.ResourceId{SpaceId: fix.spaceID},
+			}
+			ri, rc, err := d.Download(fix.ctx, ref, func(_ *provider.ResourceInfo) bool { return false })
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ri).ToNot(BeNil())
+			Expect(rc).To(BeNil())
 		})
 	})
 

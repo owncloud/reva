@@ -35,6 +35,12 @@ func mockKiteworksHandler() http.Handler {
 	mux.HandleFunc("/rest/quotas", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, `{"folder_quota_allowed":1073741824,"folder_quota_used":14}`)
 	})
+	serverError := func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"server error"}`))
+	}
+	mux.HandleFunc("/rest/folders/error-500", serverError)
+	mux.HandleFunc("/rest/files/error-500", serverError)
 	mux.HandleFunc("/rest/folders/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/rest/folders/")
 		id = strings.Split(id, "/")[0]
