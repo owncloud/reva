@@ -233,20 +233,20 @@ func (d *Driver) CreateReference(_ context.Context, _ string, _ *url.URL) error 
 	return errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) CreateDir(_ context.Context, _ *provider.Reference) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) CreateDir(_ context.Context, _ *provider.Reference) (*storage.CreateDirResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) TouchFile(_ context.Context, _ *provider.Reference, _ bool, _ string) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) TouchFile(_ context.Context, _ *provider.Reference, _ bool, _ string) (*storage.TouchFileResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) Delete(_ context.Context, _ *provider.Reference) error {
 	return errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) Move(_ context.Context, _, _ *provider.Reference) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) Move(_ context.Context, _, _ *provider.Reference) (*storage.MoveResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) InitiateUpload(_ context.Context, _ *provider.Reference, _ int64, _ map[string]string) (map[string]string, error) {
@@ -257,12 +257,12 @@ func (d *Driver) Upload(_ context.Context, _ storage.UploadRequest, _ storage.Up
 	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) RestoreRevision(_ context.Context, _ *provider.Reference, _ string) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) RestoreRevision(_ context.Context, _ *provider.Reference, _ string) (*storage.RestoreRevisionResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) RestoreRecycleItem(_ context.Context, _ *provider.Reference, _, _ string, _ *provider.Reference) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) RestoreRecycleItem(_ context.Context, _ *provider.Reference, _, _ string, _ *provider.Reference) (*storage.RestoreRecycleItemResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) PurgeRecycleItem(_ context.Context, _ *provider.Reference, _, _ string) error {
@@ -297,16 +297,16 @@ func (d *Driver) UnsetArbitraryMetadata(_ context.Context, _ *provider.Reference
 	return errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) SetLock(_ context.Context, _ *provider.Reference, _ *provider.Lock) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) SetLock(_ context.Context, _ *provider.Reference, _ *provider.Lock) (*storage.SetLockResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) RefreshLock(_ context.Context, _ *provider.Reference, _ *provider.Lock, _ string) error {
 	return errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) Unlock(_ context.Context, _ *provider.Reference, _ *provider.Lock) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) Unlock(_ context.Context, _ *provider.Reference, _ *provider.Lock) (*storage.UnlockResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) CreateStorageSpace(_ context.Context, _ *provider.CreateStorageSpaceRequest) (*provider.CreateStorageSpaceResponse, error) {
