@@ -83,7 +83,10 @@ func (c *APIClient) GetTopFolders() (*DirectoryInfo, error) {
 	}
 	defer response.Body.Close()
 	out := &DirectoryInfo{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) GetFolderByID(id string) (*FileInfo, error) {
@@ -97,7 +100,10 @@ func (c *APIClient) GetFolderByID(id string) (*FileInfo, error) {
 	}
 	defer response.Body.Close()
 	out := &FileInfo{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) ListFolderContents(id string) ([]FileInfo, error) {
@@ -151,7 +157,10 @@ func (c *APIClient) GetFileByID(id string) (*FileInfo, error) {
 	}
 	defer response.Body.Close()
 	out := &FileInfo{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) GetFileContents(id, httpRange string) (*http.Response, error) {
@@ -180,7 +189,10 @@ func (c *APIClient) GetUser(id string) (*User, error) {
 	}
 	defer response.Body.Close()
 	out := &User{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) GetQuotaInfo() (*QuotaInfo, error) {
@@ -194,7 +206,10 @@ func (c *APIClient) GetQuotaInfo() (*QuotaInfo, error) {
 	}
 	defer response.Body.Close()
 	out := &QuotaInfo{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) GetGroups(limit, offset int) (*ContactList, error) {
@@ -220,7 +235,10 @@ func (c *APIClient) GetGroups(limit, offset int) (*ContactList, error) {
 	}
 	defer response.Body.Close()
 	out := &ContactList{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) CreateFolder(id string, payload CreateDirRequest) (string, error) {
@@ -253,7 +271,10 @@ func (c *APIClient) InitializeUpload(parentID, name string, size int64, numberOf
 	}
 	defer response.Body.Close()
 	out := &UploadResult{}
-	return out, json.NewDecoder(response.Body).Decode(out)
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *APIClient) UploadChunk(uploadURI, name string, file io.Reader, chunkIndex int, chunk int64, isLastChunk bool) (*FileInfo, error) {
@@ -294,7 +315,10 @@ func (c *APIClient) UploadChunk(uploadURI, name string, file io.Reader, chunkInd
 	defer response.Body.Close()
 	if isLastChunk {
 		out := &FileInfo{}
-		return out, json.NewDecoder(response.Body).Decode(out)
+		if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+			return nil, err
+		}
+		return out, nil
 	}
 	return nil, nil
 }
@@ -425,7 +449,7 @@ func (c *APIClient) SendRequest(req *http.Request) (*http.Response, error) {
 		log.Err(err).Msg("kiteworks API call errored")
 		return nil, err
 	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	if response.StatusCode >= http.StatusBadRequest {
 		defer response.Body.Close()
 		b, _ := io.ReadAll(response.Body)
 		log.Str("body", string(b)).Int("status", response.StatusCode).Msg("kiteworks API call failed")
