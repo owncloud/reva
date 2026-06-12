@@ -2,7 +2,9 @@ package kiteworks
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -140,10 +142,15 @@ func (d *Driver) GetMD(ctx context.Context, ref *provider.Reference, _, _ []stri
 // nodeMD fetches metadata for a node, trying folder first then file.
 func (d *Driver) nodeMD(ctx context.Context, nodeID, spaceID string) (*provider.ResourceInfo, error) {
 	c := d.client(ctx)
-	if fi, err := c.GetFolderByID(nodeID); err == nil {
+	fi, err := c.GetFolderByID(nodeID)
+	if err == nil {
 		return d.toResourceInfo(fi, spaceID), nil
 	}
-	fi, err := c.GetFileByID(nodeID)
+	var ce *kwlib.ClientError
+	if !errors.As(err, &ce) || ce.StatusCode != http.StatusNotFound {
+		return nil, err
+	}
+	fi, err = c.GetFileByID(nodeID)
 	if err != nil {
 		return nil, errtypes.NotFound(nodeID)
 	}
@@ -166,8 +173,7 @@ func (d *Driver) ListFolder(ctx context.Context, ref *provider.Reference, _, _ [
 }
 
 func (d *Driver) Download(ctx context.Context, ref *provider.Reference, openReaderFunc func(*provider.ResourceInfo) bool) (*provider.ResourceInfo, io.ReadCloser, error) {
-	nodeID := ref.GetResourceId().GetOpaqueId()
-	spaceID := ref.GetResourceId().GetSpaceId()
+	nodeID, spaceID := resolveNodeID(ref)
 
 	ri, err := d.nodeMD(ctx, nodeID, spaceID)
 	if err != nil {

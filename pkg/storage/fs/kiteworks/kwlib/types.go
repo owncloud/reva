@@ -1,6 +1,7 @@
 package kwlib
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -89,7 +90,10 @@ type FileFingerPrint struct {
 type Time time.Time
 
 func (t *Time) MarshalJSON() ([]byte, error) {
-	return []byte(time.Time(*t).String()), nil
+	if t == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(time.Time(*t).Format(dateFormat))
 }
 
 func (t *Time) UnmarshalJSON(data []byte) error {
