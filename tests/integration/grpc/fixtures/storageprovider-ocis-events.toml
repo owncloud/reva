@@ -13,9 +13,6 @@ permissionssvc = "{{permissions_address}}"
 [grpc.services.storageprovider.drivers.ocis.filemetadatacache]
 cache_store = "noop"
 
-[grpc.services.storageprovider.events]
-nats_address = "{{nats_address}}"
-
 [grpc.interceptors.eventsmiddleware]
 type = "nats"
 address = "{{nats_address}}"

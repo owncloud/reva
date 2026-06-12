@@ -301,9 +301,7 @@ var _ = Describe("ocis storage provider events", func() {
 				Expect(typed.Ref).ToNot(BeNil())
 			})
 
-			// ItemMoved — emitted by decomposedfs directly, not the gRPC interceptor.
-			// The storageprovider binary must have [grpc.services.storageprovider.events]
-			// configured (separate from [grpc.interceptors.eventsmiddleware]) for this to reach NATS.
+			// ItemMoved
 			It("emits ItemMoved with correct fields", func() {
 				res, err := providerClient.Move(ctx, &storagep.MoveRequest{
 					Source:      pathRef("/lockme.txt"),
