@@ -152,7 +152,11 @@ func (d *Driver) nodeMD(ctx context.Context, nodeID, spaceID string) (*provider.
 	}
 	fi, err = c.GetFileByID(nodeID)
 	if err != nil {
-		return nil, errtypes.NotFound(nodeID)
+		var fce *kwlib.ClientError
+		if errors.As(err, &fce) && fce.StatusCode == http.StatusNotFound {
+			return nil, errtypes.NotFound(nodeID)
+		}
+		return nil, err
 	}
 	return d.toResourceInfo(fi, spaceID), nil
 }

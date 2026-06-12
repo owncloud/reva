@@ -60,6 +60,11 @@ type APIClient struct {
 	httpClient  *http.Client
 }
 
+func decodeJSON(body io.ReadCloser, out any) error {
+	defer body.Close()
+	return json.NewDecoder(body).Decode(out)
+}
+
 func (f *APIClientFactory) Build(host, requestId, remoteAddr, token string, l *zerolog.Logger) *APIClient {
 	return &APIClient{
 		token:      token,
@@ -81,9 +86,8 @@ func (c *APIClient) GetTopFolders() (*DirectoryInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &DirectoryInfo{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -98,9 +102,8 @@ func (c *APIClient) GetFolderByID(id string) (*FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &FileInfo{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -115,9 +118,8 @@ func (c *APIClient) ListFolderContents(id string) ([]FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	dir := &DirectoryInfo{}
-	if err := json.NewDecoder(response.Body).Decode(dir); err != nil {
+	if err := decodeJSON(response.Body, dir); err != nil {
 		return nil, err
 	}
 	return dir.Data, nil
@@ -138,9 +140,8 @@ func (c *APIClient) Search(path string) (*FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	search := &FileSearch{}
-	if err := json.NewDecoder(response.Body).Decode(search); err != nil {
+	if err := decodeJSON(response.Body, search); err != nil {
 		return nil, err
 	}
 	return search.FindByParent(""), nil
@@ -155,9 +156,8 @@ func (c *APIClient) GetFileByID(id string) (*FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &FileInfo{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -187,9 +187,8 @@ func (c *APIClient) GetUser(id string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &User{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -204,9 +203,8 @@ func (c *APIClient) GetQuotaInfo() (*QuotaInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &QuotaInfo{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -233,9 +231,8 @@ func (c *APIClient) GetGroups(limit, offset int) (*ContactList, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &ContactList{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -269,9 +266,8 @@ func (c *APIClient) InitializeUpload(parentID, name string, size int64, numberOf
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	out := &UploadResult{}
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := decodeJSON(response.Body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -312,14 +308,14 @@ func (c *APIClient) UploadChunk(uploadURI, name string, file io.Reader, chunkInd
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
 	if isLastChunk {
 		out := &FileInfo{}
-		if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		if err := decodeJSON(response.Body, out); err != nil {
 			return nil, err
 		}
 		return out, nil
 	}
+	response.Body.Close()
 	return nil, nil
 }
 
