@@ -20,7 +20,10 @@ package decomposedfs
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +31,10 @@ import (
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/google/uuid"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/pkg/errors"
+	"github.com/rogpeppe/go-internal/lockedfile"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
@@ -339,6 +345,293 @@ func (fs *Decomposedfs) InitiateUpload(ctx context.Context, ref *provider.Refere
 		"simple": session.ID(),
 		"tus":    session.ID(),
 	}, nil
+}
+
+// MarkProcessing toggles a processing flag on the resource.
+func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool) error {
+	n, err := fs.lu.NodeFromResource(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if !n.Exists {
+		return errtypes.NotFound(ref.String())
+	}
+	if processing {
+		if n.IsProcessing(ctx) {
+			return errtypes.ResourceProcessing(ref.String())
+		}
+		return n.SetXattr(ctx, prefixes.StatusPrefix, []byte(node.ProcessingStatus))
+	}
+	if !n.IsProcessing(ctx) {
+		return nil
+	}
+	return n.RemoveXattr(ctx, prefixes.StatusPrefix, true)
+}
+
+// CommitUpload writes the staged bytes from source to the resource at ref.
+func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Reference, source storage.UploadSource) (*provider.ResourceInfo, error) {
+	defer source.Body.Close()
+	n, err := fs.lu.NodeFromResource(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if n.ID == "" {
+		n.ID = uuid.New().String()
+	}
+	tmp, err := os.CreateTemp("", "reva-commit-upload-*")
+	if err != nil {
+		return nil, err
+	}
+	defer tmp.Close()
+	defer os.Remove(tmp.Name())
+
+	if _, err := io.Copy(tmp, source.Body); err != nil {
+		return nil, err
+	}
+	sha1h, md5h, adler32h, err := node.CalculateChecksums(ctx, tmp.Name())
+	if err != nil {
+		return nil, err
+	}
+	if cs := source.Metadata["checksum"]; cs != "" {
+		parts := strings.SplitN(cs, " ", 2)
+		if len(parts) != 2 {
+			return nil, errtypes.BadRequest("invalid checksum format. must be '[algorithm] [checksum]'")
+		}
+		var got hash.Hash
+		switch parts[0] {
+		case "sha1":
+			got = sha1h
+		case "md5":
+			got = md5h
+		case "adler32":
+			got = adler32h
+		default:
+			return nil, errtypes.BadRequest("unsupported checksum algorithm: " + parts[0])
+		}
+		if hex.EncodeToString(got.Sum(nil)) != parts[1] {
+			return nil, errtypes.ChecksumMismatch(fmt.Sprintf("invalid checksum: expected %s got %x", parts[1], got.Sum(nil)))
+		}
+	}
+	attrs := node.Attributes{
+		prefixes.ChecksumPrefix + "sha1":    sha1h.Sum(nil),
+		prefixes.ChecksumPrefix + "md5":     md5h.Sum(nil),
+		prefixes.ChecksumPrefix + "adler32": adler32h.Sum(nil),
+	}
+	n.BlobID = uuid.New().String()
+	n.Blobsize = source.Length
+
+	attrs.SetString(prefixes.IDAttr, n.ID)
+	attrs.SetInt64(prefixes.TypeAttr, int64(provider.ResourceType_RESOURCE_TYPE_FILE))
+	attrs.SetString(prefixes.ParentidAttr, n.ParentID)
+	attrs.SetString(prefixes.NameAttr, n.Name)
+	attrs.SetString(prefixes.BlobIDAttr, n.BlobID)
+	attrs.SetInt64(prefixes.BlobsizeAttr, n.Blobsize)
+
+	mtime := time.Now()
+	if mts := source.Metadata["mtime"]; mts != "" {
+		parsed, err := utils.MTimeToTime(mts)
+		if err != nil {
+			return nil, errtypes.BadRequest("invalid mtime: " + mts)
+		}
+		mtime = parsed
+	}
+
+	if fs.um != nil {
+		if gid, ok := ctx.Value(CtxKeySpaceGID).(uint32); ok {
+			unscope, err := fs.um.ScopeUserByIds(-1, int(gid))
+			if err != nil {
+				return nil, errors.Wrap(err, "Decomposedfs: failed to scope user")
+			}
+			if unscope != nil {
+				defer func() { _ = unscope() }()
+			}
+		}
+	}
+
+	n.SpaceRoot, err = node.ReadNode(ctx, fs.lu, n.SpaceID, n.SpaceID, false, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.CheckLock(ctx); err != nil {
+		return nil, err
+	}
+
+	var (
+		unlock   metadata.UnlockFunc
+		sizeDiff int64
+	)
+	defer func() {
+		if unlock == nil {
+			return
+		}
+		if err := unlock(); err != nil {
+			appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Str("parentid", n.ParentID).Msg("could not close lock")
+		}
+	}()
+
+	if n.Exists {
+		f, err := lockedfile.OpenFile(fs.lu.MetadataBackend().LockfilePath(n.InternalPath()), os.O_RDWR|os.O_CREATE, 0600)
+		if err != nil {
+			return nil, errors.Wrap(err, "Decomposedfs: failed to lock node for overwrite")
+		}
+		unlock = func() error { return f.Close() }
+
+		old, err := node.ReadNode(ctx, fs.lu, n.SpaceID, n.ID, false, nil, false)
+		if err != nil {
+			return nil, errors.Wrap(err, "Decomposedfs: failed to read existing node")
+		}
+		if _, err := node.CheckQuota(ctx, n.SpaceRoot, true, uint64(old.Blobsize), uint64(source.Length)); err != nil {
+			return nil, err
+		}
+
+		oldNodeMtime, err := old.GetMTime(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "Decomposedfs: failed to read old mtime")
+		}
+		oldNodeEtag, err := node.CalculateEtag(old.ID, oldNodeMtime)
+		if err != nil {
+			return nil, errors.Wrap(err, "Decomposedfs: failed to calculate old etag")
+		}
+
+		if v := source.Metadata["if-match"]; v != "" && v != oldNodeEtag {
+			return nil, errtypes.Aborted("etag mismatch")
+		}
+		if v := source.Metadata["if-none-match"]; v != "" {
+			if v == "*" {
+				return nil, errtypes.Aborted("etag mismatch, resource exists")
+			}
+			for _, tag := range strings.Split(v, ",") {
+				if tag == oldNodeEtag {
+					return nil, errtypes.Aborted("etag mismatch")
+				}
+			}
+		}
+		if v := source.Metadata["if-unmodified-since"]; v != "" {
+			ius, err := time.Parse(time.RFC3339Nano, v)
+			if err != nil {
+				return nil, errtypes.InternalError(fmt.Sprintf("failed to parse if-unmodified-since time: %s", err))
+			}
+			if oldNodeMtime.After(ius) {
+				return nil, errtypes.Aborted("if-unmodified-since mismatch")
+			}
+		}
+
+		if !fs.o.DisableVersioning {
+			versionPath := fs.lu.InternalPath(n.SpaceID, n.ID+node.RevisionIDDelimiter+oldNodeMtime.UTC().Format(time.RFC3339Nano))
+
+			revFile, err := os.OpenFile(versionPath, os.O_CREATE|os.O_EXCL, 0600)
+			if err != nil {
+				if !errors.Is(err, os.ErrExist) {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to create revision file")
+				}
+				// EEXIST: a revision archive at this mtime already exists from a
+				// prior CommitUpload run. If the archive is byte-identical to the
+				// live node, it is a leftover from an idempotent retry and can be
+				// safely reset; otherwise we refuse rather than clobber history.
+				if err := validateRevisionChecksums(ctx, fs.lu, old, versionPath); err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: existing revision archive does not match current node")
+				}
+				bID, _, err := fs.lu.ReadBlobIDAndSizeAttr(ctx, versionPath, nil)
+				if err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to read blob id of existing revision")
+				}
+				if err := fs.tp.DeleteBlob(&node.Node{BlobID: bID, SpaceID: n.SpaceID}); err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to delete stale revision blob")
+				}
+				revFile, err = os.Create(versionPath)
+				if err != nil {
+					return nil, errors.Wrap(err, "Decomposedfs: failed to truncate revision file")
+				}
+			}
+			revFile.Close()
+
+			if err := fs.lu.CopyMetadataWithSourceLock(ctx, n.InternalPath(), versionPath,
+				func(name string, value []byte) ([]byte, bool) {
+					return value, strings.HasPrefix(name, prefixes.ChecksumPrefix) ||
+						name == prefixes.TypeAttr ||
+						name == prefixes.BlobIDAttr ||
+						name == prefixes.BlobsizeAttr ||
+						name == prefixes.MTimeAttr
+				}, f, true); err != nil {
+				return nil, errors.Wrap(err, "Decomposedfs: failed to archive current revision")
+			}
+
+			if err := os.Chtimes(versionPath, oldNodeMtime, oldNodeMtime); err != nil {
+				return nil, errors.Wrap(err, "Decomposedfs: failed to set revision mtime")
+			}
+		}
+		sizeDiff = source.Length - old.Blobsize
+	} else {
+		if c, ok := fs.lu.(node.IDCacher); ok {
+			if err := c.CacheID(ctx, n.SpaceID, n.ID, filepath.Join(n.ParentPath(), n.Name)); err != nil {
+				appctx.GetLogger(ctx).Error().Err(err).Msg("failed to cache id")
+			}
+		}
+
+		unlock, err = fs.tp.InitNewNode(ctx, n, uint64(source.Length))
+		if err != nil {
+			return nil, errors.Wrap(err, "Decomposedfs: failed to init new node")
+		}
+
+		sizeDiff = source.Length
+	}
+
+	revisionNode := node.New(n.SpaceID, n.ID, n.ParentID, n.Name, n.Blobsize, n.BlobID,
+		provider.ResourceType_RESOURCE_TYPE_FILE, nil, fs.lu)
+	if err := fs.tp.WriteBlob(revisionNode, tmp.Name()); err != nil {
+		return nil, errors.Wrap(err, "Decomposedfs: failed to write blob")
+	}
+
+	if err := fs.lu.TimeManager().OverrideMtime(ctx, n, &attrs, mtime); err != nil {
+		return nil, errors.Wrap(err, "Decomposedfs: failed to set the mtime")
+	}
+
+	if err := n.SetXattrsWithContext(ctx, attrs, false); err != nil {
+		return nil, errors.Wrap(err, "Decomposedfs: failed to write metadata")
+	}
+
+	if err := fs.tp.Propagate(ctx, n, sizeDiff); err != nil {
+		return nil, errors.Wrap(err, "Decomposedfs: failed to propagate")
+	}
+	etag, err := node.CalculateEtag(n.ID, mtime)
+	if err != nil {
+		return nil, errors.Wrap(err, "Decomposedfs: failed to calculate etag")
+	}
+
+	return &provider.ResourceInfo{
+		Id: &provider.ResourceId{
+			StorageId: source.Metadata["providerID"],
+			SpaceId:   n.SpaceID,
+			OpaqueId:  n.ID,
+		},
+		Etag:  etag,
+		Mtime: utils.TimeToTS(mtime),
+	}, nil
+}
+
+// validateRevisionChecksums returns nil iff every checksum xattr (md5, sha1,
+// adler32) on the live node n equals the same xattr on the archive at
+// versionPath. Used to detect a leftover archive from an idempotent retry.
+func validateRevisionChecksums(ctx context.Context, lu node.PathLookup, n *node.Node, versionPath string) error {
+	for _, algo := range []string{"md5", "sha1", "adler32"} {
+		key := prefixes.ChecksumPrefix + algo
+
+		live, err := n.Xattr(ctx, key)
+		if err != nil {
+			return err
+		}
+		archived, err := lu.MetadataBackend().Get(ctx, versionPath, key)
+		if err != nil {
+			return err
+		}
+		if len(live) == 0 || len(archived) == 0 {
+			return errors.New("checksum not found")
+		}
+		if string(live) != string(archived) {
+			return errors.New("checksum mismatch on " + algo)
+		}
+	}
+	return nil
 }
 
 // UseIn tells the tus upload middleware which extensions it supports.
