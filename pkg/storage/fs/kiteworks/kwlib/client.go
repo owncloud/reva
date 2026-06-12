@@ -8,16 +8,30 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 )
 
 func NewClientFactory(server, agentString string, insecure bool) *APIClientFactory {
-	transport := &http.Transport{}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	if insecure {
 		// #nosec
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -25,7 +39,7 @@ func NewClientFactory(server, agentString string, insecure bool) *APIClientFacto
 	return &APIClientFactory{
 		server:      server,
 		agentString: agentString,
-		httpClient:  &http.Client{Transport: transport},
+		httpClient:  &http.Client{Transport: transport, Timeout: 15 * time.Second},
 	}
 }
 
@@ -97,7 +111,10 @@ func (c *APIClient) ListFolderContents(id string) ([]FileInfo, error) {
 	}
 	defer response.Body.Close()
 	dir := &DirectoryInfo{}
-	return dir.Data, json.NewDecoder(response.Body).Decode(dir)
+	if err := json.NewDecoder(response.Body).Decode(dir); err != nil {
+		return nil, err
+	}
+	return dir.Data, nil
 }
 
 func (c *APIClient) Search(path string) (*FileInfo, error) {
