@@ -29,14 +29,9 @@ type key int
 
 const (
 	spaceOwnerSlotKey key = iota
-	moveResultSlotKey key = iota
-	deleteResultSlotKey key = iota
+	moveResultSlotKey
+	deleteResultSlotKey
 )
-
-// DeleteResultSlot is a mutable container for a *storage.DeleteResult.
-type DeleteResultSlot struct {
-	Result *storage.DeleteResult
-}
 
 // --- space owner ---
 
