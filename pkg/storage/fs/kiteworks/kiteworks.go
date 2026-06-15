@@ -251,8 +251,8 @@ func (d *Driver) TouchFile(_ context.Context, _ *provider.Reference, _ bool, _ s
 	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) Delete(_ context.Context, _ *provider.Reference) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) Delete(_ context.Context, _ *provider.Reference) (*storage.DeleteResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) Move(_ context.Context, _, _ *provider.Reference) (*storage.MoveResult, error) {
@@ -327,8 +327,8 @@ func (d *Driver) UpdateStorageSpace(_ context.Context, _ *provider.UpdateStorage
 	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
-func (d *Driver) DeleteStorageSpace(_ context.Context, _ *provider.DeleteStorageSpaceRequest) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
+func (d *Driver) DeleteStorageSpace(_ context.Context, _ *provider.DeleteStorageSpaceRequest) (*storage.DeleteStorageSpaceResult, error) {
+	return nil, errtypes.NotSupported("kiteworks: read-only driver")
 }
 
 func (d *Driver) CreateHome(_ context.Context) error {

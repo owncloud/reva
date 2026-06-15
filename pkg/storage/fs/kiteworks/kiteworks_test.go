@@ -218,7 +218,7 @@ var _ = Describe("kiteworks driver", func() {
 			Expect(err).To(Satisfy(notSupported))
 		})
 		It("rejects Delete", func() {
-			err := d.Delete(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}})
+			_, err := d.Delete(fix.ctx, &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: fix.spaceID}})
 			Expect(err).To(Satisfy(notSupported))
 		})
 		It("rejects Move", func() {
