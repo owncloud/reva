@@ -351,16 +351,30 @@ func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Refere
 	if !n.Exists {
 		return errtypes.NotFound(ref.String())
 	}
-	if processing {
-		if n.IsProcessing(ctx) {
-			return errtypes.ResourceProcessing(ref.String())
+
+	if !processing {
+		if !n.IsProcessing(ctx) {
+			return nil
 		}
-		return n.SetXattr(ctx, prefixes.StatusPrefix, []byte(node.ProcessingStatus))
+		return n.RemoveXattr(ctx, prefixes.StatusPrefix, true)
 	}
-	if !n.IsProcessing(ctx) {
-		return nil
+
+	// Early lock, so MarkProcessing is atomic.
+	unlock, err := fs.lu.MetadataBackend().Lock(n.InternalPath())
+	if err != nil {
+		return err
 	}
-	return n.RemoveXattr(ctx, prefixes.StatusPrefix, true)
+	defer unlock() //nolint:errcheck
+
+	// Evict the node's in-process xattr cache so IsProcessing reads from disk while we hold the lock.
+	n.ResetXattrsCache()
+
+	if n.IsProcessing(ctx) {
+		return errtypes.ResourceProcessing(ref.String())
+	}
+	return n.SetXattrsWithContext(ctx, node.Attributes{
+		prefixes.StatusPrefix: []byte(node.ProcessingStatus),
+	}, false) // acquireLock=false, because outer lock already held
 }
 
 // CommitUpload writes the staged bytes from source to the resource at ref.

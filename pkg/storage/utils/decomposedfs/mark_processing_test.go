@@ -19,6 +19,8 @@
 package decomposedfs_test
 
 import (
+	"sync"
+
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	helpers "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/testhelpers"
@@ -75,6 +77,34 @@ var _ = Describe("MarkProcessing", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(isProcessing()).To(BeFalse())
+		})
+
+		It("allows only one concurrent mark", func() {
+			results := make([]error, 2)
+			ready := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			for i := 0; i < 2; i++ {
+				i := i
+				go func() {
+					defer wg.Done()
+					<-ready
+					results[i] = env.Fs.MarkProcessing(env.Ctx, ref, true)
+				}()
+			}
+			close(ready)
+			wg.Wait()
+
+			nils := 0
+			for _, err := range results {
+				if err == nil {
+					nils++
+				} else {
+					_, ok := err.(errtypes.IsResourceProcessing)
+					Expect(ok).To(BeTrue(), "expected ResourceProcessing, got %T: %v", err, err)
+				}
+			}
+			Expect(nils).To(Equal(1))
 		})
 	})
 
