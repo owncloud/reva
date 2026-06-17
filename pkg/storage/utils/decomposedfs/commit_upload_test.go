@@ -51,6 +51,11 @@ var _ = Describe("CommitUpload", func() {
 
 		// Blobstore.Upload is invoked for every successful commit.
 		env.Blobstore.On("Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string")).Return(nil)
+
+		// TouchFile-first protocol: node must exist before CommitUpload is called.
+		env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).
+			Return(&provider.ResourcePermissions{InitiateFileUpload: true, Stat: true}, nil).Times(1)
+		Expect(env.Fs.TouchFile(env.Ctx, ref, false, "")).To(Succeed())
 	})
 
 	AfterEach(func() {
@@ -66,6 +71,19 @@ var _ = Describe("CommitUpload", func() {
 			Metadata: metadata,
 		}
 	}
+
+	Context("when node does not exist", func() {
+		It("fails with NotFound", func() {
+			missingRef := &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "/dir1/never-created.txt",
+			}
+			_, err := env.Fs.CommitUpload(env.Ctx, missingRef, makeSource([]byte("x"), nil))
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsNotFound)
+			Expect(ok).To(BeTrue(), "expected errtypes.NotFound, got %T: %v", err, err)
+		})
+	})
 
 	Context("on a new file", func() {
 		It("commits the bytes and returns ResourceInfo", func() {
