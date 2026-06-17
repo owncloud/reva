@@ -211,11 +211,20 @@ type DeleteStorageSpaceResult struct {
 	FinalMembers map[string]provider.ResourcePermissions
 }
 
+// UploadChecksums holds pre-computed checksums for a CommitUpload call.
+// All three must be provided; the driver stores them as xattrs without recomputing.
+type UploadChecksums struct {
+	SHA1    []byte
+	MD5     []byte
+	Adler32 []byte
+}
+
 // UploadSource carries the staged bytes for a CommitUpload call.
 type UploadSource struct {
-	Body     io.ReadCloser
-	Length   int64
-	Metadata map[string]string
+	Body      io.ReadCloser
+	Length    int64
+	Metadata  map[string]string
+	Checksums UploadChecksums
 }
 
 // UnscopeFunc is a function that unscopes a user

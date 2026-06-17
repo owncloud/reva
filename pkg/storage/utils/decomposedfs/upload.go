@@ -20,10 +20,7 @@ package decomposedfs
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-	"hash"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,8 +47,7 @@ import (
 )
 
 // Upload uploads data to the given resource
-// TODO Upload (and InitiateUpload) needs a way to receive the expected checksum.
-// Maybe in metadata as 'checksum' => 'sha1 aeosvp45w5xaeoe' = lowercase, space separated?
+// TODO(OCISDEV-901): remove Upload once all drivers are migrated to CommitUpload and the coordinator (OCISDEV-900) is in place.
 func (fs *Decomposedfs) Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
 	_, span := tracer.Start(ctx, "Upload")
 	defer span.End()
@@ -135,8 +131,7 @@ func (fs *Decomposedfs) Upload(ctx context.Context, req storage.UploadRequest, u
 }
 
 // InitiateUpload returns upload ids corresponding to different protocols it supports
-// TODO read optional content for small files in this request
-// TODO InitiateUpload (and Upload) needs a way to receive the expected checksum. Maybe in metadata as 'checksum' => 'sha1 aeosvp45w5xaeoe' = lowercase, space separated?
+// TODO(OCISDEV-901): remove InitiateUpload once all drivers are migrated to CommitUpload and the coordinator (OCISDEV-900) is in place.
 func (fs *Decomposedfs) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
 	_, span := tracer.Start(ctx, "InitiateUpload")
 	defer span.End()
@@ -378,44 +373,13 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if !n.Exists {
 		return nil, errtypes.NotFound(ref.String())
 	}
-	tmp, err := os.CreateTemp("", "reva-commit-upload-*")
-	if err != nil {
-		return nil, err
-	}
-	defer tmp.Close()
-	defer os.Remove(tmp.Name())
-
-	if _, err := io.Copy(tmp, source.Body); err != nil {
-		return nil, err
-	}
-	sha1h, md5h, adler32h, err := node.CalculateChecksums(ctx, tmp.Name())
-	if err != nil {
-		return nil, err
-	}
-	if cs := source.Metadata["checksum"]; cs != "" {
-		parts := strings.SplitN(cs, " ", 2)
-		if len(parts) != 2 {
-			return nil, errtypes.BadRequest("invalid checksum format. must be '[algorithm] [checksum]'")
-		}
-		var got hash.Hash
-		switch parts[0] {
-		case "sha1":
-			got = sha1h
-		case "md5":
-			got = md5h
-		case "adler32":
-			got = adler32h
-		default:
-			return nil, errtypes.BadRequest("unsupported checksum algorithm: " + parts[0])
-		}
-		if hex.EncodeToString(got.Sum(nil)) != parts[1] {
-			return nil, errtypes.ChecksumMismatch(fmt.Sprintf("invalid checksum: expected %s got %x", parts[1], got.Sum(nil)))
-		}
+	if len(source.Checksums.SHA1) == 0 || len(source.Checksums.MD5) == 0 || len(source.Checksums.Adler32) == 0 {
+		return nil, errtypes.BadRequest("CommitUpload: pre-computed checksums missing from source")
 	}
 	attrs := node.Attributes{
-		prefixes.ChecksumPrefix + "sha1":    sha1h.Sum(nil),
-		prefixes.ChecksumPrefix + "md5":     md5h.Sum(nil),
-		prefixes.ChecksumPrefix + "adler32": adler32h.Sum(nil),
+		prefixes.ChecksumPrefix + "sha1":    source.Checksums.SHA1,
+		prefixes.ChecksumPrefix + "md5":     source.Checksums.MD5,
+		prefixes.ChecksumPrefix + "adler32": source.Checksums.Adler32,
 	}
 	n.BlobID = uuid.New().String()
 	n.Blobsize = source.Length
@@ -563,7 +527,7 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 
 	revisionNode := node.New(n.SpaceID, n.ID, n.ParentID, n.Name, n.Blobsize, n.BlobID,
 		provider.ResourceType_RESOURCE_TYPE_FILE, nil, fs.lu)
-	if err := fs.tp.WriteBlob(revisionNode, tmp.Name()); err != nil {
+	if err := fs.tp.WriteBlobFromReader(revisionNode, source.Body, source.Length); err != nil {
 		return nil, errors.Wrap(err, "Decomposedfs: failed to write blob")
 	}
 

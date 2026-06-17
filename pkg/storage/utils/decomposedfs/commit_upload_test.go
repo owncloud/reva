@@ -20,8 +20,9 @@ package decomposedfs_test
 
 import (
 	"bytes"
+	"crypto/md5"
 	"crypto/sha1"
-	"encoding/hex"
+	"hash/adler32"
 	"io"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -49,8 +50,8 @@ var _ = Describe("CommitUpload", func() {
 			Path:       "/dir1/new-file.txt",
 		}
 
-		// Blobstore.Upload is invoked for every successful commit.
-		env.Blobstore.On("Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string")).Return(nil)
+		// Blobstore.UploadFromReader is invoked for every successful commit.
+		env.Blobstore.On("UploadFromReader", mock.AnythingOfType("*node.Node"), mock.Anything, mock.AnythingOfType("int64")).Return(nil)
 
 		// TouchFile-first protocol: node must exist before CommitUpload is called.
 		env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).
@@ -65,10 +66,21 @@ var _ = Describe("CommitUpload", func() {
 	})
 
 	makeSource := func(content []byte, metadata map[string]string) storage.UploadSource {
+		sha1h := sha1.New()
+		md5h := md5.New()
+		adler32h := adler32.New()
+		r1 := io.TeeReader(bytes.NewReader(content), sha1h)
+		r2 := io.TeeReader(r1, md5h)
+		io.Copy(adler32h, r2) //nolint:errcheck
 		return storage.UploadSource{
 			Body:     io.NopCloser(bytes.NewReader(content)),
 			Length:   int64(len(content)),
 			Metadata: metadata,
+			Checksums: storage.UploadChecksums{
+				SHA1:    sha1h.Sum(nil),
+				MD5:     md5h.Sum(nil),
+				Adler32: adler32h.Sum(nil),
+			},
 		}
 	}
 
@@ -82,6 +94,18 @@ var _ = Describe("CommitUpload", func() {
 			Expect(err).To(HaveOccurred())
 			_, ok := err.(errtypes.IsNotFound)
 			Expect(ok).To(BeTrue(), "expected errtypes.NotFound, got %T: %v", err, err)
+		})
+	})
+
+	Context("when checksums are missing", func() {
+		It("fails with BadRequest", func() {
+			_, err := env.Fs.CommitUpload(env.Ctx, ref, storage.UploadSource{
+				Body:   io.NopCloser(bytes.NewReader([]byte("x"))),
+				Length: 1,
+			})
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsBadRequest)
+			Expect(ok).To(BeTrue(), "expected errtypes.BadRequest, got %T: %v", err, err)
 		})
 	})
 
@@ -103,7 +127,7 @@ var _ = Describe("CommitUpload", func() {
 			Expect(ri.Mtime).ToNot(BeNil())
 
 			// blobstore was called once
-			env.Blobstore.AssertCalled(GinkgoT(), "Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string"))
+			env.Blobstore.AssertCalled(GinkgoT(), "UploadFromReader", mock.AnythingOfType("*node.Node"), mock.Anything, mock.AnythingOfType("int64"))
 		})
 	})
 
@@ -128,55 +152,14 @@ var _ = Describe("CommitUpload", func() {
 			// etag changed because mtime changed
 			Expect(ri2.Etag).ToNot(Equal(ri1.Etag))
 			// blobstore was called twice (once per commit)
-			env.Blobstore.AssertNumberOfCalls(GinkgoT(), "Upload", 2)
+			env.Blobstore.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 2)
 		})
 	})
 
 	Context("checksum verification", func() {
 		content := []byte("hello reva")
-		sha1sum := sha1.Sum(content)
-		validSha1 := "sha1 " + hex.EncodeToString(sha1sum[:])
 
-		It("succeeds when the supplied sha1 checksum matches", func() {
-			ri, err := env.Fs.CommitUpload(env.Ctx, ref, makeSource(content, map[string]string{
-				"checksum": validSha1,
-			}))
-
-			Expect(err).ToNot(HaveOccurred())
-			Expect(ri).ToNot(BeNil())
-		})
-
-		It("rejects when the supplied checksum does not match", func() {
-			_, err := env.Fs.CommitUpload(env.Ctx, ref, makeSource(content, map[string]string{
-				"checksum": "sha1 0000000000000000000000000000000000000000",
-			}))
-
-			Expect(err).To(HaveOccurred())
-			_, ok := err.(errtypes.IsChecksumMismatch)
-			Expect(ok).To(BeTrue(), "expected errtypes.ChecksumMismatch, got %T: %v", err, err)
-		})
-
-		It("rejects malformed checksum format", func() {
-			_, err := env.Fs.CommitUpload(env.Ctx, ref, makeSource(content, map[string]string{
-				"checksum": "nospace",
-			}))
-
-			Expect(err).To(HaveOccurred())
-			_, ok := err.(errtypes.IsBadRequest)
-			Expect(ok).To(BeTrue(), "expected errtypes.BadRequest, got %T: %v", err, err)
-		})
-
-		It("rejects unsupported checksum algorithm", func() {
-			_, err := env.Fs.CommitUpload(env.Ctx, ref, makeSource(content, map[string]string{
-				"checksum": "sha256 abc123",
-			}))
-
-			Expect(err).To(HaveOccurred())
-			_, ok := err.(errtypes.IsBadRequest)
-			Expect(ok).To(BeTrue(), "expected errtypes.BadRequest, got %T: %v", err, err)
-		})
-
-		It("commits when no checksum is supplied", func() {
+		It("commits when no client checksum is supplied", func() {
 			ri, err := env.Fs.CommitUpload(env.Ctx, ref, makeSource(content, nil))
 
 			Expect(err).ToNot(HaveOccurred())
