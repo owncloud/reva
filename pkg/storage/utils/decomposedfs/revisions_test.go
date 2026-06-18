@@ -63,7 +63,7 @@ var _ = Describe("Revisions", func() {
 				Expect(env.Fs.MarkProcessing(env.Ctx, fileRef, true)).To(Succeed())
 
 				revisionKey := n.ID + node.RevisionIDDelimiter + "2026-01-01T00:00:00Z"
-				err = env.Fs.RestoreRevision(env.Ctx, fileRef, revisionKey)
+				_, err = env.Fs.RestoreRevision(env.Ctx, fileRef, revisionKey)
 
 				Expect(err).To(HaveOccurred())
 				_, ok := err.(errtypes.IsResourceProcessing)

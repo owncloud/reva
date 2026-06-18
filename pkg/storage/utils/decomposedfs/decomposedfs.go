@@ -930,7 +930,7 @@ func (fs *Decomposedfs) Move(ctx context.Context, oldRef, newRef *provider.Refer
 
 	// check processing on source
 	if oldNode.IsProcessing(ctx) {
-		return errtypes.ResourceProcessing(oldRef.String())
+		return nil, errtypes.ResourceProcessing(oldRef.String())
 	}
 
 	if err := fs.tp.Move(ctx, oldNode, newNode); err != nil {
@@ -1125,11 +1125,6 @@ func (fs *Decomposedfs) Delete(ctx context.Context, ref *provider.Reference) (dr
 
 	if err := node.CheckLock(ctx); err != nil {
 		return nil, err
-	}
-
-	// check processing
-	if node.IsProcessing(ctx) {
-		return errtypes.ResourceProcessing(ref.String())
 	}
 
 	if err := fs.tp.Delete(ctx, node); err != nil {

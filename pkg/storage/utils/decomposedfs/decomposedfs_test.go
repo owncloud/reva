@@ -208,7 +208,7 @@ var _ = Describe("Decomposed", func() {
 
 				Expect(env.Fs.MarkProcessing(env.Ctx, fileRef, true)).To(Succeed())
 
-				err := env.Fs.Delete(env.Ctx, fileRef)
+				_, err := env.Fs.Delete(env.Ctx, fileRef)
 
 				Expect(err).To(HaveOccurred())
 				_, ok := err.(errtypes.IsResourceProcessing)
@@ -236,7 +236,7 @@ var _ = Describe("Decomposed", func() {
 
 				Expect(env.Fs.MarkProcessing(env.Ctx, oldRef, true)).To(Succeed())
 
-				err := env.Fs.Move(env.Ctx, oldRef, newRef)
+				_, err := env.Fs.Move(env.Ctx, oldRef, newRef)
 
 				Expect(err).To(HaveOccurred())
 				_, ok := err.(errtypes.IsResourceProcessing)
