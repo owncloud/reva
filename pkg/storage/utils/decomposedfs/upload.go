@@ -518,6 +518,20 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		return nil, errors.Wrap(err, "Decomposedfs: failed to write blob")
 	}
 
+	// The blob now exists in the blobstore but the node metadata does not yet
+	// reference it. If any of the steps below fail we return an error without
+	// persisting that reference, leaving the blob orphaned. Delete it on the
+	// error path; cleared once the commit completes.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if derr := fs.tp.DeleteBlob(revisionNode); derr != nil {
+			appctx.GetLogger(ctx).Error().Err(derr).Str("nodeid", n.ID).Str("blobid", n.BlobID).Msg("could not clean up orphaned blob after failed commit")
+		}
+	}()
+
 	if err := fs.lu.TimeManager().OverrideMtime(ctx, n, &attrs, mtime); err != nil {
 		return nil, errors.Wrap(err, "Decomposedfs: failed to set the mtime")
 	}
@@ -534,6 +548,7 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		return nil, errors.Wrap(err, "Decomposedfs: failed to calculate etag")
 	}
 
+	committed = true
 	return &provider.ResourceInfo{
 		Id: &provider.ResourceId{
 			StorageId: source.Metadata["providerID"],
