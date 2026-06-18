@@ -466,7 +466,7 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		return nil, errors.Wrap(err, "Decomposedfs: failed to read old mtime")
 	}
 
-	if !fs.o.DisableVersioning {
+	if !fs.o.DisableVersioning && old.BlobID != "" {
 		versionPath := fs.lu.InternalPath(n.SpaceID, n.ID+node.RevisionIDDelimiter+oldNodeMtime.UTC().Format(time.RFC3339Nano))
 
 		revFile, err := os.OpenFile(versionPath, os.O_CREATE|os.O_EXCL, 0600)
