@@ -457,7 +457,7 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if err != nil {
 		return nil, errors.Wrap(err, "Decomposedfs: failed to read existing node")
 	}
-	if _, err := node.CheckQuota(ctx, n.SpaceRoot, true, uint64(old.Blobsize), uint64(source.Length)); err != nil {
+	if err := node.CheckDiskSpace(ctx, n.SpaceRoot, uint64(source.Length)); err != nil {
 		return nil, err
 	}
 
