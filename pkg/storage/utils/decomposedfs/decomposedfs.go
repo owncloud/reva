@@ -1108,7 +1108,7 @@ func (fs *Decomposedfs) Delete(ctx context.Context, ref *provider.Reference) (dr
 	}
 
 	if node.IsProcessing(ctx) {
-		return nil, errtypes.TooEarly("file is processing")
+		return nil, errtypes.ResourceProcessing(ref.String())
 	}
 
 	rp, err := fs.p.AssemblePermissions(ctx, node)

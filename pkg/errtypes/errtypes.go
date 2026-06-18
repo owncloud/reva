@@ -429,6 +429,8 @@ func NewHTTPStatusCodeFromErrtype(err error) int {
 		return http.StatusPartialContent
 	case TooEarly:
 		return http.StatusTooEarly
+	case ResourceProcessing:
+		return http.StatusTooEarly
 	case TooManyRequests:
 		return http.StatusTooManyRequests
 	case ChecksumMismatch:

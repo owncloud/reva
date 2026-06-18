@@ -56,7 +56,8 @@ var _ = Describe("CommitUpload", func() {
 		// TouchFile-first protocol: node must exist before CommitUpload is called.
 		env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).
 			Return(&provider.ResourcePermissions{InitiateFileUpload: true, Stat: true}, nil).Times(1)
-		Expect(env.Fs.TouchFile(env.Ctx, ref, false, "")).To(Succeed())
+		_, err = env.Fs.TouchFile(env.Ctx, ref, false, "")
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	AfterEach(func() {
