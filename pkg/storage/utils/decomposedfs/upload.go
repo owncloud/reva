@@ -465,33 +465,6 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if err != nil {
 		return nil, errors.Wrap(err, "Decomposedfs: failed to read old mtime")
 	}
-	oldNodeEtag, err := node.CalculateEtag(old.ID, oldNodeMtime)
-	if err != nil {
-		return nil, errors.Wrap(err, "Decomposedfs: failed to calculate old etag")
-	}
-
-	if v := source.Metadata["if-match"]; v != "" && v != oldNodeEtag {
-		return nil, errtypes.Aborted("etag mismatch")
-	}
-	if v := source.Metadata["if-none-match"]; v != "" {
-		if v == "*" {
-			return nil, errtypes.Aborted("etag mismatch, resource exists")
-		}
-		for _, tag := range strings.Split(v, ",") {
-			if tag == oldNodeEtag {
-				return nil, errtypes.Aborted("etag mismatch")
-			}
-		}
-	}
-	if v := source.Metadata["if-unmodified-since"]; v != "" {
-		ius, err := time.Parse(time.RFC3339Nano, v)
-		if err != nil {
-			return nil, errtypes.InternalError(fmt.Sprintf("failed to parse if-unmodified-since time: %s", err))
-		}
-		if oldNodeMtime.After(ius) {
-			return nil, errtypes.Aborted("if-unmodified-since mismatch")
-		}
-	}
 
 	if !fs.o.DisableVersioning {
 		versionPath := fs.lu.InternalPath(n.SpaceID, n.ID+node.RevisionIDDelimiter+oldNodeMtime.UTC().Format(time.RFC3339Nano))
