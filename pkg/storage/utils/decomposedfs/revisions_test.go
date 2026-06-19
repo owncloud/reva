@@ -60,7 +60,7 @@ var _ = Describe("Revisions", func() {
 				n, err := env.Lookup.NodeFromResource(env.Ctx, fileRef)
 				Expect(err).ToNot(HaveOccurred())
 
-				Expect(env.Fs.MarkProcessing(env.Ctx, fileRef, true)).To(Succeed())
+				Expect(env.Fs.MarkProcessing(env.Ctx, fileRef, true, "test-session")).To(Succeed())
 
 				revisionKey := n.ID + node.RevisionIDDelimiter + "2026-01-01T00:00:00Z"
 				_, err = env.Fs.RestoreRevision(env.Ctx, fileRef, revisionKey)
