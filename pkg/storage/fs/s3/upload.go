@@ -74,7 +74,7 @@ func (fs *s3FS) InitiateUpload(ctx context.Context, ref *provider.Reference, upl
 	return nil, errtypes.NotSupported("op not supported")
 }
 
-func (fs *s3FS) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool) error {
+func (fs *s3FS) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool, sessionID string) error {
 	return errtypes.NotSupported("op not supported")
 }
 
