@@ -239,6 +239,7 @@ func (s *Service) SetLock(ctx context.Context, req *provider.SetLockRequest) (*p
 			Status: status.NewPermissionDenied(ctx, nil, "no permission to lock the share"),
 		}, nil
 	}
+	// non-decomposedfs drivers may return nil result; set SpaceOwner only when present
 	lockResult, err := s.Storage.SetLock(ctx, req.Ref, req.Lock)
 	if lockResult != nil {
 		storagespace.ContextSetSpaceOwner(ctx, lockResult.SpaceOwner)
@@ -282,6 +283,7 @@ func (s *Service) Unlock(ctx context.Context, req *provider.UnlockRequest) (*pro
 		}, nil
 	}
 
+	// non-decomposedfs drivers may return nil result; set SpaceOwner only when present
 	unlockResult, err := s.Storage.Unlock(ctx, req.Ref, req.Lock)
 	if unlockResult != nil {
 		storagespace.ContextSetSpaceOwner(ctx, unlockResult.SpaceOwner)
@@ -619,8 +621,7 @@ func (s *Service) UpdateStorageSpace(ctx context.Context, req *provider.UpdateSt
 }
 
 func (s *Service) DeleteStorageSpace(ctx context.Context, req *provider.DeleteStorageSpaceRequest) (*provider.DeleteStorageSpaceResponse, error) {
-	// we need to get the space before so we can return critical information
-	// FIXME: why is this string parsing necessary?
+	// pre-fetch spacename+grants before deletion: non-decomposedfs drivers don't populate DeleteStorageSpaceResult
 	idraw, _ := storagespace.ParseID(req.Id.GetOpaqueId())
 	idraw.OpaqueId = idraw.GetSpaceId()
 	id := &provider.StorageSpaceId{OpaqueId: storagespace.FormatResourceID(&idraw)}
@@ -670,17 +671,13 @@ func (s *Service) DeleteStorageSpace(ctx context.Context, req *provider.DeleteSt
 			Status: st,
 		}, nil
 	}
+	if deleteSpaceResult == nil {
+		// driver didn't populate the result; fill SpaceName from the pre-fetched space so SpaceDeleted event is not empty
+		deleteSpaceResult = &storage.DeleteStorageSpaceResult{SpaceName: spaces[0].GetName()}
+	}
 	storagespace.ContextSetDeleteStorageSpaceResult(ctx, deleteSpaceResult)
 
-	// TODO: update cs3api
-	o := utils.AppendPlainToOpaque(nil, "spacename", spaces[0].GetName())
-	o.Map["grants"] = spaces[0].GetOpaque().GetMap()["grants"]
-
-	res := &provider.DeleteStorageSpaceResponse{
-		Opaque: o,
-		Status: status.NewOK(ctx),
-	}
-	return res, nil
+	return &provider.DeleteStorageSpaceResponse{Status: status.NewOK(ctx)}, nil
 }
 
 func (s *Service) CreateContainer(ctx context.Context, req *provider.CreateContainerRequest) (*provider.CreateContainerResponse, error) {
