@@ -340,3 +340,30 @@ func TestUpdateLegacyResourceID(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteStorageSpaceIDNormalization guards against clients sending arbitrary nodeids in DeleteStorageSpaceRequest — without normalisation ListStorageSpaces falls back to a full index scan instead of a direct root-node lookup.
+func TestDeleteStorageSpaceIDNormalization(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string // providerid$spaceid!spaceid — root node ref
+	}{
+		// typical client input: nodeid differs from spaceid
+		{"providerid$spaceid!nodeid", "providerid$spaceid!spaceid"},
+		// client already sent root ref
+		{"providerid$spaceid!spaceid", "providerid$spaceid!spaceid"},
+		// no provider prefix
+		{"spaceid!nodeid", "spaceid!spaceid"},
+		// bare space ID (no nodeid): ParseID sets OpaqueId="" → SpaceId used
+		{"providerid$spaceid", "providerid$spaceid!spaceid"},
+	}
+
+	for _, tt := range tests {
+		idraw, _ := ParseID(tt.input)
+		idraw.OpaqueId = idraw.GetSpaceId()
+		got := FormatResourceID(&idraw)
+
+		if got != tt.expected {
+			t.Errorf("input %q: got %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
