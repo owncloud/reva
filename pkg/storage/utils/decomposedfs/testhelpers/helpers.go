@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/posix/timemanager"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/aspects"
@@ -33,7 +34,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/permissions"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/store"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"

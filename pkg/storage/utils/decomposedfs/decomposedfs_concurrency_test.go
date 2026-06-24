@@ -28,9 +28,9 @@ import (
 	"github.com/rogpeppe/go-internal/lockedfile"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/owncloud/reva/v2/tests/helpers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/owncloud/reva/v2/tests/helpers"
 )
 
 var _ = Describe("Decomposed", func() {
