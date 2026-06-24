@@ -397,7 +397,7 @@ func (f *FS) CommitUpload(ctx context.Context, ref *provider.Reference, source s
 	for _, hook := range f.hooks {
 		ctx, unhook, err = hook("CommitUpload", ctx, ref.GetResourceId().GetSpaceId())
 		if err != nil {
-			return &provider.ResourceInfo{}, err
+			return nil, err
 		}
 		if unhook != nil {
 			unhooks = append(unhooks, unhook)
@@ -408,7 +408,7 @@ func (f *FS) CommitUpload(ctx context.Context, ref *provider.Reference, source s
 
 	for _, unhook := range unhooks {
 		if err := unhook(); err != nil {
-			return &provider.ResourceInfo{}, err
+			return nil, err
 		}
 	}
 
