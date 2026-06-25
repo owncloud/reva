@@ -104,7 +104,7 @@ var ownerPermissions *provider.ResourcePermissions = &provider.ResourcePermissio
 }
 
 func init() {
-	registry.Register("owncloudsql", New)
+	registry.Register("owncloudsql", New, registry.FullCapabilities)
 }
 
 type config struct {

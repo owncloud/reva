@@ -44,7 +44,7 @@ import (
 )
 
 func init() {
-	registry.Register("nextcloud", New)
+	registry.Register("nextcloud", New, registry.FullCapabilities)
 }
 
 // StorageDriverConfig is the configuration struct for a NextcloudStorageDriver

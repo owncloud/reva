@@ -43,7 +43,7 @@ import (
 )
 
 func init() {
-	registry.Register("eoswrapper", New)
+	registry.Register("eoswrapper", New, registry.FullCapabilities)
 }
 
 const (

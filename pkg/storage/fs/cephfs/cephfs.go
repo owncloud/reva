@@ -62,7 +62,7 @@ type cephfs struct {
 }
 
 func init() {
-	registry.Register("cephfs", New)
+	registry.Register("cephfs", New, registry.FullCapabilities)
 }
 
 // New returns an implementation to of the storage.FS interface that talk to

@@ -37,7 +37,7 @@ import (
 )
 
 func init() {
-	registry.Register("eoshomewrapper", New)
+	registry.Register("eoshomewrapper", New, registry.FullCapabilities)
 }
 
 type wrapper struct {

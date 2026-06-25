@@ -56,7 +56,7 @@ import (
 )
 
 func init() {
-	registry.Register("ocmreceived", New)
+	registry.Register("ocmreceived", New, storage.Capabilities{Upload: true})
 }
 
 type driver struct {

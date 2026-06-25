@@ -54,7 +54,7 @@ import (
 )
 
 func init() {
-	registry.Register("posix", New)
+	registry.Register("posix", New, registry.FullCapabilities)
 }
 
 type posixFS struct {

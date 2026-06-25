@@ -68,6 +68,20 @@ type UnlockResult struct {
 	SpaceID    string
 }
 
+// Capabilities is what a storage driver declares about itself. Absent flags
+// default to false — there is no merge with any global capability surface.
+// Keep the set in lockstep with what web branches on. See OCISDEV-904.
+type Capabilities struct {
+	Upload    bool
+	Sharing   bool
+	Locks     bool
+	Versions  bool
+	Trash     bool
+	Tags      bool
+	Favorites bool
+	Search    bool
+}
+
 // FS is the interface to implement access to the storage.
 type FS interface {
 	// Minimal set for a readonly storage driver
