@@ -383,18 +383,6 @@ func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Refere
 	}, false) // acquireLock=false, because outer lock already held
 }
 
-// PropagateRevertedSize updates the tree size counters after a failed upload
-// that was previously counted. Called by the upload coordinator when a
-// postprocessing outcome of PPOutcomeAbort or PPOutcomeDelete is received and
-// the session still owns the processing slot (latestSession == session.ID()).
-func (fs *Decomposedfs) PropagateRevertedSize(ctx context.Context, id *provider.ResourceId, sizeDiff int64) error {
-	n, err := fs.lu.NodeFromID(ctx, id)
-	if err != nil {
-		return err
-	}
-	return fs.tp.Propagate(ctx, n, sizeDiff)
-}
-
 // CommitUpload writes the staged bytes from source to the resource at ref.
 // sessionID is used to identify the correct blob slot prepared before postprocessing.
 // Caller owns source.Body and must close it after CommitUpload returns.

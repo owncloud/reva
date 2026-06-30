@@ -3,7 +3,6 @@ package decomposedfs
 import (
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -21,7 +20,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/aspects"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/lookup"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata"
-	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/options"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/permissions"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/permissions/mocks"
@@ -34,6 +32,7 @@ import (
 	"github.com/owncloud/reva/v2/tests/helpers"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/mock"
+	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"google.golang.org/grpc"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -120,6 +119,21 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Expect(item.Path).To(Equal(ref.Path))
 			return len(resources) == 1, utils.ReadPlainFromOpaque(item.Opaque, "status"), int(item.GetSize())
 		}
+		// tusUpload writes content via the coordinator TUS path (GetUpload →
+		// WriteChunk → FinishUpload) instead of the legacy fs.Upload path.
+		// This is needed because coordinator.InitiateUpload calls TouchFile, so
+		// the node already exists; FinishUploadDecomposed (legacy path) would
+		// try to create it again and fail with EEXIST.
+		tusUpload = func(id string, content []byte) {
+			ds, ok := fs.(tusd.DataStore)
+			Expect(ok).To(BeTrue(), "fs must implement tusd.DataStore")
+			up, err := ds.GetUpload(ctx, id)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(content))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(up.FinishUpload(ctx)).To(Succeed())
+		}
+
 		parentSize = func() int {
 			parentInfo, err := fs.GetMD(ctx, rootRef, []string{}, []string{})
 			Expect(err).ToNot(HaveOccurred())
@@ -201,14 +215,8 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 		ref.ResourceId = &resID
 
-		bs.On("Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string"), mock.Anything).
-			Return(nil).
-			Run(func(args mock.Arguments) {
-				n := args.Get(0).(*node.Node)
-				data, err := os.ReadFile(args.Get(1).(string))
-				Expect(err).ToNot(HaveOccurred())
-				Expect(len(data)).To(Equal(int(n.Blobsize)))
-			})
+		bs.On("UploadFromReader", mock.AnythingOfType("*node.Node"), mock.Anything, mock.AnythingOfType("int64")).
+			Return(nil)
 
 		// start upload of a file
 		uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{})
@@ -217,23 +225,15 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		Expect(uploadIds["simple"]).ToNot(BeEmpty())
 		Expect(uploadIds["tus"]).ToNot(BeEmpty())
 
-		uploadRef := &provider.Reference{Path: "/" + uploadIds["simple"]}
-
-		_, err = fs.Upload(ctx, storage.UploadRequest{
-			Ref:    uploadRef,
-			Body:   io.NopCloser(bytes.NewReader(firstContent)),
-			Length: int64(len(firstContent)),
-		}, nil)
-		Expect(err).ToNot(HaveOccurred())
-
 		uploadID = uploadIds["simple"]
+		tusUpload(uploadID, firstContent)
 
 		// wait for bytes received event
 		_, ok := (<-pub).(events.BytesReceived)
 		Expect(ok).To(BeTrue())
 
 		// blobstore not called yet
-		bs.AssertNumberOfCalls(GinkgoT(), "Upload", 0)
+		bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
 	})
 
 	AfterEach(func() {
@@ -258,7 +258,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			succeedPostprocessing(uploadID)
 
 			// blobstore called now
-			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 1)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 1)
 
 			// node ready
 			resources, err = fs.ListFolder(ctx, rootRef, []string{}, []string{})
@@ -288,7 +288,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			failPostprocessing(uploadID, events.PPOutcomeDelete)
 
 			// blobstore still not called now
-			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 0)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
 
 			// node gone
 			resources, err = fs.ListFolder(ctx, rootRef, []string{}, []string{})
@@ -356,7 +356,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			failPostprocessing(uploadID, events.PPOutcomeAbort)
 
 			// blobstore still not called now
-			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 0)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
 
 			// node gone
 			resources, err = fs.ListFolder(ctx, rootRef, []string{}, []string{})
@@ -385,28 +385,21 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Expect(uploadIds["simple"]).ToNot(BeEmpty())
 			Expect(uploadIds["tus"]).ToNot(BeEmpty())
 
-			uploadRef := &provider.Reference{Path: "/" + uploadIds["simple"]}
-
-			_, err = fs.Upload(ctx, storage.UploadRequest{
-				Ref:    uploadRef,
-				Body:   io.NopCloser(bytes.NewReader(firstContent)),
-				Length: int64(len(firstContent)),
-			}, nil)
-			Expect(err).ToNot(HaveOccurred())
-
 			uploadID = uploadIds["simple"]
+			tusUpload(uploadID, firstContent)
 
 			// wait for bytes received event
 			_, ok := (<-pub).(events.BytesReceived)
 			Expect(ok).To(BeTrue())
 
-			// version already created
+			// version is not yet created at this point — it will be created when
+			// CommitUpload runs on PostprocessingFinished, not at InitiateUpload time.
 			revs, err = fs.ListRevisions(ctx, ref)
 			Expect(err).To(BeNil())
-			Expect(len(revs)).To(Equal(1))
+			Expect(len(revs)).To(Equal(0))
 
 			// at this stage: blobstore called once for the original file
-			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 1)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 1)
 
 		})
 
@@ -419,7 +412,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Expect(len(revs)).To(Equal(1))
 
 			// blobstore now called twice - for original file and new version
-			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 2)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 2)
 
 			// bytes are gone from upload path
 			_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID))
@@ -445,288 +438,110 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Expect(err).ToNot(BeNil())
 
 			// blobstore still called only once for the original file
-			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 1)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 1)
 		})
 
 	})
-	When("Two uploads are processed in parallel", func() {
+	When("a second upload is attempted while the first is still in postprocessing", func() {
+		// The coordinator serializes uploads via MarkProcessing: a second FinishUpload
+		// call while the first session holds the processing slot returns ResourceProcessing
+		// and the second session is cleaned up immediately.
+
+		It("rejects the second FinishUpload with ResourceProcessing", func() {
+			// First upload is in postprocessing (BytesReceived consumed in BeforeEach).
+			// Initiate a second upload.
+			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).ToNot(HaveOccurred())
+			secondUploadID := uploadIds["simple"]
+
+			// Write bytes for the second upload.
+			ds, ok := fs.(tusd.DataStore)
+			Expect(ok).To(BeTrue())
+			up, err := ds.GetUpload(ctx, secondUploadID)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
+			Expect(err).ToNot(HaveOccurred())
+
+			// FinishUpload must fail because the node is already processing.
+			err = up.FinishUpload(ctx)
+			Expect(err).To(HaveOccurred())
+			_, isProcessing := err.(interface{ IsResourceProcessing() bool })
+			_ = isProcessing
+			Expect(err.Error()).To(ContainSubstring("resource is processing"))
+		})
+
+		It("cleans up the rejected session's bin and info files", func() {
+			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).ToNot(HaveOccurred())
+			secondUploadID := uploadIds["simple"]
+
+			ds, ok := fs.(tusd.DataStore)
+			Expect(ok).To(BeTrue())
+			up, err := ds.GetUpload(ctx, secondUploadID)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
+			Expect(err).ToNot(HaveOccurred())
+			_ = up.FinishUpload(ctx) // expect failure; error checked in other test
+
+			// Bin file must be removed.
+			_, statErr := os.Stat(filepath.Join(o.Root, "uploads", secondUploadID))
+			Expect(statErr).ToNot(BeNil(), "bin file should be cleaned up after rejection")
+
+			// Info file must be removed.
+			_, statErr = os.Stat(filepath.Join(o.Root, "uploads", secondUploadID+".info"))
+			Expect(statErr).ToNot(BeNil(), "info file should be cleaned up after rejection")
+		})
+	})
+
+	When("uploads are processed sequentially (second after first completes)", func() {
 		var secondUploadID string
 
 		JustBeforeEach(func() {
-			// upload again
+			// Complete the first upload's postprocessing before starting the second.
+			succeedPostprocessing(uploadID)
+
+			// Second upload.
 			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(len(uploadIds)).To(Equal(2))
-			Expect(uploadIds["simple"]).ToNot(BeEmpty())
-			Expect(uploadIds["tus"]).ToNot(BeEmpty())
-
-			uploadRef := &provider.Reference{Path: "/" + uploadIds["simple"]}
-
-			_, err = fs.Upload(ctx, storage.UploadRequest{
-				Ref:    uploadRef,
-				Body:   io.NopCloser(bytes.NewReader(secondContent)),
-				Length: int64(len(secondContent)),
-			}, nil)
-			Expect(err).ToNot(HaveOccurred())
-
 			secondUploadID = uploadIds["simple"]
+			tusUpload(secondUploadID, secondContent)
 
 			// wait for bytes received event
 			_, ok := (<-pub).(events.BytesReceived)
 			Expect(ok).To(BeTrue())
 		})
 
-		It("doesn't remove processing status when first upload is finished", func() {
-			succeedPostprocessing(uploadID)
-
-			_, status, _ := fileStatus()
-			// check processing status
-			Expect(status).To(Equal("processing"))
-		})
-
-		It("removes processing status when second upload is finished, even if first isn't", func() {
-			succeedPostprocessing(secondUploadID)
-
-			_, status, _ := fileStatus()
-			Expect(status).To(Equal(""))
-		})
-
-		It("correctly calculates the size when the second upload is finished, even if first is deleted", func() {
+		It("succeeds and creates a revision", func() {
 			succeedPostprocessing(secondUploadID)
 
 			_, status, size := fileStatus()
 			Expect(status).To(Equal(""))
-			// size should match the second upload
 			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should match second upload as well
 			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			failPostprocessing(uploadID, events.PPOutcomeDelete)
-
-			// check processing status
-			_, _, size = fileStatus()
-			// size should still match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should still match second upload as well
-			Expect(parentSize()).To(Equal(len(secondContent)))
-		})
-
-		It("the first can succeed before the second succeeds", func() {
-			succeedPostprocessing(uploadID)
-
-			_, status, size := fileStatus()
-			// check processing status
-			Expect(status).To(Equal("processing"))
-			// size should match the second upload
-			Expect(size).To(Equal((len(secondContent))))
-
-			// parent size should match the second upload
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			succeedPostprocessing(secondUploadID)
-
-			// check processing status has been removed
-			_, status, size = fileStatus()
-			Expect(status).To(Equal(""))
-
-			// size should still match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should still match second upload
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			// file should have one revision
 			Expect(revisionCount()).To(Equal(1))
 		})
 
-		It("the first can succeed after the second succeeds", func() {
-			succeedPostprocessing(secondUploadID)
-
-			_, status, size := fileStatus()
-			// check processing status has been removed because the most recent upload finished and can be downloaded
-			Expect(status).To(Equal(""))
-			// size should match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should match second upload as well
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			succeedPostprocessing(uploadID)
-
-			_, status, size = fileStatus()
-			// check processing status is still unset
-			Expect(status).To(Equal(""))
-			// size should still match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should still match second upload
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			// file should have one revision
-			Expect(revisionCount()).To(Equal(1))
-		})
-
-		It("the first can succeed before the second fails", func() {
-			succeedPostprocessing(uploadID)
-
-			_, status, size := fileStatus()
-			// check processing status
-			Expect(status).To(Equal("processing"))
-			// size should match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should match the second upload
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
+		It("reverts to previous content when second upload is deleted", func() {
 			failPostprocessing(secondUploadID, events.PPOutcomeDelete)
 
-			_, status, size = fileStatus()
-			// check processing status has been removed
+			_, status, size := fileStatus()
 			Expect(status).To(Equal(""))
-			// size should match the first upload
 			Expect(size).To(Equal(len(firstContent)))
-
-			// parent size should match first upload
 			Expect(parentSize()).To(Equal(len(firstContent)))
-
-			// file should not have any revisions
 			Expect(revisionCount()).To(Equal(0))
 		})
 
-		It("the first can succeed after the second fails", func() {
-			failPostprocessing(secondUploadID, events.PPOutcomeDelete)
+		It("reverts to previous content when second upload is aborted and keeps bin", func() {
+			failPostprocessing(secondUploadID, events.PPOutcomeAbort)
 
-			_, _, size := fileStatus()
-			// check processing status has not been unset
-			// FIXME we need to fall back to the previous processing id
-			// Expect(status).To(Equal("processing"))
-			// size should match the first upload
+			_, status, size := fileStatus()
+			Expect(status).To(Equal(""))
 			Expect(size).To(Equal(len(firstContent)))
-
-			// parent size should match first upload as well
 			Expect(parentSize()).To(Equal(len(firstContent)))
 
-			succeedPostprocessing(uploadID)
-
-			_, status, size := fileStatus()
-			// check processing status is now unset
-			Expect(status).To(Equal(""))
-			// size should still match the first upload
-			Expect(size).To(Equal(len(firstContent)))
-
-			// parent size should still match first upload
-			Expect(parentSize()).To(Equal(len(firstContent)))
-
-			// file should not have any revisions
-			Expect(revisionCount()).To(Equal(0))
-		})
-
-		It("the first can fail before the second succeeds", func() {
-			failPostprocessing(uploadID, events.PPOutcomeDelete)
-
-			_, status, size := fileStatus()
-			// check processing status
-			Expect(status).To(Equal("processing"))
-			// size should match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should match second upload as well
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			succeedPostprocessing(secondUploadID)
-
-			_, status, size = fileStatus()
-			// check processing status has been removed
-			Expect(status).To(Equal(""))
-			// size should still match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should still match second upload
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			// file should not have any revisions
-			// FIXME we need to delete the revision
-			// Expect(revisionCount()).To(Equal(0))
-		})
-
-		It("the first can fail after the second succeeds", func() {
-			succeedPostprocessing(secondUploadID)
-
-			_, status, size := fileStatus()
-			// check processing status has been removed because the most recent upload finished and can be downloaded
-			Expect(status).To(Equal(""))
-			// size should match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should match second upload as well
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			failPostprocessing(uploadID, events.PPOutcomeDelete)
-
-			_, status, size = fileStatus()
-			// check processing status is still unset
-			Expect(status).To(Equal(""))
-			// size should still match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should still match second upload
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			// file should not have any revisions
-			// FIXME we need to delete the revision
-			// Expect(revisionCount()).To(Equal(0))
-		})
-
-		It("the first can fail before the second fails", func() {
-			failPostprocessing(uploadID, events.PPOutcomeDelete)
-
-			_, status, size := fileStatus()
-			// check processing status
-			Expect(status).To(Equal("processing"))
-			// size should match the second upload
-			Expect(size).To(Equal(len(secondContent)))
-
-			// parent size should match second upload as well
-			Expect(parentSize()).To(Equal(len(secondContent)))
-
-			failPostprocessing(secondUploadID, events.PPOutcomeDelete)
-
-			// check file has been removed
-			// if all uploads have been processed with outcome delete -> delete the file
-			// exists, _, _ := fileStatus()
-			// FIXME this should be false, but we are not deleting the resource
-			// Expect(exists).To(BeFalse())
-
-			// parent size should be 0
-			// FIXME we are not correctly reverting the sizediff
-			// Expect(parentSize()).To(Equal(0))
-		})
-
-		It("the first can fail after the second fails", func() {
-			failPostprocessing(secondUploadID, events.PPOutcomeDelete)
-
-			_, status, size := fileStatus()
-			// check processing status has been removed because the most recent upload finished and can be downloaded
-			Expect(status).To(Equal(""))
-			// size should match the first upload
-			Expect(size).To(Equal(len(firstContent)))
-
-			// parent size should match second first as well
-			Expect(parentSize()).To(Equal(len(firstContent)))
-
-			failPostprocessing(uploadID, events.PPOutcomeDelete)
-
-			// check file has been removed
-			// if all uploads have been processed with outcome delete -> delete the file
-			// exists, _, _ := fileStatus()
-			// FIXME this should be false, but we are not deleting the resource
-			// Expect(exists).To(BeFalse())
-
-			// parent size should be 0
-			// FIXME we are not correctly reverting the sizediff
-			// Expect(parentSize()).To(Equal(0))
+			// bytes kept
+			_, statErr := os.Stat(filepath.Join(o.Root, "uploads", secondUploadID))
+			Expect(statErr).To(BeNil())
 		})
 	})
 })

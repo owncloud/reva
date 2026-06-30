@@ -110,6 +110,43 @@ func (session *OcisSession) GetReader(ctx context.Context) (io.ReadCloser, error
 	return os.Open(session.binPath())
 }
 
+// FinishBytesOnly computes and validates checksums and stores them on the session.
+// It does NOT call CreateNodeForUpload, publish any event, or propagate size.
+// The coordinator calls this from its coordinatedUpload.FinishUpload.
+func (session *OcisSession) FinishBytesOnly(ctx context.Context) error {
+	ctx, span := tracer.Start(session.Context(ctx), "FinishBytesOnly")
+	defer span.End()
+
+	sha1h, md5h, adler32h, err := node.CalculateChecksums(ctx, session.binPath())
+	if err != nil {
+		return err
+	}
+
+	if session.info.MetaData["checksum"] != "" {
+		parts := strings.SplitN(session.info.MetaData["checksum"], " ", 2)
+		if len(parts) != 2 {
+			return errtypes.BadRequest("invalid checksum format. must be '[algorithm] [checksum]'")
+		}
+		switch parts[0] {
+		case "sha1":
+			err = checkHash(parts[1], sha1h)
+		case "md5":
+			err = checkHash(parts[1], md5h)
+		case "adler32":
+			err = checkHash(parts[1], adler32h)
+		default:
+			err = errtypes.BadRequest("unsupported checksum algorithm: " + parts[0])
+		}
+		if err != nil {
+			session.Cleanup(false, true, true, false)
+			return err
+		}
+	}
+
+	session.SetChecksums(sha1h.Sum(nil), md5h.Sum(nil), adler32h.Sum(nil))
+	return nil
+}
+
 // FinishUpload finishes an upload and moves the file to the internal destination
 // implements tusd.DataStore interface
 // returns tusd errors
