@@ -272,6 +272,28 @@ func (fs *Decomposedfs) RevertUploadRevision(ctx context.Context, id *provider.R
 	return n.RevertCurrentRevision(ctx)
 }
 
+// ocisSessionStoreAdapter adapts *upload.OcisStore to pkgupload.SessionStore,
+// bridging the concrete *OcisSession return types to the generic Session interface.
+type ocisSessionStoreAdapter struct{ s *upload.OcisStore }
+
+func (a ocisSessionStoreAdapter) New(ctx context.Context) pkgupload.Session {
+	return a.s.New(ctx)
+}
+func (a ocisSessionStoreAdapter) Get(ctx context.Context, id string) (pkgupload.Session, error) {
+	return a.s.Get(ctx, id)
+}
+func (a ocisSessionStoreAdapter) List(ctx context.Context) ([]pkgupload.Session, error) {
+	sessions, err := a.s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]pkgupload.Session, len(sessions))
+	for i, s := range sessions {
+		result[i] = s
+	}
+	return result, nil
+}
+
 // UploadCoordinator constructs, wires, and starts a driver-agnostic upload
 // coordinator for this decomposedfs instance. The returned storage.FS embeds
 // decomposedfs and overrides the upload-related methods. Callers (storageprovider,
@@ -280,7 +302,7 @@ func (fs *Decomposedfs) RevertUploadRevision(ctx context.Context, id *provider.R
 func (fs *Decomposedfs) UploadCoordinator(stream events.Stream, log *zerolog.Logger) (storage.FS, error) {
 	var store pkgupload.SessionStore
 	if ocisStore, ok := fs.sessionStore.(*upload.OcisStore); ok {
-		store = ocisStore
+		store = ocisSessionStoreAdapter{s: ocisStore}
 	}
 	c := pkgupload.NewCoordinator(fs, store, fs.stream, fs.o.MountID, fs.o.Events.ConsumerGroup, fs.o.Events.NumConsumers, log)
 	if stream != nil {

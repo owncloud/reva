@@ -180,6 +180,8 @@ func (session *OcisSession) FinishUploadDecomposed(ctx context.Context) error {
 		prefixes.ChecksumPrefix + "md5":     md5h.Sum(nil),
 		prefixes.ChecksumPrefix + "adler32": adler32h.Sum(nil),
 	}
+	// store on session so the coordinator can pass them to CommitUpload without re-reading the bin
+	session.SetChecksums(sha1h.Sum(nil), md5h.Sum(nil), adler32h.Sum(nil))
 
 	// At this point we scope by the space to create the final file in the final location
 	if session.store.um != nil && session.info.Storage["SpaceGid"] != "" {

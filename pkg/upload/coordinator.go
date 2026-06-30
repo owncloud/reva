@@ -38,7 +38,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/rhttp/datatx/metrics"
 	"github.com/owncloud/reva/v2/pkg/storage"
-	decomposedupload "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/upload"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
@@ -50,12 +50,42 @@ func init() {
 
 var errNotImplemented = tusd.NewError("ERR_NOT_IMPLEMENTED", "use InitiateUpload on the CS3 API to start a new upload", 501)
 
+// Session is the driver-agnostic view of an upload session the Coordinator
+// needs. OcisSession satisfies this interface.
+type Session interface {
+	tusd.Upload
+	storage.UploadSession
+	ID() string
+	Filename() string
+	Size() int64
+	SizeDiff() int64
+	BinPath() string
+	SpaceGid() string
+	ProviderID() string
+	SpaceID() string
+	NodeID() string
+	NodeExists() bool
+	Dir() string
+	IsProcessing() bool
+	SpaceOwner() *user.UserId
+	Executant() user.UserId
+	Reference() provider.Reference
+	URL(ctx context.Context) (string, error)
+	SetScanData(result string, date time.Time)
+	Checksums() storage.UploadChecksums
+	Metadata() map[string]string
+	Persist(ctx context.Context) error
+	Finalize(ctx context.Context) error
+	Cleanup(revertNodeMetadata, cleanBin, cleanInfo, unmarkPostprocessing bool)
+	Context(ctx context.Context) context.Context
+	Node(ctx context.Context) (*node.Node, error)
+}
+
 // SessionStore abstracts upload-session persistence for the Coordinator.
-// The concrete implementation during OCISDEV-900 is *decomposedupload.OcisStore.
 type SessionStore interface {
-	New(ctx context.Context) *decomposedupload.OcisSession
-	Get(ctx context.Context, id string) (*decomposedupload.OcisSession, error)
-	List(ctx context.Context) ([]*decomposedupload.OcisSession, error)
+	New(ctx context.Context) Session
+	Get(ctx context.Context, id string) (Session, error)
+	List(ctx context.Context) ([]Session, error)
 }
 
 // RevisionReverter is an optional interface a storage driver may implement
@@ -238,9 +268,8 @@ func (c *Coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 			}
 		}
 	} else {
-		// Bump parent tmtime so etag propagates to folder listings.
-		// CommitUpload handles this for the sync path; session.Finalize (async
-		// path) does not go through CommitUpload, so we do it here.
+		// Finalize writes the blob but does not bump parent tmtime; do it here
+		// so etag changes propagate to folder listings after async uploads.
 		p, perr := n.Parent(ctx)
 		if perr == nil && p != nil {
 			_ = p.SetTMTime(ctx, &now)
@@ -458,15 +487,15 @@ func (c *Coordinator) ListUploadSessions(ctx context.Context, filter storage.Upl
 
 // AsTerminatableUpload returns the upload as a TerminatableUpload.
 func (c *Coordinator) AsTerminatableUpload(up tusd.Upload) tusd.TerminatableUpload {
-	return up.(*decomposedupload.OcisSession)
+	return up.(tusd.TerminatableUpload)
 }
 
 // AsLengthDeclarableUpload returns the upload as a LengthDeclarableUpload.
 func (c *Coordinator) AsLengthDeclarableUpload(up tusd.Upload) tusd.LengthDeclarableUpload {
-	return up.(*decomposedupload.OcisSession)
+	return up.(tusd.LengthDeclarableUpload)
 }
 
 // AsConcatableUpload returns the upload as a ConcatableUpload.
 func (c *Coordinator) AsConcatableUpload(up tusd.Upload) tusd.ConcatableUpload {
-	return up.(*decomposedupload.OcisSession)
+	return up.(tusd.ConcatableUpload)
 }

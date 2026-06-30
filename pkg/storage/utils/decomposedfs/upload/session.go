@@ -20,6 +20,7 @@ package upload
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
@@ -373,6 +375,35 @@ func (s *OcisSession) InitiatorID() string {
 func (s *OcisSession) SetScanData(result string, date time.Time) {
 	s.info.MetaData["scanResult"] = result
 	s.info.MetaData["scanDate"] = date.Format(time.RFC3339)
+}
+
+// SetChecksums stores pre-computed checksums so the coordinator can pass them
+// to CommitUpload without re-reading the bin file.
+func (s *OcisSession) SetChecksums(sha1, md5, adler32 []byte) {
+	s.info.MetaData["checksumSHA1"] = hex.EncodeToString(sha1)
+	s.info.MetaData["checksumMD5"] = hex.EncodeToString(md5)
+	s.info.MetaData["checksumAdler32"] = hex.EncodeToString(adler32)
+}
+
+// Checksums returns the pre-computed checksums stored on the session.
+func (s *OcisSession) Checksums() storage.UploadChecksums {
+	decode := func(key string) []byte {
+		b, _ := hex.DecodeString(s.info.MetaData[key])
+		return b
+	}
+	return storage.UploadChecksums{
+		SHA1:    decode("checksumSHA1"),
+		MD5:     decode("checksumMD5"),
+		Adler32: decode("checksumAdler32"),
+	}
+}
+
+// Metadata returns a map of upload metadata needed to call CommitUpload.
+func (s *OcisSession) Metadata() map[string]string {
+	return map[string]string{
+		"providerID": s.info.MetaData["providerID"],
+		"mtime":      s.info.MetaData["mtime"],
+	}
 }
 
 // ScanData returns the virus scan data
