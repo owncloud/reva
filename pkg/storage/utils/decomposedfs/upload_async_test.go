@@ -188,7 +188,10 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			EventStream: stream.Chan{pub, con},
 			Trashbin:    &DecomposedfsTrashbin{},
 		}
-		fs, err = New(o, aspects, &zerolog.Logger{})
+		dfs, err := New(o, aspects, &zerolog.Logger{})
+		Expect(err).ToNot(HaveOccurred())
+		// Wire the coordinator so postprocessing events are consumed during tests.
+		fs, err = dfs.(*Decomposedfs).UploadCoordinator(aspects.EventStream, &zerolog.Logger{})
 		Expect(err).ToNot(HaveOccurred())
 
 		resp, err := fs.CreateStorageSpace(ctx, &provider.CreateStorageSpaceRequest{Owner: user, Type: "personal"})

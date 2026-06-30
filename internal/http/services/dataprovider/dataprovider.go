@@ -35,6 +35,13 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/fs/registry"
 )
 
+// uploadCoordinatorProvider is satisfied by storage drivers that can vend a
+// ready-to-use upload coordinator. Using a local interface avoids importing
+// decomposedfs, which would create an import cycle.
+type uploadCoordinatorProvider interface {
+	UploadCoordinator(stream events.Stream, log *zerolog.Logger) (storage.FS, error)
+}
+
 func init() {
 	global.Register("dataprovider", New)
 }
@@ -104,7 +111,18 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 		return nil, err
 	}
 
-	dataTXs, err := getDataTXs(conf, fs, evstream, log)
+	// Wrap the FS in the upload coordinator if the driver supports it.
+	// The coordinator IS-A storage.FS, so it passes unchanged to getDataTXs.
+	txFS := storage.FS(fs)
+	if cp, ok := fs.(uploadCoordinatorProvider); ok {
+		coordinator, err := cp.UploadCoordinator(evstream, log)
+		if err != nil {
+			return nil, err
+		}
+		txFS = coordinator
+	}
+
+	dataTXs, err := getDataTXs(conf, txFS, evstream, log)
 	if err != nil {
 		return nil, err
 	}

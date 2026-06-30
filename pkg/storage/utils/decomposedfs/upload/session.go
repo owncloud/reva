@@ -263,6 +263,11 @@ func (s *OcisSession) Dir() string {
 	return s.info.Storage["Dir"]
 }
 
+// SpaceGid returns the numeric GID of the space owner, or "" if not set.
+func (s *OcisSession) SpaceGid() string {
+	return s.info.Storage["SpaceGid"]
+}
+
 // Size returns the upload size
 func (s *OcisSession) Size() int64 {
 	return s.info.Size
@@ -347,6 +352,11 @@ func (s *OcisSession) IsProcessing() bool {
 // binPath returns the path to the file storing the binary data.
 func (s *OcisSession) binPath() string {
 	return filepath.Join(s.store.root, "uploads", s.info.ID)
+}
+
+// BinPath returns the path to the staged binary file.
+func (s *OcisSession) BinPath() string {
+	return s.binPath()
 }
 
 // infoPath returns the path to the .info file storing the file's info.

@@ -103,9 +103,18 @@ func (c *config) init() {
 	}
 }
 
+// uploadCoordinatorProvider is satisfied by storage drivers that can vend a
+// ready-to-use upload coordinator (e.g. decomposedfs). Using a local interface
+// avoids importing the decomposedfs or pkg/upload packages here, which would
+// create an import cycle through decomposedfs/node → storageprovider.
+type uploadCoordinatorProvider interface {
+	UploadCoordinator(stream events.Stream, log *zerolog.Logger) (storage.FS, error)
+}
+
 type Service struct {
 	conf          *config
 	Storage       storage.FS
+	Coordinator   storage.FS // nil when driver does not support coordinated uploads
 	dataServerURL *url.URL
 	availableXS   []*provider.ResourceChecksumPriority
 }
@@ -202,9 +211,23 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 		return nil, err
 	}
 
+	// Build and start the upload coordinator if the driver supports it.
+	var coordinator storage.FS
+	if cp, ok := fs.(uploadCoordinatorProvider); ok {
+		evstream, err := estreamFromConfig(c.Events)
+		if err != nil {
+			return nil, err
+		}
+		coordinator, err = cp.UploadCoordinator(evstream, log)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	service := &Service{
 		conf:          c,
 		Storage:       fs,
+		Coordinator:   coordinator,
 		dataServerURL: u,
 		availableXS:   xsTypes,
 	}
@@ -427,7 +450,11 @@ func (s *Service) InitiateFileUpload(ctx context.Context, req *provider.Initiate
 		metadata["expires"] = strconv.Itoa(int(expirationTimestamp.Seconds))
 	}
 
-	uploadIDs, err := s.Storage.InitiateUpload(ctx, req.Ref, uploadLength, metadata)
+	var initiator storage.FS = s.Storage
+	if s.Coordinator != nil {
+		initiator = s.Coordinator
+	}
+	uploadIDs, err := initiator.InitiateUpload(ctx, req.Ref, uploadLength, metadata)
 	if err != nil {
 		var st *rpc.Status
 		switch err.(type) {
