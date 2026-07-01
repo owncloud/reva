@@ -73,7 +73,7 @@ type Capabilities struct {
 	// expose asymmetric capability sets to web. The global storage-shaped keys
 	// in CapabilitiesFiles / CapabilitiesDav stay populated for one release as
 	// deprecated fallback for clients that have not migrated yet.
-	Providers map[string]*ProviderCapabilities `json:"providers,omitempty" xml:"providers,omitempty" mapstructure:"providers"`
+	Providers map[string]*ProviderCapabilities `json:"providers,omitempty" xml:"-" mapstructure:"providers"`
 }
 
 // ProviderCapabilities is the JSON shape served under
