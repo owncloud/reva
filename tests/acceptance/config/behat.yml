@@ -16,5 +16,14 @@ default:
             ocPath: apps/testing/api/v1/occ
         - WebDavPropertiesContext:
 
+    apiKiteworks:
+      paths:
+        - '%paths.base%/../features/apiKiteworks'
+      contexts:
+        - RevaContext:
+        - FeatureContext: *common_feature_context_params
+        - WebDavPropertiesContext:
+        - KiteworksContext:
+
   extensions:
     Cjm\Behat\StepThroughExtension: ~
