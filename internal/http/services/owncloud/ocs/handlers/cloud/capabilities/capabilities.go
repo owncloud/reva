@@ -63,6 +63,11 @@ func (h *Handler) Init(c *config.Config) {
 		c := caps // capture by value before taking address
 		h.c.Capabilities.Providers[name] = &c
 	}
+	// TODO(OCISDEV-901): registry.Capabilities is keyed by driver name, but
+	// StorageSpace.Root.StorageId at runtime equals mount_id from config. A
+	// deployment with mount_id != driver name gets a providers key web can't
+	// match. Fix: register capabilities from New() once mount_id is known, and
+	// key by StorageId rather than driver name.
 
 	// core
 

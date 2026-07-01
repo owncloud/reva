@@ -394,6 +394,9 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if !n.Exists {
 		return nil, errtypes.NotFound(ref.String())
 	}
+	// TODO(OCISDEV-901): once the coordinator (OCISDEV-900) is in place, verify
+	// that MarkProcessing(true) was called before CommitUpload — reject with
+	// ResourceProcessing if IsProcessing is false under the lock at line 457.
 	if len(source.Checksums.SHA1) == 0 || len(source.Checksums.MD5) == 0 || len(source.Checksums.Adler32) == 0 {
 		return nil, errtypes.BadRequest("Decomposedfs: pre-computed checksums missing from source")
 	}
@@ -402,6 +405,10 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		prefixes.ChecksumPrefix + "md5":     source.Checksums.MD5,
 		prefixes.ChecksumPrefix + "adler32": source.Checksums.Adler32,
 	}
+	// TODO(OCISDEV-901): derive BlobID from (n.ID, source.SHA1) so retries reuse
+	// the same blob path instead of minting a fresh UUID each time. A successful
+	// retry currently orphans the previous attempt's blob because the cleanup
+	// defer only runs on the error path.
 	n.BlobID = uuid.New().String()
 	n.Blobsize = source.Length
 
