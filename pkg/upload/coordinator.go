@@ -542,7 +542,35 @@ func (c *Coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 		// or fall back to the owner field (which is the node owner, not space owner).
 		// The session field is used to populate BytesReceived / UploadReady events.
 		spaceOwner = existing.GetOwner()
+
+		// Check quota before accepting the upload. Skip for size-deferred uploads
+		// (uploadLength == -1) since the final size is unknown at this point.
+		// For overwrites the existing bytes will be freed on commit, so the net
+		// required space is uploadLength - existing.Size.
+		if uploadLength >= 0 {
+			spaceRef := &provider.Reference{ResourceId: existing.GetId()}
+			if _, _, remaining, qErr := c.FS.GetQuota(ctx, spaceRef); qErr == nil {
+				existingSize := existing.GetSize()
+				netRequired := uint64(uploadLength)
+				if existingSize < netRequired {
+					netRequired -= existingSize
+				} else {
+					netRequired = 0
+				}
+				if remaining < netRequired {
+					return nil, errtypes.InsufficientStorage("quota exceeded")
+				}
+			}
+		}
 	} else {
+		// Check quota before creating the placeholder node. The ref's ResourceId
+		// points to the space root, which is sufficient for GetQuota.
+		if uploadLength > 0 {
+			if _, _, remaining, qErr := c.FS.GetQuota(ctx, ref); qErr == nil && remaining < uint64(uploadLength) {
+				return nil, errtypes.InsufficientStorage("quota exceeded")
+			}
+		}
+
 		// New file: create the placeholder node via TouchFile.
 		result, tfErr := c.FS.TouchFile(ctx, ref, false, mtime)
 		if tfErr != nil {
