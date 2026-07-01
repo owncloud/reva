@@ -24,6 +24,7 @@ import (
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocs/config"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocs/response"
 	"github.com/owncloud/reva/v2/pkg/owncloud/ocs"
+	fsregistry "github.com/owncloud/reva/v2/pkg/storage/fs/registry"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
@@ -44,6 +45,29 @@ func (h *Handler) Init(c *config.Config) {
 	if h.c.Capabilities == nil {
 		h.c.Capabilities = &ocs.Capabilities{}
 	}
+
+	// OCISDEV-904: populate the per-provider capability section from the
+	// storage driver registry. Each driver self-registers its capability set
+	// at init time (see pkg/storage/fs/registry/registry.go); this handler
+	// runs in the same revad process so the registry is in-memory readable.
+	// Operator-supplied `providers:` entries in OCS config take precedence
+	// over driver defaults — a deployment that mounts a driver under a
+	// non-default providerID can declare the mapping there.
+	if h.c.Capabilities.Providers == nil {
+		h.c.Capabilities.Providers = map[string]*ocs.ProviderCapabilities{}
+	}
+	for name, caps := range fsregistry.Capabilities {
+		if _, override := h.c.Capabilities.Providers[name]; override {
+			continue
+		}
+		c := caps // capture by value before taking address
+		h.c.Capabilities.Providers[name] = &c
+	}
+	// TODO(OCISDEV-901): registry.Capabilities is keyed by driver name, but
+	// StorageSpace.Root.StorageId at runtime equals mount_id from config. A
+	// deployment with mount_id != driver name gets a providers key web can't
+	// match. Fix: register capabilities from New() once mount_id is known, and
+	// key by StorageId rather than driver name.
 
 	// core
 

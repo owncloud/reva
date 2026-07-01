@@ -29,7 +29,7 @@ import (
 )
 
 func init() {
-	registry.Register("local", New)
+	registry.Register("local", New, registry.FullCapabilities)
 }
 
 type config struct {

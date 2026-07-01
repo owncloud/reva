@@ -31,7 +31,7 @@ import (
 )
 
 func init() {
-	registry.Register("cephfs", New)
+	registry.Register("cephfs", New, storage.Capabilities{})
 }
 
 // New returns an implementation to of the storage.FS interface that talk to
