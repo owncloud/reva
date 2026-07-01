@@ -272,34 +272,6 @@ func (fs *Decomposedfs) RevertUploadRevision(ctx context.Context, id *provider.R
 	return n.RevertCurrentRevision(ctx)
 }
 
-// ocisSessionStoreAdapter adapts the decomposedfs SessionStore (which returns
-// concrete *OcisSession) to the generic pkgupload.SessionStore interface.
-type ocisSessionStoreAdapter struct{ s SessionStore }
-
-func (a ocisSessionStoreAdapter) New(ctx context.Context) pkgupload.Session {
-	return a.s.New(ctx)
-}
-func (a ocisSessionStoreAdapter) Get(ctx context.Context, id string) (pkgupload.Session, error) {
-	return a.s.Get(ctx, id)
-}
-func (a ocisSessionStoreAdapter) List(ctx context.Context) ([]pkgupload.Session, error) {
-	sessions, err := a.s.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]pkgupload.Session, len(sessions))
-	for i, s := range sessions {
-		result[i] = s
-	}
-	return result, nil
-}
-
-// UploadSessionStore implements pkgupload.UploadSessionStoreProvider so that
-// storageprovider and dataprovider can construct the Coordinator themselves.
-func (fs *Decomposedfs) UploadSessionStore() pkgupload.SessionStore {
-	return ocisSessionStoreAdapter{s: fs.sessionStore}
-}
-
 // GetQuota returns the quota available
 // TODO Document in the cs3 should we return quota or free space?
 func (fs *Decomposedfs) GetQuota(ctx context.Context, ref *provider.Reference) (total uint64, inUse uint64, remaining uint64, err error) {

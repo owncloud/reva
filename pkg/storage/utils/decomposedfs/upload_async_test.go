@@ -190,6 +190,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 				InitiateFileUpload: true,
 				ListContainer:      true,
 				ListFileVersions:   true,
+				Delete:             true,
 			}, nil)
 
 		// setup fs
@@ -207,7 +208,8 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 		// Wire the coordinator so postprocessing events are consumed during tests.
 		d := dfs.(*Decomposedfs)
-		coord := pkgupload.NewCoordinator(d, d.UploadSessionStore(), aspects.EventStream, "", "dcfs", 1, &zerolog.Logger{})
+		fileStore := pkgupload.NewFileStore(o.Root, pkgupload.TokenOptions{}, &zerolog.Logger{})
+		coord := pkgupload.NewCoordinator(d, fileStore, aspects.EventStream, "", "dcfs", 1, &zerolog.Logger{})
 		Expect(coord.Start(aspects.EventStream)).To(Succeed())
 		fs = coord
 

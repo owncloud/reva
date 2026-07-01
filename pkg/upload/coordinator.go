@@ -45,7 +45,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/rhttp/datatx/metrics"
 	"github.com/owncloud/reva/v2/pkg/storage"
-	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
@@ -176,14 +175,6 @@ type RevisionReverter interface {
 	RevertUploadRevision(ctx context.Context, id *provider.ResourceId) error
 }
 
-// UploadSessionStoreProvider is implemented by storage drivers that own an
-// upload session store. storageprovider and dataprovider use this to obtain
-// the SessionStore when constructing the Coordinator, so the Coordinator is
-// wired entirely outside the driver.
-type UploadSessionStoreProvider interface {
-	UploadSessionStore() SessionStore
-}
-
 // Coordinator owns the upload state machine:
 //   - TUS HTTP layer (InitiateUpload, UseIn, GetUpload, ListUploadSessions)
 //   - postprocessing event loop (PostprocessingFinished, PostprocessingStepFinished,
@@ -300,8 +291,8 @@ func (c *Coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 		failed             bool
 		revertNodeMetadata bool
 		keepUpload         bool
+		retryCommit        bool
 	)
-	unmarkPostprocessing := true
 
 	switch ev.Outcome {
 	default:
@@ -319,12 +310,11 @@ func (c *Coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 		if fopenErr != nil {
 			log.Error().Err(fopenErr).Msg("could not open staged binary for CommitUpload")
 			failed = true
-			revertNodeMetadata = false
 			keepUpload = true
-			unmarkPostprocessing = false
+			retryCommit = true
 		} else {
-			ref := session.Reference()
-			_, commitErr := c.FS.CommitUpload(ctx, &ref, storage.UploadSource{
+			commitRef := session.Reference()
+			_, commitErr := c.FS.CommitUpload(ctx, &commitRef, storage.UploadSource{
 				Body:      f,
 				Length:    session.Size(),
 				Metadata:  session.Metadata(),
@@ -333,9 +323,8 @@ func (c *Coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 			if commitErr != nil {
 				log.Error().Err(commitErr).Msg("could not commit upload")
 				failed = true
-				revertNodeMetadata = false
 				keepUpload = true
-				unmarkPostprocessing = false
+				retryCommit = true
 			} else {
 				metrics.UploadSessionsFinalized.Inc()
 			}
@@ -350,7 +339,23 @@ func (c *Coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 
 	now := time.Now()
 
-	session.Cleanup(revertNodeMetadata, !keepUpload, !keepUpload, unmarkPostprocessing)
+	// Clean up bin and info files. Node reversion (for aborted new-file uploads)
+	// is handled below via the FS interface, not inside session.Cleanup.
+	session.Cleanup(false, !keepUpload, !keepUpload, false)
+
+	nodeRef := session.Reference()
+	if !retryCommit {
+		if err := c.FS.MarkProcessing(ctx, &nodeRef, false, session.ID()); err != nil {
+			log.Error().Err(err).Msg("could not unmark processing after postprocessing finished")
+		}
+		if revertNodeMetadata {
+			if _, delErr := c.FS.Delete(ctx, &nodeRef); delErr != nil {
+				if _, ok := delErr.(errtypes.NotFound); !ok {
+					log.Error().Err(delErr).Msg("could not delete placeholder node on abort")
+				}
+			}
+		}
+	}
 
 	var isVersion bool
 	if session.NodeExists() {
@@ -430,7 +435,19 @@ func (c *Coordinator) handleCleanUpload(ctx context.Context, ev events.CleanUplo
 		log.Error().Err(err).Msg("Failed to get upload")
 		return
 	}
-	session.Cleanup(true, !ev.KeepUpload, !ev.KeepUpload, true)
+	ctx = session.Context(ctx)
+	session.Cleanup(false, !ev.KeepUpload, !ev.KeepUpload, false)
+	nodeRef := session.Reference()
+	if err := c.FS.MarkProcessing(ctx, &nodeRef, false, session.ID()); err != nil {
+		log.Error().Err(err).Msg("could not unmark processing during CleanUpload")
+	}
+	if !session.NodeExists() {
+		if _, delErr := c.FS.Delete(ctx, &nodeRef); delErr != nil {
+			if _, ok := delErr.(errtypes.NotFound); !ok {
+				log.Error().Err(delErr).Msg("could not delete placeholder node during CleanUpload")
+			}
+		}
+	}
 }
 
 func (c *Coordinator) handleRevertRevision(ctx context.Context, ev events.RevertRevision) {
@@ -482,17 +499,15 @@ func (c *Coordinator) handlePostprocessingStepFinished(ctx context.Context, ev e
 		log.Error().Err(err).Msg("Failed to persist scan results")
 	}
 
-	// TODO(OCISDEV-900): other callers of node.SetScanData may need the same
-	// refactor — scanning concerns should likely move out of decomposedfs entirely.
+	ctx = session.Context(ctx)
 	ref := session.Reference()
 	if err := c.FS.SetArbitraryMetadata(ctx, &ref, &provider.ArbitraryMetadata{
 		Metadata: map[string]string{
-			prefixes.ScanStatusPrefix: res.Description,
-			prefixes.ScanDatePrefix:   res.Scandate.Format(time.RFC3339Nano),
+			"scanstatus": res.Description,
+			"scandate":   res.Scandate.Format(time.RFC3339Nano),
 		},
 	}); err != nil {
-		log.Error().Err(err).Msg("Failed to set scan results on node")
-		return
+		log.Error().Err(err).Msg("Failed to write scan results to node")
 	}
 
 	metrics.UploadSessionsScanned.Inc()
