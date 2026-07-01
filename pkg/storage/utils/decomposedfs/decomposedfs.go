@@ -272,9 +272,9 @@ func (fs *Decomposedfs) RevertUploadRevision(ctx context.Context, id *provider.R
 	return n.RevertCurrentRevision(ctx)
 }
 
-// ocisSessionStoreAdapter adapts *upload.OcisStore to pkgupload.SessionStore,
-// bridging the concrete *OcisSession return types to the generic Session interface.
-type ocisSessionStoreAdapter struct{ s *upload.OcisStore }
+// ocisSessionStoreAdapter adapts the decomposedfs SessionStore (which returns
+// concrete *OcisSession) to the generic pkgupload.SessionStore interface.
+type ocisSessionStoreAdapter struct{ s SessionStore }
 
 func (a ocisSessionStoreAdapter) New(ctx context.Context) pkgupload.Session {
 	return a.s.New(ctx)
@@ -294,23 +294,10 @@ func (a ocisSessionStoreAdapter) List(ctx context.Context) ([]pkgupload.Session,
 	return result, nil
 }
 
-// UploadCoordinator constructs, wires, and starts a driver-agnostic upload
-// coordinator for this decomposedfs instance. The returned storage.FS embeds
-// decomposedfs and overrides the upload-related methods. Callers (storageprovider,
-// dataprovider) only interact with storage.FS — they need not import pkg/upload
-// or decomposedfs directly.
-func (fs *Decomposedfs) UploadCoordinator(stream events.Stream, log *zerolog.Logger) (storage.FS, error) {
-	var store pkgupload.SessionStore
-	if ocisStore, ok := fs.sessionStore.(*upload.OcisStore); ok {
-		store = ocisSessionStoreAdapter{s: ocisStore}
-	}
-	c := pkgupload.NewCoordinator(fs, store, fs.stream, fs.o.MountID, fs.o.Events.ConsumerGroup, fs.o.Events.NumConsumers, log)
-	if stream != nil {
-		if err := c.Start(stream); err != nil {
-			return nil, err
-		}
-	}
-	return c, nil
+// UploadSessionStore implements pkgupload.UploadSessionStoreProvider so that
+// storageprovider and dataprovider can construct the Coordinator themselves.
+func (fs *Decomposedfs) UploadSessionStore() pkgupload.SessionStore {
+	return ocisSessionStoreAdapter{s: fs.sessionStore}
 }
 
 // GetQuota returns the quota available

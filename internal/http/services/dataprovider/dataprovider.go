@@ -33,14 +33,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rhttp/router"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/registry"
+	pkgupload "github.com/owncloud/reva/v2/pkg/upload"
 )
-
-// uploadCoordinatorProvider is satisfied by storage drivers that can vend a
-// ready-to-use upload coordinator. Using a local interface avoids importing
-// decomposedfs, which would create an import cycle.
-type uploadCoordinatorProvider interface {
-	UploadCoordinator(stream events.Stream, log *zerolog.Logger) (storage.FS, error)
-}
 
 func init() {
 	global.Register("dataprovider", New)
@@ -51,6 +45,7 @@ type config struct {
 	Driver             string                            `mapstructure:"driver" docs:"localhome;The storage driver to be used."`
 	Drivers            map[string]map[string]interface{} `mapstructure:"drivers" docs:"url:pkg/storage/fs/localhome/localhome.go;The configuration for the storage driver"`
 	DataTXs            map[string]map[string]interface{} `mapstructure:"data_txs" docs:"url:pkg/rhttp/datatx/manager/simple/simple.go;The configuration for the data tx protocols"`
+	MountID            string                            `mapstructure:"mount_id"`
 	NatsAddress        string                            `mapstructure:"nats_address"`
 	NatsClusterID      string                            `mapstructure:"nats_clusterID"`
 	NatsTLSInsecure    bool                              `mapstructure:"nats_tls_insecure"`
@@ -58,6 +53,8 @@ type config struct {
 	NatsEnableTLS      bool                              `mapstructure:"nats_enable_tls"`
 	NatsUsername       string                            `mapstructure:"nats_username"`
 	NatsPassword       string                            `mapstructure:"nats_password"`
+	ConsumerGroup      string                            `mapstructure:"consumer_group"`
+	NumConsumers       int                               `mapstructure:"numconsumers"`
 }
 
 func (c *config) init() {
@@ -66,6 +63,12 @@ func (c *config) init() {
 	}
 	if c.Driver == "" {
 		c.Driver = "localhome"
+	}
+	if c.ConsumerGroup == "" {
+		c.ConsumerGroup = "storageprovider"
+	}
+	if c.NumConsumers <= 0 {
+		c.NumConsumers = 1
 	}
 }
 
@@ -111,15 +114,18 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 		return nil, err
 	}
 
-	// Wrap the FS in the upload coordinator if the driver supports it.
+	// Wrap the FS in the upload coordinator if the driver exposes a session store.
 	// The coordinator IS-A storage.FS, so it passes unchanged to getDataTXs.
 	txFS := storage.FS(fs)
-	if cp, ok := fs.(uploadCoordinatorProvider); ok {
-		coordinator, err := cp.UploadCoordinator(evstream, log)
-		if err != nil {
-			return nil, err
+	if sp, ok := fs.(pkgupload.UploadSessionStoreProvider); ok {
+		coord := pkgupload.NewCoordinator(fs, sp.UploadSessionStore(), evstream,
+			conf.MountID, conf.ConsumerGroup, conf.NumConsumers, log)
+		if evstream != nil {
+			if err := coord.Start(evstream); err != nil {
+				return nil, err
+			}
 		}
-		txFS = coordinator
+		txFS = coord
 	}
 
 	dataTXs, err := getDataTXs(conf, txFS, evstream, log)

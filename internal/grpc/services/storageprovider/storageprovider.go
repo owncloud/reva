@@ -47,6 +47,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/registry"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
+	pkgupload "github.com/owncloud/reva/v2/pkg/upload"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -81,6 +82,8 @@ type eventconfig struct {
 	EnableTLS            bool   `mapstructure:"nats_enable_tls" docs:"events tls switch"`
 	AuthUsername         string `mapstructure:"nats_username" docs:"event stream username"`
 	AuthPassword         string `mapstructure:"nats_password" docs:"event stream password"`
+	ConsumerGroup        string `mapstructure:"consumer_group" docs:"dcfs;Consumer group for the upload coordinator"`
+	NumConsumers         int    `mapstructure:"numconsumers" docs:"1;Number of concurrent postprocessing event consumers"`
 }
 
 func (c *config) init() {
@@ -101,15 +104,15 @@ func (c *config) init() {
 	if len(c.AvailableXS) == 0 {
 		c.AvailableXS = map[string]uint32{"md5": 100, "unset": 1000}
 	}
+
+	if c.Events.ConsumerGroup == "" {
+		c.Events.ConsumerGroup = "storageprovider"
+	}
+	if c.Events.NumConsumers <= 0 {
+		c.Events.NumConsumers = 1
+	}
 }
 
-// uploadCoordinatorProvider is satisfied by storage drivers that can vend a
-// ready-to-use upload coordinator (e.g. decomposedfs). Using a local interface
-// avoids importing the decomposedfs or pkg/upload packages here, which would
-// create an import cycle through decomposedfs/node → storageprovider.
-type uploadCoordinatorProvider interface {
-	UploadCoordinator(stream events.Stream, log *zerolog.Logger) (storage.FS, error)
-}
 
 type Service struct {
 	conf          *config
@@ -211,17 +214,21 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 		return nil, err
 	}
 
-	// Build and start the upload coordinator if the driver supports it.
+	// Build and start the upload coordinator if the driver exposes a session store.
 	var coordinator storage.FS
-	if cp, ok := fs.(uploadCoordinatorProvider); ok {
+	if sp, ok := fs.(pkgupload.UploadSessionStoreProvider); ok {
 		evstream, err := estreamFromConfig(c.Events)
 		if err != nil {
 			return nil, err
 		}
-		coordinator, err = cp.UploadCoordinator(evstream, log)
-		if err != nil {
-			return nil, err
+		coord := pkgupload.NewCoordinator(fs, sp.UploadSessionStore(), evstream,
+			c.MountID, c.Events.ConsumerGroup, c.Events.NumConsumers, log)
+		if evstream != nil {
+			if err := coord.Start(evstream); err != nil {
+				return nil, err
+			}
 		}
+		coordinator = coord
 	}
 
 	service := &Service{
@@ -1328,7 +1335,15 @@ func estreamFromConfig(c eventconfig) (events.Stream, error) {
 		return nil, nil
 	}
 
-	return stream.NatsFromConfig("storageprovider", false, stream.NatsConfig(c))
+	return stream.NatsFromConfig("storageprovider", false, stream.NatsConfig{
+		Endpoint:             c.Endpoint,
+		Cluster:              c.Cluster,
+		TLSInsecure:          c.TLSInsecure,
+		TLSRootCACertificate: c.TLSRootCACertificate,
+		EnableTLS:            c.EnableTLS,
+		AuthUsername:         c.AuthUsername,
+		AuthPassword:         c.AuthPassword,
+	})
 }
 
 func canLockPublicShare(ctx context.Context) bool {

@@ -28,6 +28,7 @@ import (
 	treemocks "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/tree/mocks"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/store"
+	pkgupload "github.com/owncloud/reva/v2/pkg/upload"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/owncloud/reva/v2/tests/helpers"
 	"github.com/rs/zerolog"
@@ -205,8 +206,10 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		dfs, err := New(o, aspects, &zerolog.Logger{})
 		Expect(err).ToNot(HaveOccurred())
 		// Wire the coordinator so postprocessing events are consumed during tests.
-		fs, err = dfs.(*Decomposedfs).UploadCoordinator(aspects.EventStream, &zerolog.Logger{})
-		Expect(err).ToNot(HaveOccurred())
+		d := dfs.(*Decomposedfs)
+		coord := pkgupload.NewCoordinator(d, d.UploadSessionStore(), aspects.EventStream, "", "dcfs", 1, &zerolog.Logger{})
+		Expect(coord.Start(aspects.EventStream)).To(Succeed())
+		fs = coord
 
 		resp, err := fs.CreateStorageSpace(ctx, &provider.CreateStorageSpaceRequest{Owner: user, Type: "personal"})
 		Expect(err).ToNot(HaveOccurred())

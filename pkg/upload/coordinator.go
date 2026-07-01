@@ -176,6 +176,14 @@ type RevisionReverter interface {
 	RevertUploadRevision(ctx context.Context, id *provider.ResourceId) error
 }
 
+// UploadSessionStoreProvider is implemented by storage drivers that own an
+// upload session store. storageprovider and dataprovider use this to obtain
+// the SessionStore when constructing the Coordinator, so the Coordinator is
+// wired entirely outside the driver.
+type UploadSessionStoreProvider interface {
+	UploadSessionStore() SessionStore
+}
+
 // Coordinator owns the upload state machine:
 //   - TUS HTTP layer (InitiateUpload, UseIn, GetUpload, ListUploadSessions)
 //   - postprocessing event loop (PostprocessingFinished, PostprocessingStepFinished,
