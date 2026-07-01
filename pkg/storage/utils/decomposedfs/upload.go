@@ -353,15 +353,11 @@ func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Refere
 	}
 
 	// Early lock, so MarkProcessing is atomic.
-	f, err := lockedfile.OpenFile(fs.lu.MetadataBackend().LockfilePath(n.InternalPath()), os.O_RDWR|os.O_CREATE, 0600)
+	unlock, err := fs.lu.MetadataBackend().Lock(n.InternalPath())
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil {
-			appctx.GetLogger(ctx).Error().Err(cerr).Str("nodeid", n.ID).Msg("could not close mark-processing lock")
-		}
-	}()
+	defer unlock() //nolint:errcheck
 
 	// Evict the node's in-process xattr cache so IsProcessing reads from disk while we hold the lock.
 	n.ResetXattrsCache()
@@ -468,7 +464,7 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if err != nil {
 		return nil, errors.Wrap(err, "Decomposedfs: failed to read existing node")
 	}
-	if _, err := node.CheckQuota(ctx, n.SpaceRoot, old.BlobID != "", uint64(old.Blobsize), uint64(source.Length)); err != nil {
+	if err := node.CheckDiskSpace(ctx, n.SpaceRoot, uint64(source.Length)); err != nil {
 		return nil, err
 	}
 
