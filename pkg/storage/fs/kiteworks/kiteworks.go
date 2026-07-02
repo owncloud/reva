@@ -22,7 +22,7 @@ import (
 )
 
 func init() {
-	registry.Register("kiteworks", New)
+	registry.Register("kiteworks", New, storage.Capabilities{})
 }
 
 // Config holds the driver configuration.

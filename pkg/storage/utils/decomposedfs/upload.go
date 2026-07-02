@@ -353,15 +353,11 @@ func (fs *Decomposedfs) MarkProcessing(ctx context.Context, ref *provider.Refere
 	}
 
 	// Early lock, so MarkProcessing is atomic.
-	f, err := lockedfile.OpenFile(fs.lu.MetadataBackend().LockfilePath(n.InternalPath()), os.O_RDWR|os.O_CREATE, 0600)
+	unlock, err := fs.lu.MetadataBackend().Lock(n.InternalPath())
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil {
-			appctx.GetLogger(ctx).Error().Err(cerr).Str("nodeid", n.ID).Msg("could not close mark-processing lock")
-		}
-	}()
+	defer unlock() //nolint:errcheck
 
 	// Evict the node's in-process xattr cache so IsProcessing reads from disk while we hold the lock.
 	n.ResetXattrsCache()
@@ -398,6 +394,9 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if !n.Exists {
 		return nil, errtypes.NotFound(ref.String())
 	}
+	// TODO(OCISDEV-901): once the coordinator (OCISDEV-900) is in place, verify
+	// that MarkProcessing(true) was called before CommitUpload — reject with
+	// ResourceProcessing if IsProcessing is false under the lock at line 457.
 	if len(source.Checksums.SHA1) == 0 || len(source.Checksums.MD5) == 0 || len(source.Checksums.Adler32) == 0 {
 		return nil, errtypes.BadRequest("Decomposedfs: pre-computed checksums missing from source")
 	}
@@ -406,6 +405,10 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		prefixes.ChecksumPrefix + "md5":     source.Checksums.MD5,
 		prefixes.ChecksumPrefix + "adler32": source.Checksums.Adler32,
 	}
+	// TODO(OCISDEV-901): derive BlobID from (n.ID, source.SHA1) so retries reuse
+	// the same blob path instead of minting a fresh UUID each time. A successful
+	// retry currently orphans the previous attempt's blob because the cleanup
+	// defer only runs on the error path.
 	n.BlobID = uuid.New().String()
 	n.Blobsize = source.Length
 
@@ -468,7 +471,7 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	if err != nil {
 		return nil, errors.Wrap(err, "Decomposedfs: failed to read existing node")
 	}
-	if _, err := node.CheckQuota(ctx, n.SpaceRoot, old.BlobID != "", uint64(old.Blobsize), uint64(source.Length)); err != nil {
+	if err := node.CheckDiskSpace(ctx, n.SpaceRoot, uint64(source.Length)); err != nil {
 		return nil, err
 	}
 

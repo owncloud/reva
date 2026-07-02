@@ -48,7 +48,7 @@ import (
 )
 
 func init() {
-	registry.Register("s3", New)
+	registry.Register("s3", New, storage.Capabilities{Upload: true})
 }
 
 type config struct {

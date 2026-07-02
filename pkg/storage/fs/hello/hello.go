@@ -39,7 +39,7 @@ import (
 )
 
 func init() {
-	registry.Register("hello", New)
+	registry.Register("hello", New, storage.Capabilities{})
 }
 
 type hellofs struct {

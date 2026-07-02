@@ -29,7 +29,7 @@ import (
 )
 
 func init() {
-	registry.Register("eoshome", New)
+	registry.Register("eoshome", New, registry.FullCapabilities)
 }
 
 func parseConfig(m map[string]interface{}) (*eosfs.Config, error) {

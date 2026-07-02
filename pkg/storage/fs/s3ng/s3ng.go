@@ -30,7 +30,7 @@ import (
 )
 
 func init() {
-	registry.Register("s3ng", New)
+	registry.Register("s3ng", New, registry.FullCapabilities)
 }
 
 // New returns an implementation to of the storage.FS interface that talk to

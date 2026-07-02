@@ -21,9 +21,13 @@ package capabilities
 import (
 	"encoding/json"
 	"encoding/xml"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocs/config"
 	"github.com/owncloud/reva/v2/pkg/owncloud/ocs"
+	"github.com/owncloud/reva/v2/pkg/storage"
+	fsregistry "github.com/owncloud/reva/v2/pkg/storage/fs/registry"
 )
 
 func TestMarshal(t *testing.T) {
@@ -57,5 +61,65 @@ func TestMarshal(t *testing.T) {
 	if string(xmlData) != xmlExpect {
 		t.Log(string(xmlData))
 		t.Fatal("xml data does not match")
+	}
+}
+
+// TestGetCapabilitiesExposesPerProviderSection asserts that the
+// /cloud/capabilities response carries a per-provider capability section keyed
+// by driver name, sourced from the storage-fs registry that drivers populate
+// at init time. Absent keys default to false. See OCISDEV-904.
+func TestGetCapabilitiesExposesPerProviderSection(t *testing.T) {
+	// Replace the in-process capability registry for the duration of this
+	// test, then restore.
+	defer func(prev map[string]storage.Capabilities) { fsregistry.Capabilities = prev }(fsregistry.Capabilities)
+	fsregistry.Capabilities = map[string]storage.Capabilities{
+		"decomposedfs": fsregistry.FullCapabilities,
+		"kiteworks":    {},
+	}
+
+	h := &Handler{}
+	h.Init(&config.Config{})
+
+	req := httptest.NewRequest("GET", "/ocs/v1.php/cloud/capabilities?format=json", nil)
+	w := httptest.NewRecorder()
+	h.GetCapabilities(w, req)
+
+	var envelope struct {
+		OCS struct {
+			Data ocs.CapabilitiesData `json:"data"`
+		} `json:"ocs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	caps := envelope.OCS.Data.Capabilities
+	if caps == nil {
+		t.Fatal("response has no capabilities")
+	}
+	if caps.Providers == nil {
+		t.Fatal("response has no providers section")
+	}
+
+	kw, ok := caps.Providers["kiteworks"]
+	if !ok {
+		t.Fatal("response missing kiteworks provider")
+	}
+	if kw.Upload {
+		t.Error("kiteworks must not declare Upload")
+	}
+	if kw.Sharing || kw.Locks || kw.Versions || kw.Trash {
+		t.Error("kiteworks must not declare any write-shaped capability")
+	}
+
+	dfs, ok := caps.Providers["decomposedfs"]
+	if !ok {
+		t.Fatal("response missing decomposedfs provider")
+	}
+	if !dfs.Upload {
+		t.Error("decomposedfs must declare Upload")
+	}
+	if !dfs.Versions || !dfs.Trash {
+		t.Error("decomposedfs must declare Versions and Trash")
 	}
 }

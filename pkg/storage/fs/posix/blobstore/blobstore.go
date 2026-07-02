@@ -80,6 +80,10 @@ func (bs *Blobstore) Upload(node *node.Node, source string) error {
 }
 
 // UploadFromReader stores data from a reader in the blobstore.
+// TODO(OCISDEV-901): replace in-place O_TRUNC write with a tmp-then-rename
+// pattern (same directory so no EXDEV). A crash between write and metadata
+// commit currently leaves the live file truncated/partial, mismatched with its
+// xattrs. See ocis blobstore for the reference pattern.
 func (bs *Blobstore) UploadFromReader(node *node.Node, r io.Reader, size int64) error {
 	path := node.InternalPath()
 

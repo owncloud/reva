@@ -31,7 +31,8 @@ import (
 )
 
 func init() {
-	registry.Register("ocis", New)
+	// Inline explicit form (per OCISDEV-904 AC): registry.Register("ocis", New, storage.Capabilities{Upload: true, Sharing: true, Locks: true, Versions: true, Trash: true, Tags: true, Favorites: true, Search: true})
+	registry.Register("ocis", New, registry.FullCapabilities)
 }
 
 // New returns an implementation to of the storage.FS interface that talk to

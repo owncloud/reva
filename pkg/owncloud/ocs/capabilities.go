@@ -20,6 +20,8 @@ package ocs
 
 import (
 	"encoding/xml"
+
+	"github.com/owncloud/reva/v2/pkg/storage"
 )
 
 // ocsBool implements the xml/json Marshaler interface. The OCS API inconsistency require us to parse boolean values
@@ -63,7 +65,24 @@ type Capabilities struct {
 	Notifications  *CapabilitiesNotifications  `json:"notifications,omitempty" xml:"notifications,omitempty"`
 	Auth           *CapabilitiesAuth           `json:"auth,omitempty" xml:"auth,omitempty"`
 	Vault          *CapabilitiesVault          `json:"vault,omitempty" xml:"vault,omitempty" mapstructure:"vault"`
+	// Providers carries per-storage-provider capability declarations keyed by
+	// providerID (the same id used in StorageSpace.Root.StorageId). Absence of
+	// a key means the provider does not support that capability — there is no
+	// merge or inheritance with the global keys above. Introduced in
+	// OCISDEV-904 so the kiteworks (read-only) and decomposedfs providers can
+	// expose asymmetric capability sets to web. The global storage-shaped keys
+	// in CapabilitiesFiles / CapabilitiesDav stay populated for one release as
+	// deprecated fallback for clients that have not migrated yet.
+	Providers map[string]*ProviderCapabilities `json:"providers,omitempty" xml:"-" mapstructure:"providers"`
 }
+
+// ProviderCapabilities is the JSON shape served under
+// Capabilities.Providers[<id>]. It aliases storage.Capabilities so the driver
+// declaration site IS the wire shape — adding a key in one place adds it
+// everywhere. JSON encoding uses Go's default true/false; the deprecated
+// global keys above keep ocsBool to preserve their existing XML 1/0 wire
+// format for older clients.
+type ProviderCapabilities = storage.Capabilities
 
 // CapabilitiesSearch holds the search capabilities
 type CapabilitiesSearch struct {
@@ -206,18 +225,26 @@ type CapabilitiesAppProvider struct {
 }
 
 // CapabilitiesFiles TODO this is storage specific, not global. What effect do these options have on the clients?
+// The storage-shaped fields here are kept populated for one release as
+// deprecated fallback (OCISDEV-904); new consumers should read from
+// Capabilities.Providers[<providerID>] instead.
 type CapabilitiesFiles struct {
-	PrivateLinks     ocsBool                      `json:"privateLinks" xml:"privateLinks" mapstructure:"private_links"`
-	BigFileChunking  ocsBool                      `json:"bigfilechunking" xml:"bigfilechunking"`
-	Undelete         ocsBool                      `json:"undelete" xml:"undelete"`
-	Versioning       ocsBool                      `json:"versioning" xml:"versioning"`
-	Favorites        ocsBool                      `json:"favorites" xml:"favorites"`
-	FullTextSearch   ocsBool                      `json:"full_text_search" xml:"full_text_search" mapstructure:"full_text_search"`
-	Tags             ocsBool                      `json:"tags" xml:"tags"`
-	BlacklistedFiles []string                     `json:"blacklisted_files" xml:"blacklisted_files>element" mapstructure:"blacklisted_files"`
-	TusSupport       *CapabilitiesFilesTusSupport `json:"tus_support" xml:"tus_support" mapstructure:"tus_support"`
-	Archivers        []*CapabilitiesArchiver      `json:"archivers" xml:"archivers" mapstructure:"archivers"`
-	AppProviders     []*CapabilitiesAppProvider   `json:"app_providers" xml:"app_providers" mapstructure:"app_providers"`
+	PrivateLinks    ocsBool `json:"privateLinks" xml:"privateLinks" mapstructure:"private_links"`
+	BigFileChunking ocsBool `json:"bigfilechunking" xml:"bigfilechunking"`
+	// Deprecated: read Capabilities.Providers[<providerID>].Trash instead.
+	Undelete ocsBool `json:"undelete" xml:"undelete"`
+	// Deprecated: read Capabilities.Providers[<providerID>].Versions instead.
+	Versioning ocsBool `json:"versioning" xml:"versioning"`
+	// Deprecated: read Capabilities.Providers[<providerID>].Favorites instead.
+	Favorites      ocsBool `json:"favorites" xml:"favorites"`
+	FullTextSearch ocsBool `json:"full_text_search" xml:"full_text_search" mapstructure:"full_text_search"`
+	// Deprecated: read Capabilities.Providers[<providerID>].Tags instead.
+	Tags             ocsBool  `json:"tags" xml:"tags"`
+	BlacklistedFiles []string `json:"blacklisted_files" xml:"blacklisted_files>element" mapstructure:"blacklisted_files"`
+	// Deprecated: read Capabilities.Providers[<providerID>].Upload instead. TUS protocol details stay here.
+	TusSupport *CapabilitiesFilesTusSupport `json:"tus_support" xml:"tus_support" mapstructure:"tus_support"`
+	Archivers  []*CapabilitiesArchiver      `json:"archivers" xml:"archivers" mapstructure:"archivers"`
+	AppProviders []*CapabilitiesAppProvider `json:"app_providers" xml:"app_providers" mapstructure:"app_providers"`
 }
 
 // CapabilitiesDav holds dav endpoint config
