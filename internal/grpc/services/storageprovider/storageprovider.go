@@ -214,14 +214,17 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 		return nil, err
 	}
 
-	// Build and start the upload coordinator if the driver exposes a session store.
+	// Build and start the upload coordinator from the service's own config.
+	// The session store is independent of the driver: we construct it directly
+	// from the driver config's root + tokens block rather than relying on the
+	// driver to expose a session store via an interface.
 	var coordinator storage.FS
-	if sp, ok := fs.(pkgupload.UploadSessionStoreProvider); ok {
+	if store := pkgupload.FileStoreFromDriverConf(c.Drivers[c.Driver], log); store != nil {
 		evstream, err := estreamFromConfig(c.Events)
 		if err != nil {
 			return nil, err
 		}
-		coord := pkgupload.NewCoordinator(fs, sp.UploadSessionStore(), evstream,
+		coord := pkgupload.NewCoordinator(fs, store, evstream,
 			c.MountID, c.Events.ConsumerGroup, c.Events.NumConsumers, log)
 		if evstream != nil {
 			if err := coord.Start(evstream); err != nil {

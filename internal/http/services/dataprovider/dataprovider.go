@@ -114,11 +114,11 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 		return nil, err
 	}
 
-	// Wrap the FS in the upload coordinator if the driver exposes a session store.
-	// The coordinator IS-A storage.FS, so it passes unchanged to getDataTXs.
+	// Wrap the FS in the upload coordinator. The session store is constructed
+	// directly from the driver config (root + tokens), independent of the driver.
 	txFS := storage.FS(fs)
-	if sp, ok := fs.(pkgupload.UploadSessionStoreProvider); ok {
-		coord := pkgupload.NewCoordinator(fs, sp.UploadSessionStore(), evstream,
+	if store := pkgupload.FileStoreFromDriverConf(conf.Drivers[conf.Driver], log); store != nil {
+		coord := pkgupload.NewCoordinator(fs, store, evstream,
 			conf.MountID, conf.ConsumerGroup, conf.NumConsumers, log)
 		if evstream != nil {
 			if err := coord.Start(evstream); err != nil {
