@@ -227,6 +227,61 @@ var _ = Describe("Cache", func() {
 			})
 		})
 
+		Describe("RemoveSpaceShares", func() {
+			var secondShareID = "storageid$spaceid!share2"
+
+			BeforeEach(func() {
+				rs := &collaboration.ReceivedShare{
+					Share: &collaboration.Share{
+						Id: &collaboration.ShareId{OpaqueId: secondShareID},
+					},
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				}
+				Expect(c.Add(ctx, userID, spaceID, rs)).To(Succeed())
+			})
+
+			It("removes multiple entries in one call", func() {
+				err := c.RemoveSpaceShares(ctx, userID, spaceID, []string{shareID, secondShareID})
+				Expect(err).ToNot(HaveOccurred())
+
+				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).ToNot(HaveKey(spaceID))
+			})
+
+			It("only removes the requested entries", func() {
+				err := c.RemoveSpaceShares(ctx, userID, spaceID, []string{shareID})
+				Expect(err).ToNot(HaveOccurred())
+
+				s, err := c.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).To(BeNil())
+
+				s, err = c.Get(ctx, userID, spaceID, secondShareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).ToNot(BeNil())
+			})
+
+			It("persists the removal", func() {
+				err := c.RemoveSpaceShares(ctx, userID, spaceID, []string{shareID, secondShareID})
+				Expect(err).ToNot(HaveOccurred())
+
+				fresh := receivedsharecache.New(storage, 0*time.Second)
+				spaces, err := fresh.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).ToNot(HaveKey(spaceID))
+			})
+
+			It("is a no-op for an empty share list", func() {
+				err := c.RemoveSpaceShares(ctx, userID, spaceID, nil)
+				Expect(err).ToNot(HaveOccurred())
+
+				s, err := c.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).ToNot(BeNil())
+			})
+		})
+
 		Describe("Remove", func() {
 			It("removes the entry", func() {
 				err := c.Remove(ctx, userID, spaceID, shareID)

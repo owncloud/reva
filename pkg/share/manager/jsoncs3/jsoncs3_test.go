@@ -1148,5 +1148,110 @@ var _ = Describe("Jsoncs3", func() {
 				})
 			})
 		})
+
+		Describe("PurgeOrphanedReceivedShares", func() {
+			// ssid is the "{storageID}:{spaceID}" key under which the grantee's
+			// received state for the existing share is stored in received.json.
+			ssid := sharedResource.Id.StorageId + ":" + sharedResource.Id.SpaceId
+
+			// orphanProviderCache empties the provider cache for the shared
+			// space on disk, so the share the grantee received no longer
+			// resolves - turning the received-state entry into an orphan.
+			orphanProviderCache := func() {
+				spaces, ok := m.Cache.Providers.Load(sharedResource.Id.StorageId)
+				Expect(ok).To(BeTrue())
+				cache, ok := spaces.Spaces.Load(sharedResource.Id.SpaceId)
+				Expect(ok).To(BeTrue())
+				delete(cache.Shares, share.Id.OpaqueId)
+				bytes, err := json.Marshal(cache)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
+				cache.Etag = "orphaned" // trigger reload on next sync
+			}
+
+			It("keeps entries whose share still exists", func() {
+				stats, err := m.PurgeOrphanedReceivedShares(context.Background(), "", false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stats.OrphansFound).To(Equal(0))
+				Expect(stats.OrphansRemoved).To(Equal(0))
+
+				received, err := m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(len(received)).To(Equal(1))
+			})
+
+			It("removes orphaned entries and persists the removal", func() {
+				orphanProviderCache()
+
+				stats, err := m.PurgeOrphanedReceivedShares(context.Background(), "", false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stats.OrphansFound).To(Equal(1))
+				Expect(stats.OrphansRemoved).To(Equal(1))
+				Expect(stats.Errors).To(Equal(0))
+
+				// a fresh manager (no in-memory cache) must not see the entry
+				fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+				Expect(err).ToNot(HaveOccurred())
+				spaces, err := fresh.UserReceivedStates.List(context.Background(), grantee.GetId().GetOpaqueId())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).ToNot(HaveKey(ssid))
+			})
+
+			It("does not remove anything in dry-run mode", func() {
+				orphanProviderCache()
+
+				stats, err := m.PurgeOrphanedReceivedShares(context.Background(), "", true)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stats.OrphansFound).To(Equal(1))
+				Expect(stats.OrphansRemoved).To(Equal(0))
+
+				fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+				Expect(err).ToNot(HaveOccurred())
+				spaces, err := fresh.UserReceivedStates.List(context.Background(), grantee.GetId().GetOpaqueId())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(HaveKey(ssid))
+			})
+
+			It("only considers the requested space when scoped", func() {
+				orphanProviderCache()
+
+				stats, err := m.PurgeOrphanedReceivedShares(context.Background(), "otherstorage:otherspace", false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stats.OrphansFound).To(Equal(0))
+				Expect(stats.OrphansRemoved).To(Equal(0))
+
+				// the real orphan is untouched because it was out of scope
+				fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+				Expect(err).ToNot(HaveOccurred())
+				spaces, err := fresh.UserReceivedStates.List(context.Background(), grantee.GetId().GetOpaqueId())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(HaveKey(ssid))
+			})
+
+			It("skips the space and keeps entries when the share list cannot be read", func() {
+				// Corrupt the provider cache file so ListSpace fails. The
+				// safety predicate must skip the space rather than treat its
+				// entries as orphans.
+				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", []byte("not-json"))).To(Succeed())
+				spaces, ok := m.Cache.Providers.Load(sharedResource.Id.StorageId)
+				Expect(ok).To(BeTrue())
+				cache, ok := spaces.Spaces.Load(sharedResource.Id.SpaceId)
+				Expect(ok).To(BeTrue())
+				cache.Etag = "corrupt" // trigger reload from the corrupt file
+
+				stats, err := m.PurgeOrphanedReceivedShares(context.Background(), "", false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stats.OrphansFound).To(Equal(0))
+				Expect(stats.OrphansRemoved).To(Equal(0))
+				Expect(stats.Errors).To(Equal(1))
+				Expect(stats.ErrorSamples).To(HaveLen(1))
+
+				fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+				Expect(err).ToNot(HaveOccurred())
+				rspaces, err := fresh.UserReceivedStates.List(context.Background(), grantee.GetId().GetOpaqueId())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(rspaces).To(HaveKey(ssid))
+			})
+		})
 	})
 })
