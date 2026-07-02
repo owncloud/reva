@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
+	"strings"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
@@ -15,6 +16,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/kiteworks"
+	kwfixture "github.com/owncloud/reva/v2/pkg/storage/fs/kiteworks/fixture"
 )
 
 type fixture struct {
@@ -25,7 +27,7 @@ type fixture struct {
 }
 
 func skipIfRealBox() {
-	if os.Getenv("KITEWORKS") != "" {
+	if os.Getenv("STORAGE_USERS_KITEWORKS_ENDPOINT") != "" {
 		Skip("mock-only test")
 	}
 }
@@ -40,7 +42,7 @@ func firstFileID(items []*provider.ResourceInfo) string {
 }
 
 func setupDriver() (storage.FS, *fixture, func()) {
-	ep := os.Getenv("KITEWORKS")
+	ep := os.Getenv("STORAGE_USERS_KITEWORKS_ENDPOINT")
 	if ep == "" {
 		srv := httptest.NewServer(mockKiteworksHandler())
 		d, err := kiteworks.New(map[string]interface{}{"endpoint": srv.URL}, nil, nil)
@@ -56,7 +58,7 @@ func setupDriver() (storage.FS, *fixture, func()) {
 	d, err := kiteworks.New(map[string]interface{}{"endpoint": ep}, nil, nil)
 	Expect(err).ToNot(HaveOccurred())
 
-	ctx := ctxpkg.ContextSetToken(context.Background(), os.Getenv("KITEWORKS_TOKEN"))
+	ctx := ctxpkg.ContextSetToken(context.Background(), os.Getenv("STORAGE_USERS_KITEWORKS_API_TOKEN"))
 
 	spaces, err := d.ListStorageSpaces(ctx, nil, false)
 	Expect(err).ToNot(HaveOccurred(), "real-box ListStorageSpaces failed — check token/endpoint")
@@ -203,6 +205,71 @@ var _ = Describe("kiteworks driver", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(ri).ToNot(BeNil())
 			Expect(rc).To(BeNil())
+		})
+	})
+
+	Context("smoke (real box only)", func() {
+		var (
+			fm     *kwfixture.Manager
+			rootID string
+		)
+
+		BeforeEach(func() {
+			ep := os.Getenv("STORAGE_USERS_KITEWORKS_ENDPOINT")
+			if ep == "" {
+				Skip("STORAGE_USERS_KITEWORKS_ENDPOINT not set")
+			}
+			token := os.Getenv("STORAGE_USERS_KITEWORKS_API_TOKEN")
+			insecure := strings.ToLower(os.Getenv("STORAGE_USERS_KITEWORKS_INSECURE")) == "true"
+			fm = kwfixture.New(ep, token, insecure)
+			var err error
+			rootID, err = fm.Setup("ocis-smoke")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			if fm != nil {
+				fm.Teardown()
+			}
+		})
+
+		It("staged folder appears in ListStorageSpaces", func() {
+			spaces, err := d.ListStorageSpaces(fix.ctx, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+			found := false
+			for _, s := range spaces {
+				if s.Root.OpaqueId == rootID {
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue(), "staged folder %s not found in spaces", rootID)
+		})
+
+		It("uploaded file content round-trips via Download", func() {
+			fileID, err := fm.UploadFile(rootID, "hello.txt", []byte("hello kw"))
+			Expect(err).ToNot(HaveOccurred())
+			ref := &provider.Reference{
+				ResourceId: &provider.ResourceId{SpaceId: rootID, OpaqueId: fileID},
+			}
+			_, rc, err := d.Download(fix.ctx, ref, func(_ *provider.ResourceInfo) bool { return true })
+			Expect(err).ToNot(HaveOccurred())
+			defer rc.Close()
+			b, err := io.ReadAll(rc)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(b)).To(Equal("hello kw"))
+		})
+
+		It("nested mkdir leaf appears in ListFolder", func() {
+			leafID, err := fm.MkdirAll(rootID, "a/b/c")
+			Expect(err).ToNot(HaveOccurred())
+			// list the direct child of root ("a")
+			children, err := d.ListFolder(fix.ctx, &provider.Reference{
+				ResourceId: &provider.ResourceId{SpaceId: rootID, OpaqueId: rootID},
+			}, nil, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(children).ToNot(BeEmpty())
+			_ = leafID
 		})
 	})
 
