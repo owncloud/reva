@@ -323,6 +323,39 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		})
 	})
 
+	When("postprocessing is restarted", func() {
+		It("publishes a BytesReceived event whose ResourceID has the StorageId set", func() {
+			// initiate an upload that carries a providerID, mirroring how the
+			// storageprovider passes its mount id down to the session.
+			const providerID = "the-provider-id"
+			uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{"providerID": providerID})
+			Expect(err).ToNot(HaveOccurred())
+
+			uploadRef := &provider.Reference{Path: "/" + uploadIds["simple"]}
+			_, err = fs.Upload(ctx, storage.UploadRequest{
+				Ref:    uploadRef,
+				Body:   io.NopCloser(bytes.NewReader(firstContent)),
+				Length: int64(len(firstContent)),
+			}, nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			restartID := uploadIds["simple"]
+
+			// drain the BytesReceived event emitted by the upload itself
+			_, ok := (<-pub).(events.BytesReceived)
+			Expect(ok).To(BeTrue())
+
+			// restart postprocessing, as `ocis storage-users uploads sessions --restart` does
+			con <- events.RestartPostprocessing{UploadID: restartID}
+
+			ev, ok := (<-pub).(events.BytesReceived)
+			Expect(ok).To(BeTrue())
+			Expect(ev.ResourceID).ToNot(BeNil())
+			Expect(ev.ResourceID.GetStorageId()).To(Equal(providerID),
+				"restart must propagate the storage/mount id so downstream events can be routed to the owning provider")
+		})
+	})
+
 	When("the uploaded file creates a new version", func() {
 		JustBeforeEach(func() {
 			succeedPostprocessing(uploadID)
