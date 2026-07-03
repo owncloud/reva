@@ -132,6 +132,7 @@ func (s *service) UnprotectedEndpoints() []string {
 
 // CreateOCMCoreShare is called when an OCM request comes into this reva instance from.
 func (s *service) CreateOCMCoreShare(ctx context.Context, req *ocmcore.CreateOCMCoreShareRequest) (*ocmcore.CreateOCMCoreShareResponse, error) {
+	s.log.Info().Msgf("[OCISDEV-756] step 6/7 CreateOCMCoreShare (UNPROTECTED endpoint): persisting share owner=%q creator=%q name=%q", req.GetOwner(), req.GetSender(), req.GetName())
 	if req.ShareType != ocm.ShareType_SHARE_TYPE_USER {
 		return nil, errtypes.NotSupported("share type not supported")
 	}

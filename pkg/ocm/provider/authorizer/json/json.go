@@ -160,6 +160,7 @@ func (a *authorizer) IsProviderAllowed(ctx context.Context, pi *ocmprovider.Prov
 	if err != nil {
 		return err
 	}
+	log.Info().Msgf("[OCISDEV-756] step 5/7 json.IsProviderAllowed: normalizedDomain=%q verifyRequestHostname=%t providerCount=%d", normalizedDomain, a.conf.VerifyRequestHostname, len(a.providers))
 	var providerAuthorized bool
 	if normalizedDomain != "" {
 		for _, p := range a.providers {
@@ -171,12 +172,15 @@ func (a *authorizer) IsProviderAllowed(ctx context.Context, pi *ocmprovider.Prov
 	} else {
 		providerAuthorized = true
 	}
+	log.Info().Msgf("[OCISDEV-756] step 5/7 json.IsProviderAllowed: allowlist match providerAuthorized=%t", providerAuthorized)
 
 	switch {
 	case !a.conf.VerifyRequestHostname:
+		log.Info().Msgf("[OCISDEV-756] step 5/7 json.IsProviderAllowed: ALLOWED domain=%q verifyRequestHostname=%t", normalizedDomain, a.conf.VerifyRequestHostname)
 		log.Info().Msg("VerifyRequestHostname is disabled. any provider is allowed")
 		return nil
 	case !providerAuthorized:
+		log.Info().Msgf("[OCISDEV-756] step 5/7 json.IsProviderAllowed: DENIED domain=%q (not in allowlist)", pi.GetDomain())
 		log.Info().Msg("providerAuthorized is false")
 		return errtypes.NotFound(pi.GetDomain())
 	case len(pi.Services) == 0:

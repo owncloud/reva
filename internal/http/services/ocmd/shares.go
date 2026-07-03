@@ -29,6 +29,7 @@ import (
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	ocmcore "github.com/cs3org/go-cs3apis/cs3/ocm/core/v1beta1"
+	invitepb "github.com/cs3org/go-cs3apis/cs3/ocm/invite/v1beta1"
 	ocmprovider "github.com/cs3org/go-cs3apis/cs3/ocm/provider/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	ocm "github.com/cs3org/go-cs3apis/cs3/sharing/ocm/v1beta1"
@@ -89,6 +90,7 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		reqres.WriteError(w, r, reqres.APIErrorInvalidParameter, err.Error(), nil)
 		return
 	}
+	log.Info().Msgf("[OCISDEV-756] step 1/7 CreateShare: received POST /ocm/shares sender=%q owner=%q name=%q resourceType=%q", req.Sender, req.Owner, req.Name, req.ResourceType)
 
 	_, meshProvider, err := getIDAndMeshProvider(req.Sender)
 	log.Debug().Msgf("Determined Mesh Provider '%s' from req.Sender '%s'", meshProvider, req.Sender)
@@ -97,35 +99,24 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, err := utils.GetClientIP(r)
-	if err != nil {
-		reqres.WriteError(w, r, reqres.APIErrorServerError, fmt.Sprintf("error retrieving client IP from request: %s", r.RemoteAddr), err)
-		return
-	}
-	providerInfo := ocmprovider.ProviderInfo{
-		Domain: meshProvider,
-		Services: []*ocmprovider.Service{
-			{
-				Host: clientIP,
-			},
-		},
-	}
+	log.Info().Msgf("[OCISDEV-756] step 2/7 CreateShare: derived meshProvider domain=%q from sender=%q", meshProvider, req.Sender)
 	gatewayClient, err := h.gatewaySelector.Next()
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, "error getting gateway client", err)
 		return
 	}
-	providerAllowedResp, err := gatewayClient.IsProviderAllowed(ctx, &ocmprovider.IsProviderAllowedRequest{
-		Provider: &providerInfo,
-	})
+	log.Info().Msgf("[OCISDEV-756] step 3a/7 CreateShare: checking domain in allowlist domain=%q", meshProvider)
+	infoResp, err := gatewayClient.GetInfoByDomain(ctx, &ocmprovider.GetInfoByDomainRequest{Domain: meshProvider})
 	if err != nil {
-		reqres.WriteError(w, r, reqres.APIErrorServerError, "error sending a grpc is provider allowed request", err)
+		reqres.WriteError(w, r, reqres.APIErrorServerError, "error checking provider domain", err)
 		return
 	}
-	if providerAllowedResp.Status.Code != rpc.Code_CODE_OK {
-		reqres.WriteError(w, r, reqres.APIErrorUnauthenticated, "provider not authorized", errors.New(providerAllowedResp.Status.Message))
+	if infoResp.Status.Code != rpc.Code_CODE_OK {
+		log.Info().Msgf("[OCISDEV-756] step 3a/7 RESULT: domain not in allowlist domain=%q", meshProvider)
+		reqres.WriteError(w, r, reqres.APIErrorUnauthenticated, "provider not authorized", errors.New(infoResp.Status.Message))
 		return
 	}
+	log.Info().Msgf("[OCISDEV-756] step 3a/7 RESULT: domain in allowlist domain=%q", meshProvider)
 
 	shareWith, _, err := getLocalUserID(req.ShareWith)
 	if err != nil {
@@ -157,6 +148,31 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userFilterJSON, err := utils.MarshalProtoV1ToJSON(userRes.User.Id)
+	if err != nil {
+		reqres.WriteError(w, r, reqres.APIErrorServerError, "error encoding user filter", err)
+		return
+	}
+	log.Info().Msgf("[OCISDEV-756] step 3b/7 CreateShare: verifying invite relationship shareWith=%q sender=%q", req.ShareWith, req.Sender)
+	acceptedResp, err := gatewayClient.GetAcceptedUser(ctx, &invitepb.GetAcceptedUserRequest{
+		RemoteUserId: sender,
+		Opaque: &types.Opaque{
+			Map: map[string]*types.OpaqueEntry{
+				"user-filter": {Decoder: "json", Value: userFilterJSON},
+			},
+		},
+	})
+	if err != nil {
+		reqres.WriteError(w, r, reqres.APIErrorServerError, "error verifying invite relationship", err)
+		return
+	}
+	if acceptedResp.Status.Code != rpc.Code_CODE_OK {
+		log.Info().Msgf("[OCISDEV-756] step 3b/7 RESULT: no invite relationship shareWith=%q sender=%q", req.ShareWith, req.Sender)
+		reqres.WriteError(w, r, reqres.APIErrorUnauthenticated, "no accepted invite for this sender", errors.New(acceptedResp.Status.Message))
+		return
+	}
+	log.Info().Msgf("[OCISDEV-756] step 3b/7 RESULT: invite relationship verified shareWith=%q sender=%q", req.ShareWith, req.Sender)
+
 	o := &types.Opaque{}
 	utils.AppendPlainToOpaque(o, "resourceType", req.ResourceType)
 
@@ -178,6 +194,7 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	log.Info().Msgf("[OCISDEV-756] step 4/7 CreateShare: forwarding to CreateOCMCoreShare owner=%q sender=%q", req.Owner, req.Sender)
 	createShareResp, err := gatewayClient.CreateOCMCoreShare(ctx, createShareReq)
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, "error creating ocm share", err)

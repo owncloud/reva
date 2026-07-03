@@ -35,6 +35,7 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/genproto/protobuf/field_mask"
 
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/ocm/share"
 	"github.com/owncloud/reva/v2/pkg/ocm/share/repository/registry"
@@ -551,6 +552,19 @@ func (m *mgr) StoreReceivedShare(ctx context.Context, share *ocm.ReceivedShare) 
 	if err := m.save(); err != nil {
 		return nil, err
 	}
+
+	secretLen := 0
+	for _, p := range share.GetProtocols() {
+		if wd := p.GetWebdavOptions(); wd != nil {
+			secretLen = len(wd.GetSharedSecret())
+			break
+		}
+	}
+	appctx.GetLogger(ctx).Info().Msgf("[OCISDEV-756] step 7/7 StoreReceivedShare: persisted to ocmshares.json id=%q owner=%q@%q creator=%q@%q secretLen=%d",
+		share.GetId().GetOpaqueId(),
+		share.GetOwner().GetOpaqueId(), share.GetOwner().GetIdp(),
+		share.GetCreator().GetOpaqueId(), share.GetCreator().GetIdp(),
+		secretLen)
 
 	return share, nil
 }
