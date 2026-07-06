@@ -31,7 +31,6 @@ import (
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/storage"
-	"github.com/owncloud/reva/v2/pkg/storage/fs/nextcloud"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/ocis"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/registry"
 	jwt "github.com/owncloud/reva/v2/pkg/token/manager/jwt"
@@ -62,10 +61,6 @@ func createFS(provider string, revads map[string]*Revad) (storage.FS, error) {
 		conf["root"] = revads["storage"].StorageRoot
 		conf["permissionssvc"] = revads["permissions"].GrpcAddress
 		f = ocis.New
-	case "nextcloud":
-		conf["endpoint"] = "http://localhost:8080/apps/sciencemesh/"
-		conf["mock_http"] = true
-		f = nextcloud.New
 	}
 	return f(conf, nil, nil)
 }
@@ -183,8 +178,6 @@ var _ = Describe("storage providers", func() {
 			switch provider {
 			case "ocis":
 				Expect(len(listRes.Infos)).To(Equal(1)) // subdir
-			case "nextcloud":
-				Expect(len(listRes.Infos)).To(Equal(1)) // subdir
 			default:
 				Fail("unknown provider")
 			}
@@ -288,12 +281,8 @@ var _ = Describe("storage providers", func() {
 			res, err := providerClient.GetPath(ctx, &storagep.GetPathRequest{ResourceId: statRes.Info.Id})
 			Expect(err).ToNot(HaveOccurred())
 
-			// TODO: FIXME both cases should work for all providers
-
 			Expect(res.Status.Code).To(Equal(rpcv1beta1.Code_CODE_OK))
-			if provider != "nextcloud" {
-				Expect(res.Path).To(Equal(subdirPath))
-			}
+			Expect(res.Path).To(Equal(subdirPath))
 		})
 	}
 
@@ -719,9 +708,6 @@ var _ = Describe("storage providers", func() {
 					content2 := []byte("22")
 
 					vRef := ref(provider, versionedFilePath)
-					if provider == "nextcloud" {
-						vRef.ResourceId = &storagep.ResourceId{StorageId: user.Id.OpaqueId}
-					}
 
 					_, err = fs.CreateStorageSpace(ctx, &storagep.CreateStorageSpaceRequest{
 						Owner: user,
@@ -739,13 +725,6 @@ var _ = Describe("storage providers", func() {
 		})
 
 	}
-
-	suite("nextcloud", []RevadConfig{
-		{
-			Name:   "storage",
-			Config: "storageprovider-nextcloud.toml",
-		},
-	})
 
 	suite("ocis", []RevadConfig{
 		{
