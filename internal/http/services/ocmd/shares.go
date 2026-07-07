@@ -98,18 +98,33 @@ func (h *sharesHandler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientIP, err := utils.GetClientIP(r)
+	if err != nil {
+		reqres.WriteError(w, r, reqres.APIErrorServerError, fmt.Sprintf("error retrieving client IP from request: %s", r.RemoteAddr), err)
+		return
+	}
+	providerInfo := ocmprovider.ProviderInfo{
+		Domain: meshProvider,
+		Services: []*ocmprovider.Service{
+			{
+				Host: clientIP,
+			},
+		},
+	}
 	gatewayClient, err := h.gatewaySelector.Next()
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, "error getting gateway client", err)
 		return
 	}
-	infoResp, err := gatewayClient.GetInfoByDomain(ctx, &ocmprovider.GetInfoByDomainRequest{Domain: meshProvider})
+	providerAllowedResp, err := gatewayClient.IsProviderAllowed(ctx, &ocmprovider.IsProviderAllowedRequest{
+		Provider: &providerInfo,
+	})
 	if err != nil {
-		reqres.WriteError(w, r, reqres.APIErrorServerError, "error checking provider domain", err)
+		reqres.WriteError(w, r, reqres.APIErrorServerError, "error sending a grpc is provider allowed request", err)
 		return
 	}
-	if infoResp.Status.Code != rpc.Code_CODE_OK {
-		reqres.WriteError(w, r, reqres.APIErrorUnauthenticated, "provider not authorized", errors.New(infoResp.Status.Message))
+	if providerAllowedResp.Status.Code != rpc.Code_CODE_OK {
+		reqres.WriteError(w, r, reqres.APIErrorUnauthenticated, "provider not authorized", errors.New(providerAllowedResp.Status.Message))
 		return
 	}
 

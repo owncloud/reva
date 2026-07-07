@@ -35,7 +35,6 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/genproto/protobuf/field_mask"
 
-	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/ocm/share"
 	"github.com/owncloud/reva/v2/pkg/ocm/share/repository/registry"
