@@ -110,10 +110,6 @@ type FS interface {
 	Delete(ctx context.Context, ref *provider.Reference) (*DeleteResult, error)
 	// Move changes the path of a resource
 	Move(ctx context.Context, oldRef, newRef *provider.Reference) (*MoveResult, error)
-	// InitiateUpload returns a list of protocols with urls that can be used to append bytes to a new upload session
-	InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error)
-	// Upload creates or updates a resource of type file with a new revision
-	Upload(ctx context.Context, req UploadRequest, uploadFunc UploadFinishedFunc) (*provider.ResourceInfo, error)
 	// MarkProcessing toggles a processing flag on the resource.
 	MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool, sessionID string) error
 	// CommitUpload writes the staged bytes from source to the resource at ref.

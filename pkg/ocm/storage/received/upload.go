@@ -51,30 +51,6 @@ var defaultFilePerm = os.FileMode(0664)
 func (d *driver) ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
 	return []storage.UploadSession{}, nil
 }
-func (d *driver) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
-	shareID, rel := shareInfoFromReference(ref)
-	p := getPathFromShareIDAndRelPath(shareID, rel)
-
-	info := tusd.FileInfo{
-		MetaData: tusd.MetaData{
-			"filename": filepath.Base(p),
-			"dir":      filepath.Dir(p),
-		},
-		Size: uploadLength,
-	}
-
-	upload, err := d.NewUpload(ctx, info)
-	if err != nil {
-		return nil, err
-	}
-
-	info, _ = upload.GetInfo(ctx)
-
-	return map[string]string{
-		"simple": info.ID,
-		"tus":    info.ID,
-	}, nil
-}
 
 func (d *driver) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool, sessionID string) error {
 	return errtypes.NotSupported("op not supported")
@@ -82,40 +58,6 @@ func (d *driver) MarkProcessing(ctx context.Context, ref *provider.Reference, pr
 
 func (d *driver) CommitUpload(ctx context.Context, ref *provider.Reference, source storage.UploadSource) (*provider.ResourceInfo, error) {
 	return nil, errtypes.NotSupported("op not supported")
-}
-
-func (d *driver) Upload(ctx context.Context, req storage.UploadRequest, _ storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
-	shareID, _ := shareInfoFromReference(req.Ref)
-	u, err := d.GetUpload(ctx, shareID.OpaqueId)
-	if err != nil {
-		return &provider.ResourceInfo{}, err
-	}
-
-	info, err := u.GetInfo(ctx)
-	if err != nil {
-		return &provider.ResourceInfo{}, err
-	}
-
-	defer cleanup(&upload{Info: info})
-
-	client, _, rel, err := d.webdavClient(ctx, nil, &provider.Reference{
-		Path: filepath.Join(info.MetaData["dir"], info.MetaData["filename"]),
-	})
-	if err != nil {
-		return &provider.ResourceInfo{}, err
-	}
-	client.SetInterceptor(func(method string, rq *http.Request) {
-		// Set the content length on the request struct directly instead of the header.
-		// The content-length header gets reset by the golang http library before
-		// sendind out the request, resulting in chunked encoding to be used which
-		// breaks the quota checks in ocdav.
-		if method == "PUT" {
-			rq.ContentLength = req.Length
-		}
-	})
-
-	locktoken, _ := ctxpkg.ContextGetLockID(ctx)
-	return &provider.ResourceInfo{}, client.WriteStream(rel, req.Body, 0, locktoken)
 }
 
 // UseIn tells the tus upload middleware which extensions it supports.

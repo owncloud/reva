@@ -307,60 +307,6 @@ func (f *FS) ListFolder(ctx context.Context, ref *provider.Reference, mdKeys, fi
 	return res0, res1
 }
 
-func (f *FS) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
-	var (
-		err     error
-		unhook  UnHook
-		unhooks []UnHook
-	)
-	for _, hook := range f.hooks {
-		ctx, unhook, err = hook("InitiateUpload", ctx, ref.GetResourceId().GetSpaceId())
-		if err != nil {
-			return nil, err
-		}
-		if unhook != nil {
-			unhooks = append(unhooks, unhook)
-		}
-	}
-
-	res0, res1 := f.next.InitiateUpload(ctx, ref, uploadLength, metadata)
-
-	for _, unhook := range unhooks {
-		if err := unhook(); err != nil {
-			return nil, err
-		}
-	}
-
-	return res0, res1
-}
-
-func (f *FS) Upload(ctx context.Context, req storage.UploadRequest, uploadFunc storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
-	var (
-		err     error
-		unhook  UnHook
-		unhooks []UnHook
-	)
-	for _, hook := range f.hooks {
-		ctx, unhook, err = hook("Upload", ctx, req.Ref.GetResourceId().GetSpaceId())
-		if err != nil {
-			return &provider.ResourceInfo{}, err
-		}
-		if unhook != nil {
-			unhooks = append(unhooks, unhook)
-		}
-	}
-
-	res0, res1 := f.next.Upload(ctx, req, uploadFunc)
-
-	for _, unhook := range unhooks {
-		if err := unhook(); err != nil {
-			return &provider.ResourceInfo{}, err
-		}
-	}
-
-	return res0, res1
-}
-
 func (f *FS) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool, sessionID string) error {
 	var (
 		err     error
