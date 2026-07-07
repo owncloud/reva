@@ -9,6 +9,7 @@ import (
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	invitepb "github.com/cs3org/go-cs3apis/cs3/ocm/invite/v1beta1"
+	ocmprovider "github.com/cs3org/go-cs3apis/cs3/ocm/provider/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	cs3mocks "github.com/owncloud/reva/v2/tests/cs3mocks/mocks"
@@ -52,11 +53,10 @@ func doInviteRequest(t *testing.T, h *invitesHandler, body string) *httptest.Res
 // TestAcceptInvite_ProviderGate_OCISDEV756 regression test.
 func TestAcceptInvite_ProviderGate_OCISDEV756(t *testing.T) {
 	const trustedDomain = "trusted-partner.example"
-	providersFile := trustedProvidersFile(t, trustedDomain)
 
 	t.Run("untrusted recipientProvider must be rejected HTTP 401 (OCISDEV-756)", func(t *testing.T) {
 		gc := &cs3mocks.GatewayAPIClient{}
-		setupInfoByDomain(gc, t, providersFile)
+		setupInfoByDomain(gc, t, trustedDomain)
 		gc.On("AcceptInvite", mock.Anything, mock.Anything).Maybe().Return(
 			&invitepb.AcceptInviteResponse{
 				Status: &rpc.Status{Code: rpc.Code_CODE_OK},
@@ -73,7 +73,11 @@ func TestAcceptInvite_ProviderGate_OCISDEV756(t *testing.T) {
 
 	t.Run("trusted recipientProvider proceeds to AcceptInvite", func(t *testing.T) {
 		gc := &cs3mocks.GatewayAPIClient{}
-		setupInfoByDomain(gc, t, providersFile)
+		setupInfoByDomain(gc, t, trustedDomain)
+		gc.On("IsProviderAllowed", mock.Anything, mock.Anything).Return(
+			&ocmprovider.IsProviderAllowedResponse{
+				Status: &rpc.Status{Code: rpc.Code_CODE_OK},
+			}, nil)
 		gc.On("AcceptInvite", mock.Anything, mock.Anything).Return(
 			&invitepb.AcceptInviteResponse{
 				Status:      &rpc.Status{Code: rpc.Code_CODE_OK},
