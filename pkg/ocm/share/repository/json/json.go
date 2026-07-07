@@ -553,19 +553,6 @@ func (m *mgr) StoreReceivedShare(ctx context.Context, share *ocm.ReceivedShare) 
 		return nil, err
 	}
 
-	secretLen := 0
-	for _, p := range share.GetProtocols() {
-		if wd := p.GetWebdavOptions(); wd != nil {
-			secretLen = len(wd.GetSharedSecret())
-			break
-		}
-	}
-	appctx.GetLogger(ctx).Info().Msgf("[OCISDEV-756] step 7/7 StoreReceivedShare: persisted to ocmshares.json id=%q owner=%q@%q creator=%q@%q secretLen=%d",
-		share.GetId().GetOpaqueId(),
-		share.GetOwner().GetOpaqueId(), share.GetOwner().GetIdp(),
-		share.GetCreator().GetOpaqueId(), share.GetCreator().GetIdp(),
-		secretLen)
-
 	return share, nil
 }
 

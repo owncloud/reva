@@ -98,7 +98,6 @@ func (h *invitesHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	providerAllowedResp, err := gatewayClient.IsProviderAllowed(ctx, &ocmprovider.IsProviderAllowedRequest{
 		Provider: &providerInfo,
 	})
-	log.Info().Msgf("[OCISDEV-756] step 3a/7 AcceptInvite: checking domain in allowlist domain=%q", req.RecipientProvider)
 	infoResp, err := gatewayClient.GetInfoByDomain(ctx, &ocmprovider.GetInfoByDomainRequest{Domain: req.RecipientProvider})
 	if err != nil {
 		reqres.WriteError(w, r, reqres.APIErrorServerError, "error sending a grpc is provider allowed request", err)
@@ -107,11 +106,9 @@ func (h *invitesHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	if providerAllowedResp.Status.Code != rpc.Code_CODE_OK {
 		reqres.WriteError(w, r, reqres.APIErrorUntrustedService, "provider not trusted", errors.New(providerAllowedResp.Status.Message))
 	if infoResp.Status.Code != rpc.Code_CODE_OK {
-		log.Info().Msgf("[OCISDEV-756] step 3a/7 RESULT: domain not in allowlist domain=%q", req.RecipientProvider)
 		reqres.WriteError(w, r, reqres.APIErrorUnauthenticated, "provider not authorized", errors.New(infoResp.Status.Message))
 		return
 	}
-	log.Info().Msgf("[OCISDEV-756] step 3a/7 RESULT: domain in allowlist domain=%q", req.RecipientProvider)
 
 	userObj := &userpb.User{
 		Id: &userpb.UserId{
