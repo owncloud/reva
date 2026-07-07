@@ -55,6 +55,7 @@ type config struct {
 	NatsPassword       string                            `mapstructure:"nats_password"`
 	ConsumerGroup      string                            `mapstructure:"consumer_group"`
 	NumConsumers       int                               `mapstructure:"numconsumers"`
+	UploadDirectory    string                            `mapstructure:"upload_directory" docs:";Local directory for staging upload sessions. Overrides the driver's root. Required for drivers that have no local filesystem root."`
 }
 
 func (c *config) init() {
@@ -65,7 +66,7 @@ func (c *config) init() {
 		c.Driver = "localhome"
 	}
 	if c.ConsumerGroup == "" {
-		c.ConsumerGroup = "storageprovider"
+		c.ConsumerGroup = "dcfs"
 	}
 	if c.NumConsumers <= 0 {
 		c.NumConsumers = 1
@@ -114,21 +115,26 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 		return nil, err
 	}
 
-	// Wrap the FS in the upload coordinator. The session store is constructed
-	// directly from the driver config (root + tokens), independent of the driver.
-	txFS := storage.FS(fs)
-	if store := pkgupload.FileStoreFromDriverConf(conf.Drivers[conf.Driver], log); store != nil {
-		coord := pkgupload.NewCoordinator(fs, store, evstream,
-			conf.MountID, conf.ConsumerGroup, conf.NumConsumers, log)
-		if evstream != nil {
-			if err := coord.Start(evstream); err != nil {
-				return nil, err
-			}
+	store := pkgupload.NewFileStoreFromConfig(conf.UploadDirectory, conf.Drivers[conf.Driver], log)
+	if store == nil {
+		return nil, fmt.Errorf("dataprovider: cannot determine upload directory — set upload_directory in config or driver root")
+	}
+	if err := store.Setup(); err != nil {
+		return nil, fmt.Errorf("dataprovider: upload directory setup failed: %w", err)
+	}
+	async := evstream != nil
+	coord, err := pkgupload.NewCoordinator(fs, store, evstream, async,
+		conf.MountID, conf.ConsumerGroup, conf.NumConsumers, log)
+	if err != nil {
+		return nil, err
+	}
+	if async {
+		if err := coord.Start(evstream); err != nil {
+			return nil, err
 		}
-		txFS = coord
 	}
 
-	dataTXs, err := getDataTXs(conf, txFS, evstream, log)
+	dataTXs, err := getDataTXs(conf, coord, fs, evstream, log)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +156,7 @@ func getFS(c *config, stream events.Stream, log *zerolog.Logger) (storage.FS, er
 	return nil, fmt.Errorf("driver not found: %s", c.Driver)
 }
 
-func getDataTXs(c *config, fs storage.FS, publisher events.Publisher, log *zerolog.Logger) (map[string]http.Handler, error) {
+func getDataTXs(c *config, coord pkgupload.Coordinator, driver storage.FS, publisher events.Publisher, log *zerolog.Logger) (map[string]http.Handler, error) {
 	if c.DataTXs == nil {
 		c.DataTXs = make(map[string]map[string]interface{})
 	}
@@ -170,7 +176,7 @@ func getDataTXs(c *config, fs storage.FS, publisher events.Publisher, log *zerol
 	for t := range c.DataTXs {
 		if f, ok := datatxregistry.NewFuncs[t]; ok {
 			if tx, err := f(c.DataTXs[t], publisher, log); err == nil {
-				if handler, err := tx.Handler(fs); err == nil {
+				if handler, err := tx.Handler(coord, driver); err == nil {
 					txs[t] = handler
 				}
 			}

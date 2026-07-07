@@ -33,7 +33,6 @@ import (
 	"github.com/owncloud/reva/v2/tests/helpers"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/mock"
-	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"google.golang.org/grpc"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -76,6 +75,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		uploadID string
 
 		fs                   storage.FS
+		coord                pkgupload.Coordinator
 		o                    *options.Options
 		lu                   *lookup.Lookup
 		pmock                *mocks.PermissionsChecker
@@ -126,9 +126,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		// the node already exists; FinishUploadDecomposed (legacy path) would
 		// try to create it again and fail with EEXIST.
 		tusUpload = func(id string, content []byte) {
-			ds, ok := fs.(tusd.DataStore)
-			Expect(ok).To(BeTrue(), "fs must implement tusd.DataStore")
-			up, err := ds.GetUpload(ctx, id)
+			up, err := coord.GetUpload(ctx, id)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(content))
 			Expect(err).ToNot(HaveOccurred())
@@ -209,9 +207,11 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		// Wire the coordinator so postprocessing events are consumed during tests.
 		d := dfs.(*Decomposedfs)
 		fileStore := pkgupload.NewFileStore(o.Root, pkgupload.TokenOptions{}, &zerolog.Logger{})
-		coord := pkgupload.NewCoordinator(d, fileStore, aspects.EventStream, "", "dcfs", 1, &zerolog.Logger{})
+		var coordErr error
+		coord, coordErr = pkgupload.NewCoordinator(d, fileStore, aspects.EventStream, true, "", "dcfs", 1, &zerolog.Logger{})
+		Expect(coordErr).ToNot(HaveOccurred())
 		Expect(coord.Start(aspects.EventStream)).To(Succeed())
-		fs = coord
+		fs = d
 
 		resp, err := fs.CreateStorageSpace(ctx, &provider.CreateStorageSpaceRequest{Owner: user, Type: "personal"})
 		Expect(err).ToNot(HaveOccurred())
@@ -224,7 +224,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Return(nil)
 
 		// start upload of a file
-		uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{})
+		uploadIds, err := coord.InitiateUpload(ctx, ref, 10, map[string]string{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(len(uploadIds)).To(Equal(2))
 		Expect(uploadIds["simple"]).ToNot(BeEmpty())
@@ -384,7 +384,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Expect(len(revs)).To(Equal(0))
 
 			// upload again
-			uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{})
+			uploadIds, err := coord.InitiateUpload(ctx, ref, 10, map[string]string{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(len(uploadIds)).To(Equal(2))
 			Expect(uploadIds["simple"]).ToNot(BeEmpty())
@@ -455,14 +455,12 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		It("rejects the second FinishUpload with ResourceProcessing", func() {
 			// First upload is in postprocessing (BytesReceived consumed in BeforeEach).
 			// Initiate a second upload.
-			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
 			Expect(err).ToNot(HaveOccurred())
 			secondUploadID := uploadIds["simple"]
 
 			// Write bytes for the second upload.
-			ds, ok := fs.(tusd.DataStore)
-			Expect(ok).To(BeTrue())
-			up, err := ds.GetUpload(ctx, secondUploadID)
+			up, err := coord.GetUpload(ctx, secondUploadID)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
 			Expect(err).ToNot(HaveOccurred())
@@ -476,13 +474,11 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		})
 
 		It("cleans up the rejected session's bin and info files", func() {
-			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
 			Expect(err).ToNot(HaveOccurred())
 			secondUploadID := uploadIds["simple"]
 
-			ds, ok := fs.(tusd.DataStore)
-			Expect(ok).To(BeTrue())
-			up, err := ds.GetUpload(ctx, secondUploadID)
+			up, err := coord.GetUpload(ctx, secondUploadID)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
 			Expect(err).ToNot(HaveOccurred())
@@ -506,7 +502,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			succeedPostprocessing(uploadID)
 
 			// Second upload.
-			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
 			Expect(err).ToNot(HaveOccurred())
 			secondUploadID = uploadIds["simple"]
 			tusUpload(secondUploadID, secondContent)

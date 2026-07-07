@@ -81,6 +81,22 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 		return nil
 	}
 
+	return newFileStoreWithTokens(root, driverConf, log)
+}
+
+// NewFileStoreFromConfig builds a FileStore using uploadDir when set, falling
+// back to root/upload_directory from the active driver config. This allows
+// drivers that have no local root (e.g. KW) to still get a coordinator by
+// setting upload_directory at the service level rather than inside the driver.
+// Returns nil only when neither source resolves to a non-empty path.
+func NewFileStoreFromConfig(uploadDir string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
+	if uploadDir != "" {
+		return NewFileStore(uploadDir, TokenOptions{}, log)
+	}
+	return FileStoreFromDriverConf(driverConf, log)
+}
+
+func newFileStoreWithTokens(root string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
 	type tokenConf struct {
 		DownloadEndpoint     string `mapstructure:"download_endpoint"`
 		DataGatewayEndpoint  string `mapstructure:"datagateway_endpoint"`
@@ -91,7 +107,6 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 	if tokens, ok := driverConf["tokens"]; ok {
 		_ = mapstructure.Decode(tokens, &tc)
 	}
-
 	return NewFileStore(root, TokenOptions{
 		DownloadEndpoint:     tc.DownloadEndpoint,
 		DataGatewayEndpoint:  tc.DataGatewayEndpoint,
@@ -104,6 +119,12 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 // root must be on a shared filesystem when multiple pods handle the same space.
 func NewFileStore(root string, opts TokenOptions, log *zerolog.Logger) *FileStore {
 	return &FileStore{root: root, opts: opts, log: log}
+}
+
+// Setup creates the uploads directory eagerly so permission problems are caught
+// at startup rather than on the first upload. Mirrors decomposedfs tree.Setup().
+func (fs *FileStore) Setup() error {
+	return os.MkdirAll(filepath.Join(fs.root, "uploads"), 0700)
 }
 
 // New allocates a fresh session with a new UUID.
