@@ -91,7 +91,6 @@ func init() {
 type Session interface {
 	tusd.Upload
 	storage.UploadSession
-	upload.Session
 	LockID() string
 }
 

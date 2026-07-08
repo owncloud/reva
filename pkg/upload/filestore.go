@@ -43,6 +43,13 @@ type TokenOptions struct {
 	TransferExpires      int64
 }
 
+// SessionStore abstracts upload-session persistence for the Coordinator.
+type SessionStore interface {
+	New(ctx context.Context) Session
+	Get(ctx context.Context, id string) (Session, error)
+	List(ctx context.Context) ([]Session, error)
+}
+
 // FileStore is a filesystem-backed SessionStore. Sessions are stored as a pair
 // of files under <root>/uploads/:
 //

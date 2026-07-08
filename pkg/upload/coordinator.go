@@ -72,50 +72,6 @@ func impersonatingUser(ctx context.Context) *user.User {
 
 var errNotImplemented = tusd.NewError("ERR_NOT_IMPLEMENTED", "use InitiateUpload on the CS3 API to start a new upload", 501)
 
-// Session is the driver-agnostic view of an upload session the Coordinator
-// needs. Implementations must be pure state (CRUD): protocol orchestration
-// belongs to coordinatedUpload or the coordinator itself.
-type Session interface {
-	storage.UploadSession
-
-	// Data access — delegated to by coordinatedUpload for TUS reads/writes.
-	GetInfo(ctx context.Context) (tusd.FileInfo, error)
-	GetReader(ctx context.Context) (io.ReadCloser, error)
-	WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error)
-
-	// Internal coordinator plumbing.
-	ID() string
-	Filename() string
-	Size() int64
-	SizeDiff() int64
-	BinPath() string
-	ProviderID() string
-	SpaceID() string
-	NodeID() string
-	NodeExists() bool
-	Dir() string
-	SpaceOwner() *user.UserId
-	Executant() user.UserId
-	Reference() provider.Reference
-	URL(ctx context.Context) (string, error)
-	SetScanData(result string, date time.Time)
-	Checksums() storage.UploadChecksums
-	SetChecksums(sha1, md5, adler32 []byte)
-	Metadata() map[string]string
-	Persist(ctx context.Context) error
-	Cleanup(cleanBin, cleanInfo bool)
-	Context(ctx context.Context) context.Context
-
-	// Typed setters used by Coordinator.InitiateUpload to populate a new session
-	// without knowing internal storage key names.
-	SetStorageValue(key, value string)
-	SetMetadata(key, value string)
-	SetSize(size int64)
-	SetSizeIsDeferred(value bool)
-	SetExecutant(u *user.User)
-	TouchBin() error
-}
-
 // rollback unmarks processing, cleans up session files, and deletes the placeholder
 // node if it was created by this upload (NodeExists=false at initiation).
 func (c *coordinator) rollback(ctx context.Context, session Session) {
@@ -149,13 +105,6 @@ func (c *coordinator) commitSync(ctx context.Context, session Session) error {
 	session.Cleanup(true, false)
 	metrics.UploadSessionsFinalized.Inc()
 	return nil
-}
-
-// SessionStore abstracts upload-session persistence for the Coordinator.
-type SessionStore interface {
-	New(ctx context.Context) Session
-	Get(ctx context.Context, id string) (Session, error)
-	List(ctx context.Context) ([]Session, error)
 }
 
 // Coordinator owns the full upload lifecycle: session initiation, TUS data transfer,

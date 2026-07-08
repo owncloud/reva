@@ -30,7 +30,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +60,43 @@ const defaultFilePerm = os.FileMode(0664)
 type FileSession struct {
 	store *FileStore
 	info  tusd.FileInfo
+}
+
+// Session is the driver-agnostic view of an upload session the Coordinator
+// needs. Implementations must be pure state (CRUD): protocol orchestration
+// belongs to coordinatedUpload or the coordinator itself.
+type Session interface {
+	storage.UploadSession
+
+	// Data access — delegated to by coordinatedUpload for TUS reads/writes.
+	GetInfo(ctx context.Context) (tusd.FileInfo, error)
+	GetReader(ctx context.Context) (io.ReadCloser, error)
+	WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error)
+
+	// Internal coordinator plumbing.
+	BinPath() string
+	ProviderID() string
+	SpaceID() string
+	NodeID() string
+	NodeExists() bool
+	Dir() string
+	URL(ctx context.Context) (string, error)
+	SetScanData(result string, date time.Time)
+	Checksums() storage.UploadChecksums
+	SetChecksums(sha1, md5, adler32 []byte)
+	Metadata() map[string]string
+	Persist(ctx context.Context) error
+	Cleanup(cleanBin, cleanInfo bool)
+	Context(ctx context.Context) context.Context
+
+	// Typed setters used by Coordinator.InitiateUpload to populate a new session
+	// without knowing internal storage key names.
+	SetStorageValue(key, value string)
+	SetMetadata(key, value string)
+	SetSize(size int64)
+	SetSizeIsDeferred(value bool)
+	SetExecutant(u *userpb.User)
+	TouchBin() error
 }
 
 func (s *FileSession) GetInfo(_ context.Context) (tusd.FileInfo, error) {
@@ -115,12 +151,6 @@ func (s *FileSession) Filename() string {
 // Size returns the declared upload size.
 func (s *FileSession) Size() int64 {
 	return s.info.Size
-}
-
-// SizeDiff returns the size difference computed after upload.
-func (s *FileSession) SizeDiff() int64 {
-	v, _ := strconv.ParseInt(s.info.MetaData["sizeDiff"], 10, 64)
-	return v
 }
 
 // Offset returns the current upload offset.
@@ -226,7 +256,6 @@ func (s *FileSession) Metadata() map[string]string {
 		"mtime":        s.info.MetaData["mtime"],
 		"nodeExists":   s.info.Storage["NodeExists"],
 		"versionsPath": s.info.MetaData["versionsPath"],
-		"sessionID":    s.info.ID,
 	}
 }
 

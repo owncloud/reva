@@ -20,7 +20,6 @@ package upload
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -36,7 +35,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
-	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
@@ -265,11 +263,6 @@ func (s *OcisSession) Dir() string {
 	return s.info.Storage["Dir"]
 }
 
-// SpaceGid returns the numeric GID of the space owner, or "" if not set.
-func (s *OcisSession) SpaceGid() string {
-	return s.info.Storage["SpaceGid"]
-}
-
 // Size returns the upload size
 func (s *OcisSession) Size() int64 {
 	return s.info.Size
@@ -356,11 +349,6 @@ func (s *OcisSession) binPath() string {
 	return filepath.Join(s.store.root, "uploads", s.info.ID)
 }
 
-// BinPath returns the path to the staged binary file.
-func (s *OcisSession) BinPath() string {
-	return s.binPath()
-}
-
 // infoPath returns the path to the .info file storing the file's info.
 func (s *OcisSession) infoPath() string {
 	return sessionPath(s.store.root, s.info.ID)
@@ -375,40 +363,6 @@ func (s *OcisSession) InitiatorID() string {
 func (s *OcisSession) SetScanData(result string, date time.Time) {
 	s.info.MetaData["scanResult"] = result
 	s.info.MetaData["scanDate"] = date.Format(time.RFC3339)
-}
-
-// SetChecksums stores pre-computed checksums so the coordinator can pass them
-// to CommitUpload without re-reading the bin file.
-func (s *OcisSession) SetChecksums(sha1, md5, adler32 []byte) {
-	s.info.MetaData["checksumSHA1"] = hex.EncodeToString(sha1)
-	s.info.MetaData["checksumMD5"] = hex.EncodeToString(md5)
-	s.info.MetaData["checksumAdler32"] = hex.EncodeToString(adler32)
-}
-
-// Checksums returns the pre-computed checksums stored on the session.
-func (s *OcisSession) Checksums() storage.UploadChecksums {
-	decode := func(key string) []byte {
-		b, _ := hex.DecodeString(s.info.MetaData[key])
-		return b
-	}
-	return storage.UploadChecksums{
-		SHA1:    decode("checksumSHA1"),
-		MD5:     decode("checksumMD5"),
-		Adler32: decode("checksumAdler32"),
-	}
-}
-
-// Metadata returns metadata passed to CommitUpload.
-// "versionsPath" is pre-created by CreateNodeForUpload so CommitUpload reuses it.
-// "sessionID" lets CommitUpload detect whether this session still owns the processing slot.
-func (s *OcisSession) Metadata() map[string]string {
-	return map[string]string{
-		"providerID":   s.info.MetaData["providerID"],
-		"mtime":        s.info.MetaData["mtime"],
-		"nodeExists":   s.info.Storage["NodeExists"],
-		"versionsPath": s.info.MetaData["versionsPath"],
-		"sessionID":    s.info.ID,
-	}
 }
 
 // ScanData returns the virus scan data
