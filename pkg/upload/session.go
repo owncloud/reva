@@ -180,7 +180,7 @@ func (s *FileSession) SpaceOwner() *userpb.UserId {
 // Executant returns the user ID of the user who initiated this upload.
 func (s *FileSession) Executant() userpb.UserId {
 	return userpb.UserId{
-		Type:     userpb.UserType(userpb.UserType_value[s.info.Storage["UserType"]]),
+		Type:     utils.UserTypeMap(s.info.Storage["UserType"]),
 		Idp:      s.info.Storage["Idp"],
 		OpaqueId: s.info.Storage["UserId"],
 	}
@@ -370,7 +370,7 @@ func (s *FileSession) executantUser() *userpb.User {
 	_ = json.Unmarshal([]byte(s.info.Storage["UserOpaque"]), &o)
 	return &userpb.User{
 		Id: &userpb.UserId{
-			Type:     userpb.UserType(userpb.UserType_value[s.info.Storage["UserType"]]),
+			Type:     utils.UserTypeMap(s.info.Storage["UserType"]),
 			Idp:      s.info.Storage["Idp"],
 			OpaqueId: s.info.Storage["UserId"],
 		},
