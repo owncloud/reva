@@ -65,6 +65,7 @@ type config struct {
 	Drivers               map[string]map[string]interface{} `mapstructure:"drivers"`
 	GatewayAddr           string                            `mapstructure:"gateway_addr"`
 	AllowedPathsForShares []string                          `mapstructure:"allowed_paths_for_shares"`
+	EnableUserSharing     bool                              `mapstructure:"enable_user_sharing"`
 }
 
 func (c *config) init() {
@@ -73,10 +74,15 @@ func (c *config) init() {
 	}
 }
 
+func defaultConfig() *config {
+	return &config{EnableUserSharing: true}
+}
+
 type service struct {
 	sm                    share.Manager
 	gatewaySelector       pool.Selectable[gateway.GatewayAPIClient]
 	allowedPathsForShares []*regexp.Regexp
+	enableUserSharing     bool
 }
 
 func getShareManager(c *config) (share.Manager, error) {
@@ -100,7 +106,7 @@ func (s *service) Register(ss *grpc.Server) {
 }
 
 func parseConfig(m map[string]interface{}) (*config, error) {
-	c := &config{}
+	c := defaultConfig()
 	if err := mapstructure.Decode(m, c); err != nil {
 		err = errors.Wrap(err, "error decoding conf")
 		return nil, err
@@ -137,15 +143,16 @@ func NewDefault(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (r
 		return nil, err
 	}
 
-	return New(gatewaySelector, sm, allowedPathsForShares), nil
+	return New(gatewaySelector, sm, allowedPathsForShares, c.EnableUserSharing), nil
 }
 
 // New creates a new user share provider svc
-func New(gatewaySelector pool.Selectable[gateway.GatewayAPIClient], sm share.Manager, allowedPathsForShares []*regexp.Regexp) rgrpc.Service {
+func New(gatewaySelector pool.Selectable[gateway.GatewayAPIClient], sm share.Manager, allowedPathsForShares []*regexp.Regexp, enableUserSharing bool) rgrpc.Service {
 	service := &service{
 		sm:                    sm,
 		gatewaySelector:       gatewaySelector,
 		allowedPathsForShares: allowedPathsForShares,
+		enableUserSharing:     enableUserSharing,
 	}
 
 	return service
@@ -171,6 +178,12 @@ func (s *service) CreateShare(ctx context.Context, req *collaboration.CreateShar
 	if HasGrantPermissions(req.GetGrant().GetPermissions().GetPermissions()) {
 		return &collaboration.CreateShareResponse{
 			Status: status.NewInvalidArg(ctx, "resharing not supported"),
+		}, nil
+	}
+
+	if !s.enableUserSharing {
+		return &collaboration.CreateShareResponse{
+			Status: status.NewPermissionDenied(ctx, nil, "direct sharing is disabled"),
 		}, nil
 	}
 

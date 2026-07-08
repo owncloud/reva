@@ -59,14 +59,15 @@ func init() {
 }
 
 type config struct {
-	Driver         string                            `mapstructure:"driver"`
-	Drivers        map[string]map[string]interface{} `mapstructure:"drivers"`
-	ClientTimeout  int                               `mapstructure:"client_timeout"`
-	ClientInsecure bool                              `mapstructure:"client_insecure"`
-	GatewaySVC     string                            `mapstructure:"gatewaysvc"      validate:"required"`
-	ProviderDomain string                            `mapstructure:"provider_domain" validate:"required" docs:"The same domain registered in the provider authorizer"`
-	WebDAVEndpoint string                            `mapstructure:"webdav_endpoint" validate:"required"`
-	WebappTemplate string                            `mapstructure:"webapp_template"`
+	Driver            string                            `mapstructure:"driver"`
+	Drivers           map[string]map[string]interface{} `mapstructure:"drivers"`
+	ClientTimeout     int                               `mapstructure:"client_timeout"`
+	ClientInsecure    bool                              `mapstructure:"client_insecure"`
+	GatewaySVC        string                            `mapstructure:"gatewaysvc"      validate:"required"`
+	ProviderDomain    string                            `mapstructure:"provider_domain" validate:"required" docs:"The same domain registered in the provider authorizer"`
+	WebDAVEndpoint    string                            `mapstructure:"webdav_endpoint" validate:"required"`
+	WebappTemplate    string                            `mapstructure:"webapp_template"`
+	EnableUserSharing bool                              `mapstructure:"enable_user_sharing"`
 }
 
 type service struct {
@@ -105,7 +106,7 @@ func getShareRepository(c *config) (share.Repository, error) {
 
 // New creates a new ocm share provider svc.
 func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Service, error) {
-	var c config
+	c := config{EnableUserSharing: true}
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
 	}
@@ -254,6 +255,12 @@ func (s *service) getProtocols(ctx context.Context, share *ocm.Share) ocmd.Proto
 }
 
 func (s *service) CreateOCMShare(ctx context.Context, req *ocm.CreateOCMShareRequest) (*ocm.CreateOCMShareResponse, error) {
+	if !s.conf.EnableUserSharing {
+		return &ocm.CreateOCMShareResponse{
+			Status: status.NewPermissionDenied(ctx, nil, "direct sharing is disabled"),
+		}, nil
+	}
+
 	gatewayClient, err := s.gatewaySelector.Next()
 	if err != nil {
 		return nil, err
