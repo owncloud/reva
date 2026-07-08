@@ -6,4 +6,4 @@ or federated shares is rejected, the `sharees` search endpoint returns
 empty results, and the `files_sharing.user.enabled` capability reports
 `false`. Public link sharing is unaffected.
 
-https://github.com/owncloud/reva/pull/XXXX
+https://github.com/owncloud/reva/pull/651

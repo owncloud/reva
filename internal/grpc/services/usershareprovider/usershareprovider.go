@@ -74,10 +74,6 @@ func (c *config) init() {
 	}
 }
 
-func defaultConfig() *config {
-	return &config{EnableUserSharing: true}
-}
-
 type service struct {
 	sm                    share.Manager
 	gatewaySelector       pool.Selectable[gateway.GatewayAPIClient]
@@ -106,7 +102,7 @@ func (s *service) Register(ss *grpc.Server) {
 }
 
 func parseConfig(m map[string]interface{}) (*config, error) {
-	c := defaultConfig()
+	c := &config{}
 	if err := mapstructure.Decode(m, c); err != nil {
 		err = errors.Wrap(err, "error decoding conf")
 		return nil, err

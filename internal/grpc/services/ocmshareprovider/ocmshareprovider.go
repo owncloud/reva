@@ -106,7 +106,7 @@ func getShareRepository(c *config) (share.Repository, error) {
 
 // New creates a new ocm share provider svc.
 func New(m map[string]interface{}, ss *grpc.Server, _ *zerolog.Logger) (rgrpc.Service, error) {
-	c := config{EnableUserSharing: true}
+	var c config
 	if err := cfg.Decode(m, &c); err != nil {
 		return nil, err
 	}
