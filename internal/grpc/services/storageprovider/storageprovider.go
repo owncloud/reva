@@ -215,12 +215,9 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 		return nil, err
 	}
 
-	// The session store is independent of the driver: we construct it directly
-	// from the driver config's root + tokens block rather than relying on the
-	// driver to expose a session store via an interface.
 	store := pkgupload.NewFileStoreFromConfig(c.UploadDirectory, c.Drivers[c.Driver], log)
 	if store == nil {
-		return nil, fmt.Errorf("storageprovider: cannot determine upload directory — set upload_directory in config or driver root")
+		return nil, fmt.Errorf("storageprovider: cannot determine upload directory, set upload_directory in config or driver root")
 	}
 	if err := store.Setup(); err != nil {
 		return nil, fmt.Errorf("storageprovider: upload directory setup failed: %w", err)

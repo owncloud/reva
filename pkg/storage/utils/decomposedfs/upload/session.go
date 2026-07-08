@@ -398,13 +398,9 @@ func (s *OcisSession) Checksums() storage.UploadChecksums {
 	}
 }
 
-// Metadata returns a map of upload metadata needed to call CommitUpload.
-// "nodeExists" carries whether the target node existed at InitiateUpload time.
-// "versionsPath" carries the version archive path already created by
-// CreateNodeForUpload so CommitUpload reuses it rather than creating a duplicate.
-// "sessionID" is included so CommitUpload can tell whether this session still
-// owns the processing slot; if a newer session took over, node size metadata
-// is left intact so the in-progress upload's expected size is preserved.
+// Metadata returns metadata passed to CommitUpload.
+// "versionsPath" is pre-created by CreateNodeForUpload so CommitUpload reuses it.
+// "sessionID" lets CommitUpload detect whether this session still owns the processing slot.
 func (s *OcisSession) Metadata() map[string]string {
 	return map[string]string{
 		"providerID":   s.info.MetaData["providerID"],

@@ -27,7 +27,6 @@ import (
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
 	"github.com/owncloud/reva/v2/pkg/storage"
-	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/upload"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 )
 
@@ -57,13 +56,13 @@ func (f *FS) ListUploadSessions(ctx context.Context, filter storage.UploadSessio
 }
 
 // UseIn tells the tus upload middleware which extensions it supports.
-// TODO(OCISDEV-901): coordinator now handles TUS registration globally — is per-driver UseIn still needed for
+// TODO(OCISDEV-901): coordinator now handles TUS registration globally. Is per-driver UseIn still needed for
 // capability variation, or can this be removed along with storage.ComposableFS?
 func (f *FS) UseIn(composer *tusd.StoreComposer) {
 	f.next.(storage.ComposableFS).UseIn(composer)
 }
 
-// TODO(OCISDEV-901): remove NewUpload and GetUpload — TUS DataStore is the coordinator's responsibility, not the driver's.
+// TODO(OCISDEV-901): remove NewUpload and GetUpload. TUS DataStore is the coordinator's responsibility, not the driver's.
 func (f *FS) NewUpload(ctx context.Context, info tusd.FileInfo) (upload tusd.Upload, err error) {
 	return f.next.(tusd.DataStore).NewUpload(ctx, info)
 }
@@ -76,21 +75,21 @@ func (f *FS) GetUpload(ctx context.Context, id string) (upload tusd.Upload, err 
 // To implement the termination extension as specified in https://tus.io/protocols/resumable-upload.html#termination
 // the storage needs to implement AsTerminatableUpload
 func (f *FS) AsTerminatableUpload(up tusd.Upload) tusd.TerminatableUpload {
-	return up.(*upload.OcisSession)
+	return up.(tusd.TerminatableUpload)
 }
 
 // AsLengthDeclarableUpload returns a LengthDeclarableUpload
 // To implement the creation-defer-length extension as specified in https://tus.io/protocols/resumable-upload.html#creation
 // the storage needs to implement AsLengthDeclarableUpload
 func (f *FS) AsLengthDeclarableUpload(up tusd.Upload) tusd.LengthDeclarableUpload {
-	return up.(*upload.OcisSession)
+	return up.(tusd.LengthDeclarableUpload)
 }
 
 // AsConcatableUpload returns a ConcatableUpload
 // To implement the concatenation extension as specified in https://tus.io/protocols/resumable-upload.html#concatenation
 // the storage needs to implement AsConcatableUpload
 func (f *FS) AsConcatableUpload(up tusd.Upload) tusd.ConcatableUpload {
-	return up.(*upload.OcisSession)
+	return up.(tusd.ConcatableUpload)
 }
 
 func (f *FS) GetHome(ctx context.Context) (string, error) {

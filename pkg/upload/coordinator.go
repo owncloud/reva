@@ -18,8 +18,7 @@
 
 // Package upload provides the driver-agnostic upload coordinator:
 // TUS session management, postprocessing event loop, lifecycle event
-// publishing. The Coordinator interface is independent of storage.FS —
-// it uses a driver but is not a driver.
+// publishing.
 package upload
 
 import (
@@ -54,36 +53,59 @@ func init() {
 	tracer = otel.Tracer("github.com/owncloud/reva/pkg/upload")
 }
 
+// impersonatingUser extracts the impersonating user from the context user's opaque field.
+// Returns nil when no impersonation is in effect.
+func impersonatingUser(ctx context.Context) *user.User {
+	u, ok := ctxpkg.ContextGetUser(ctx)
+	if !ok || u == nil {
+		return nil
+	}
+	if !utils.ExistsInOpaque(u.Opaque, "impersonating-user") {
+		return nil
+	}
+	iu := &user.User{}
+	if err := utils.ReadJSONFromOpaque(u.Opaque, "impersonating-user", iu); err != nil {
+		return nil
+	}
+	return iu
+}
+
 var errNotImplemented = tusd.NewError("ERR_NOT_IMPLEMENTED", "use InitiateUpload on the CS3 API to start a new upload", 501)
 
 // Session is the driver-agnostic view of an upload session the Coordinator
-// needs. OcisSession satisfies this interface.
+// needs. Implementations must be pure state (CRUD): protocol orchestration
+// belongs to coordinatedUpload or the coordinator itself.
 type Session interface {
-	tusd.Upload
 	storage.UploadSession
+
+	// Data access — delegated to by coordinatedUpload for TUS reads/writes.
+	GetInfo(ctx context.Context) (tusd.FileInfo, error)
+	GetReader(ctx context.Context) (io.ReadCloser, error)
+	WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error)
+
+	// Internal coordinator plumbing.
 	ID() string
 	Filename() string
 	Size() int64
 	SizeDiff() int64
 	BinPath() string
-	SpaceGid() string
 	ProviderID() string
 	SpaceID() string
 	NodeID() string
 	NodeExists() bool
 	Dir() string
-	IsProcessing() bool
 	SpaceOwner() *user.UserId
 	Executant() user.UserId
 	Reference() provider.Reference
 	URL(ctx context.Context) (string, error)
 	SetScanData(result string, date time.Time)
 	Checksums() storage.UploadChecksums
+	SetChecksums(sha1, md5, adler32 []byte)
 	Metadata() map[string]string
 	Persist(ctx context.Context) error
-	FinishBytesOnly(ctx context.Context) error
-	Cleanup(revertNodeMetadata, cleanBin, cleanInfo, unmarkPostprocessing bool)
+	Cleanup(cleanBin, cleanInfo bool)
 	Context(ctx context.Context) context.Context
+
 	// Typed setters used by Coordinator.InitiateUpload to populate a new session
 	// without knowing internal storage key names.
 	SetStorageValue(key, value string)
@@ -94,95 +116,37 @@ type Session interface {
 	TouchBin() error
 }
 
-
-// coordinatedUpload wraps a Session so the TUS FinishUpload hook runs the
-// coordinator path (checksums + MarkProcessing + BytesReceived) instead of
-// the legacy FinishUploadDecomposed path.
-type coordinatedUpload struct {
-	tusd.Upload
-	session Session
-	coord   *coordinator
-}
-
-func (u *coordinatedUpload) FinishUpload(ctx context.Context) error {
-	if err := u.session.FinishBytesOnly(ctx); err != nil {
-		return err
+// rollback unmarks processing, cleans up session files, and deletes the placeholder
+// node if it was created by this upload (NodeExists=false at initiation).
+func (c *coordinator) rollback(ctx context.Context, session Session) {
+	ref := session.Reference()
+	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
+	session.Cleanup(true, true)
+	if !session.NodeExists() {
+		_, _ = c.fs.Delete(ctx, &ref)
 	}
-	// Persist checksums to disk so the postprocessing handler can read them
-	// from the session store after the BytesReceived event is processed.
-	if err := u.session.Persist(ctx); err != nil {
-		return err
-	}
-	ref := u.session.Reference()
-	if err := u.coord.fs.MarkProcessing(ctx, &ref, true, u.session.ID()); err != nil {
-		// Slot already owned by another session. Clean up this session's bin and
-		// info files — they will never reach postprocessing.
-		u.session.Cleanup(false, true, true, false)
-		return err
-	}
-
-	metrics.UploadProcessing.Inc()
-	metrics.UploadSessionsBytesReceived.Inc()
-
-	if !u.coord.async {
-		// Sync mode (e.g. storage-system): commit inline, no NATS required.
-		return u.coord.commitSync(ctx, u.session)
-	}
-
-	if u.session.Size() > 0 {
-		s, err := u.session.URL(ctx)
-		if err != nil {
-			return err
-		}
-		if err := events.Publish(ctx, u.coord.pub, events.BytesReceived{
-			UploadID:   u.session.ID(),
-			URL:        s,
-			SpaceOwner: u.session.SpaceOwner(),
-			ExecutingUser: &user.User{
-				Id: &user.UserId{
-					Type:     u.session.Executant().Type,
-					Idp:      u.session.Executant().Idp,
-					OpaqueId: u.session.Executant().OpaqueId,
-				},
-			},
-			ResourceID: &provider.ResourceId{
-				StorageId: u.session.ProviderID(),
-				SpaceId:   u.session.SpaceID(),
-				OpaqueId:  u.session.NodeID(),
-			},
-			Filename: u.session.Filename(),
-			Filesize: uint64(u.session.Size()),
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // commitSync runs CommitUpload inline and cleans up the session.
-// Used by the sync path (async=false) — called from both coordinatedUpload.FinishUpload
-// (TUS) and Coordinator.Upload (simple PUT).
-func (c *coordinator)commitSync(ctx context.Context, session Session) error {
+// Used by the sync path (async=false) from FinishUpload (TUS) and Upload (simple PUT).
+func (c *coordinator) commitSync(ctx context.Context, session Session) error {
 	ref := session.Reference()
 	f, err := os.Open(session.BinPath())
 	if err != nil {
-		_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
-		session.Cleanup(true, true, true, false)
+		c.rollback(ctx, session)
 		return err
 	}
-	defer f.Close()
 	if _, err := c.fs.CommitUpload(ctx, &ref, storage.UploadSource{
 		Body:      f,
 		Length:    session.Size(),
 		Metadata:  session.Metadata(),
 		Checksums: session.Checksums(),
 	}); err != nil {
-		_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
-		session.Cleanup(true, true, true, false)
+		c.rollback(ctx, session)
 		return err
 	}
 	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
-	session.Cleanup(false, true, true, false)
+	session.Cleanup(true, false)
 	metrics.UploadSessionsFinalized.Inc()
 	return nil
 }
@@ -194,14 +158,8 @@ type SessionStore interface {
 	List(ctx context.Context) ([]Session, error)
 }
 
-// RevisionReverter is an optional interface a storage driver may implement
-// to handle RevertRevision postprocessing events. Decomposedfs implements it.
-type RevisionReverter interface {
-	RevertUploadRevision(ctx context.Context, id *provider.ResourceId) error
-}
-
-// Coordinator is the upload orchestrator interface. It is not a storage.FS —
-// driver operations are handled separately.
+// Coordinator owns the full upload lifecycle: session initiation, TUS data transfer,
+// postprocessing event loop, and UploadReady publishing.
 type Coordinator interface {
 	InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error)
 	Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error)
@@ -224,7 +182,7 @@ type coordinator struct {
 }
 
 // NewCoordinator constructs a Coordinator. Call Start to begin consuming events.
-// async=true requires a non-nil pub; fail-fast mirrors decomposedfs.New().
+// async=true requires a non-nil pub.
 func NewCoordinator(
 	fs storage.FS,
 	store SessionStore,
@@ -263,7 +221,6 @@ func (c *coordinator)Start(stream events.Consumer) error {
 		events.PostprocessingStepFinished{},
 		events.RestartPostprocessing{},
 		events.CleanUpload{},
-		events.RevertRevision{},
 	)
 	if err != nil {
 		return err
@@ -294,8 +251,6 @@ func (c *coordinator)processEvent(evCtx context.Context, event events.Event) {
 		c.handleRestartPostprocessing(ctx, ev)
 	case events.CleanUpload:
 		c.handleCleanUpload(ctx, ev)
-	case events.RevertRevision:
-		c.handleRevertRevision(ctx, ev)
 	default:
 		c.log.Error().Interface("event", ev).Msg("coordinator: unknown event")
 	}
@@ -310,6 +265,15 @@ func (c *coordinator)handlePostprocessingFinished(ctx context.Context, ev events
 	session, err := c.store.Get(ctx, ev.UploadID)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get upload")
+		// Session file gone (e.g. coordinator restarted mid-postprocessing).
+		// Clear the processing flag directly using the node ID from the event so
+		// the node does not stay stuck returning 429 Too Early forever.
+		if ev.ResourceID != nil && ev.ResourceID.GetOpaqueId() != "" {
+			ref := provider.Reference{ResourceId: ev.ResourceID}
+			if mpErr := c.fs.MarkProcessing(ctx, &ref, false, ev.UploadID); mpErr != nil {
+				log.Error().Err(mpErr).Msg("could not unmark processing after lost session")
+			}
+		}
 		return
 	}
 
@@ -319,7 +283,7 @@ func (c *coordinator)handlePostprocessingFinished(ctx context.Context, ev events
 	ref := session.Reference()
 	if _, err := c.fs.GetMD(ctx, &ref, []string{}, []string{}); err != nil {
 		log.Debug().Err(err).Msg("node no longer exists or not accessible; cleaning up")
-		session.Cleanup(false, true, true, false)
+		session.Cleanup(true, true)
 		if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
 			log.Error().Err(err).Msg("could not unmark processing during cleanup of inaccessible node")
 		}
@@ -339,8 +303,8 @@ func (c *coordinator)handlePostprocessingFinished(ctx context.Context, ev events
 		fallthrough
 	case events.PPOutcomeAbort:
 		failed = true
-		// Only revert node metadata for new files: for overwrites, CommitUpload
-		// never ran so the node still holds the previous content — nothing to undo.
+		// Only revert node metadata for new files. For overwrites the node still
+		// holds the previous content.
 		revertNodeMetadata = !session.NodeExists()
 		keepUpload = true
 		metrics.UploadSessionsAborted.Inc()
@@ -371,17 +335,15 @@ func (c *coordinator)handlePostprocessingFinished(ctx context.Context, ev events
 		}
 	case events.PPOutcomeDelete:
 		failed = true
-		// Only revert node metadata for new files: for overwrites, CommitUpload
-		// never ran so the node still holds the previous content — nothing to undo.
+		// Only revert node metadata for new files. For overwrites the node still
+		// holds the previous content.
 		revertNodeMetadata = !session.NodeExists()
 		metrics.UploadSessionsDeleted.Inc()
 	}
 
 	now := time.Now()
 
-	// Clean up bin and info files. Node reversion (for aborted new-file uploads)
-	// is handled below via the FS interface, not inside session.Cleanup.
-	session.Cleanup(false, !keepUpload, !keepUpload, false)
+	session.Cleanup(!keepUpload, !keepUpload)
 
 	nodeRef := session.Reference()
 	if !retryCommit {
@@ -443,6 +405,7 @@ func (c *coordinator)handleRestartPostprocessing(ctx context.Context, ev events.
 		log.Error().Err(err).Msg("Failed to get upload")
 		return
 	}
+	ctx = session.Context(ctx)
 	log = c.log.With().Str("spaceid", session.SpaceID()).Str("nodeid", session.NodeID()).Logger()
 	s, err := session.URL(ctx)
 	if err != nil {
@@ -476,7 +439,7 @@ func (c *coordinator)handleCleanUpload(ctx context.Context, ev events.CleanUploa
 		return
 	}
 	ctx = session.Context(ctx)
-	session.Cleanup(false, !ev.KeepUpload, !ev.KeepUpload, false)
+	session.Cleanup(!ev.KeepUpload, !ev.KeepUpload)
 	nodeRef := session.Reference()
 	if err := c.fs.MarkProcessing(ctx, &nodeRef, false, session.ID()); err != nil {
 		log.Error().Err(err).Msg("could not unmark processing during CleanUpload")
@@ -487,22 +450,6 @@ func (c *coordinator)handleCleanUpload(ctx context.Context, ev events.CleanUploa
 				log.Error().Err(delErr).Msg("could not delete placeholder node during CleanUpload")
 			}
 		}
-	}
-}
-
-func (c *coordinator)handleRevertRevision(ctx context.Context, ev events.RevertRevision) {
-	log := c.log.With().Str("event", "RevertRevision").Interface("nodeid", ev.ResourceID).Logger()
-	if ev.ResourceID != nil && ev.ResourceID.GetStorageId() != "" && ev.ResourceID.GetStorageId() != c.mountID {
-		log.Debug().Msg("ignoring event for different storage")
-		return
-	}
-	rr, ok := c.fs.(RevisionReverter)
-	if !ok {
-		log.Error().Msg("storage driver does not implement RevisionReverter")
-		return
-	}
-	if err := rr.RevertUploadRevision(ctx, ev.ResourceID); err != nil {
-		log.Error().Err(err).Msg("Failed to revert revision")
 	}
 }
 
@@ -557,15 +504,18 @@ func (c *coordinator)handlePostprocessingStepFinished(ctx context.Context, ev ev
 	metrics.UploadSessionsScanned.Inc()
 }
 
-// InitiateUpload creates a node placeholder via TouchFile and builds an upload
-// session. For new files TouchFile creates the node; for overwrites it already
-// exists and we skip it. All session fields are populated via typed setters so
-// the coordinator has no knowledge of internal storage key names.
+// InitiateUpload creates a node placeholder via TouchFile and builds an upload session.
 func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
-	// Resolve node metadata: determine whether the target exists, get its ID,
-	// parent ID, space ID, space owner, and the path for Dir.
 	existing, err := c.fs.GetMD(ctx, ref, []string{}, []string{})
-	nodeExists := err == nil
+	var nodeExists bool
+	switch err.(type) {
+	case nil:
+		nodeExists = true
+	case errtypes.IsNotFound:
+		nodeExists = false
+	default:
+		return nil, err
+	}
 
 	mtime := ""
 	if m, ok := metadata["mtime"]; ok && m != "null" {
@@ -576,21 +526,15 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 	var spaceOwner *user.UserId
 
 	if nodeExists {
-		// Overwrite: node is already there; TouchFile is a no-op for existing nodes.
 		nodeID = existing.GetId().GetOpaqueId()
 		spaceID = existing.GetId().GetSpaceId()
 		parentID = existing.GetParentId().GetOpaqueId()
 		dir = filepath.Dir(existing.GetPath())
 		nodeName = existing.GetName()
-		// SpaceOwner is not on ResourceInfo directly; read from a space listing
-		// or fall back to the owner field (which is the node owner, not space owner).
-		// The session field is used to populate BytesReceived / UploadReady events.
 		spaceOwner = existing.GetOwner()
 
-		// Check quota before accepting the upload. Skip for size-deferred uploads
-		// (uploadLength == -1) since the final size is unknown at this point.
-		// For overwrites the existing bytes will be freed on commit, so the net
-		// required space is uploadLength - existing.Size.
+		// For overwrites the existing bytes will be freed on commit, so net required
+		// space is uploadLength - existing.Size. Skip for size-deferred uploads.
 		if uploadLength >= 0 {
 			spaceRef := &provider.Reference{ResourceId: existing.GetId()}
 			if _, _, remaining, qErr := c.fs.GetQuota(ctx, spaceRef); qErr == nil {
@@ -607,15 +551,12 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 			}
 		}
 	} else {
-		// Check quota before creating the placeholder node. The ref's ResourceId
-		// points to the space root, which is sufficient for GetQuota.
 		if uploadLength > 0 {
 			if _, _, remaining, qErr := c.fs.GetQuota(ctx, ref); qErr == nil && remaining < uint64(uploadLength) {
 				return nil, errtypes.InsufficientStorage("quota exceeded")
 			}
 		}
 
-		// New file: create the placeholder node via TouchFile.
 		result, tfErr := c.fs.TouchFile(ctx, ref, false, mtime)
 		if tfErr != nil {
 			return nil, tfErr
@@ -623,10 +564,9 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 		nodeID = result.ResourceID.GetOpaqueId()
 		spaceID = result.SpaceID
 		spaceOwner = result.SpaceOwner
-		// Derive dir and name from the ref path — ref must carry a path for new files.
+		// Derive dir and name from the ref path (ref must carry a path for new files).
 		dir = filepath.Dir(ref.GetPath())
 		nodeName = filepath.Base(ref.GetPath())
-		// Parent ResourceId is not returned by TouchFile; derive from GetMD on the parent.
 		parentRef := &provider.Reference{
 			ResourceId: ref.ResourceId,
 			Path:       filepath.Dir(ref.GetPath()),
@@ -656,6 +596,8 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 	session.SetStorageValue("NodeParentId", parentID)
 	if spaceOwner != nil {
 		session.SetStorageValue("SpaceOwnerOrManager", spaceOwner.GetOpaqueId())
+		session.SetStorageValue("SpaceOwnerIdp", spaceOwner.GetIdp())
+		session.SetStorageValue("SpaceOwnerType", utils.UserTypeToString(spaceOwner.GetType()))
 	}
 
 	usr := ctxpkg.ContextMustGetUser(ctx)
@@ -710,21 +652,32 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 	}
 
 	if err := session.TouchBin(); err != nil {
+		if !nodeExists {
+			_, _ = c.fs.Delete(ctx, ref)
+		}
 		return nil, fmt.Errorf("coordinator: could not create bin file: %w", err)
 	}
 	if err := session.Persist(ctx); err != nil {
+		session.Cleanup(true, false)
+		if !nodeExists {
+			_, _ = c.fs.Delete(ctx, ref)
+		}
 		return nil, fmt.Errorf("coordinator: could not persist session: %w", err)
+	}
+
+	sessionRef := session.Reference()
+	if err := c.fs.MarkProcessing(ctx, &sessionRef, true, session.ID()); err != nil {
+		session.Cleanup(true, true)
+		if !nodeExists {
+			_, _ = c.fs.Delete(ctx, ref)
+		}
+		return nil, fmt.Errorf("coordinator: could not mark processing: %w", err)
 	}
 
 	metrics.UploadSessionsInitiated.Inc()
 
 	if uploadLength == 0 {
-		// Zero-length uploads complete immediately: compute checksums on the empty
-		// bin, commit, and clean up — no postprocessing needed.
-		if err := session.FinishBytesOnly(ctx); err != nil {
-			session.Cleanup(false, true, true, false)
-			return nil, fmt.Errorf("coordinator: zero-length FinishBytesOnly: %w", err)
-		}
+		// Zero-length uploads complete immediately without postprocessing.
 		commitRef := session.Reference()
 		if _, err := c.fs.CommitUpload(ctx, &commitRef, storage.UploadSource{
 			Body:      io.NopCloser(bytes.NewReader(nil)),
@@ -732,10 +685,11 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 			Metadata:  session.Metadata(),
 			Checksums: session.Checksums(),
 		}); err != nil {
-			session.Cleanup(false, true, true, false)
+			c.rollback(ctx, session)
 			return nil, fmt.Errorf("coordinator: zero-length CommitUpload: %w", err)
 		}
-		session.Cleanup(false, true, true, false)
+		_ = c.fs.MarkProcessing(ctx, &commitRef, false, session.ID())
+		session.Cleanup(true, true)
 		metrics.UploadSessionsFinalized.Inc()
 		return map[string]string{
 			"simple": session.ID(),
@@ -768,16 +722,12 @@ func (c *coordinator)Upload(ctx context.Context, req storage.UploadRequest, uff 
 		return nil, errtypes.PartialContent(req.Ref.String())
 	}
 
-	if err := session.FinishBytesOnly(ctx); err != nil {
+	if err := checksumAndFinish(ctx, session); err != nil {
+		c.rollback(ctx, session)
 		return nil, err
 	}
 	if err := session.Persist(ctx); err != nil {
-		return nil, err
-	}
-
-	ref := session.Reference()
-	if err := c.fs.MarkProcessing(ctx, &ref, true, session.ID()); err != nil {
-		session.Cleanup(false, true, true, false)
+		c.rollback(ctx, session)
 		return nil, err
 	}
 
@@ -791,6 +741,7 @@ func (c *coordinator)Upload(ctx context.Context, req storage.UploadRequest, uff 
 	} else {
 		s, err := session.URL(ctx)
 		if err != nil {
+			c.rollback(ctx, session)
 			return nil, err
 		}
 		if err := events.Publish(ctx, c.pub, events.BytesReceived{
@@ -809,9 +760,11 @@ func (c *coordinator)Upload(ctx context.Context, req storage.UploadRequest, uff 
 				SpaceId:   session.SpaceID(),
 				OpaqueId:  session.NodeID(),
 			},
-			Filename: session.Filename(),
-			Filesize: uint64(session.Size()),
+			Filename:          session.Filename(),
+			Filesize:          uint64(session.Size()),
+			ImpersonatingUser: impersonatingUser(ctx),
 		}); err != nil {
+			c.rollback(ctx, session)
 			return nil, err
 		}
 	}
@@ -839,31 +792,15 @@ func (c *coordinator)Upload(ctx context.Context, req storage.UploadRequest, uff 
 	}, nil
 }
 
-// UseIn registers the coordinator as the TUS data store in the composer.
-func (c *coordinator)UseIn(composer *tusd.StoreComposer) {
-	composer.UseCore(c)
-	composer.UseTerminater(c)
-	composer.UseConcater(c)
-	composer.UseLengthDeferrer(c)
-}
-
-// NewUpload is not supported; uploads are initiated via the CS3 API.
-func (c *coordinator)NewUpload(_ context.Context, _ tusd.FileInfo) (tusd.Upload, error) {
-	return nil, errNotImplemented
-}
-
-// GetUpload returns the upload session wrapped in a coordinatedUpload so the
-// TUS FinishUpload hook runs the coordinator path rather than the legacy one.
-func (c *coordinator)GetUpload(ctx context.Context, id string) (tusd.Upload, error) {
-	session, err := c.store.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return &coordinatedUpload{Upload: session, session: session, coord: c}, nil
-}
-
 // ListUploadSessions returns upload sessions matching the given filter.
 func (c *coordinator)ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
+	if filter.ID != nil && *filter.ID != "" {
+		session, err := c.store.Get(ctx, *filter.ID)
+		if err != nil {
+			return nil, err
+		}
+		return []storage.UploadSession{session}, nil
+	}
 	sessions, err := c.store.List(ctx)
 	if err != nil {
 		return nil, err
@@ -900,17 +837,3 @@ func (c *coordinator)ListUploadSessions(ctx context.Context, filter storage.Uplo
 	return result, nil
 }
 
-// AsTerminatableUpload returns the upload as a TerminatableUpload.
-func (c *coordinator)AsTerminatableUpload(up tusd.Upload) tusd.TerminatableUpload {
-	return up.(tusd.TerminatableUpload)
-}
-
-// AsLengthDeclarableUpload returns the upload as a LengthDeclarableUpload.
-func (c *coordinator)AsLengthDeclarableUpload(up tusd.Upload) tusd.LengthDeclarableUpload {
-	return up.(tusd.LengthDeclarableUpload)
-}
-
-// AsConcatableUpload returns the upload as a ConcatableUpload.
-func (c *coordinator)AsConcatableUpload(up tusd.Upload) tusd.ConcatableUpload {
-	return up.(tusd.ConcatableUpload)
-}

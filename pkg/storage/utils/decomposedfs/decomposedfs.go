@@ -262,16 +262,6 @@ func (fs *Decomposedfs) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// RevertUploadRevision reverts an in-flight upload by calling RevertCurrentRevision on the node.
-// It implements upload.RevisionReverter so the coordinator can delegate RevertRevision events.
-func (fs *Decomposedfs) RevertUploadRevision(ctx context.Context, id *provider.ResourceId) error {
-	n, err := fs.lu.NodeFromID(ctx, id)
-	if err != nil {
-		return err
-	}
-	return n.RevertCurrentRevision(ctx)
-}
-
 // GetQuota returns the quota available
 // TODO Document in the cs3 should we return quota or free space?
 func (fs *Decomposedfs) GetQuota(ctx context.Context, ref *provider.Reference) (total uint64, inUse uint64, remaining uint64, err error) {

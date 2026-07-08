@@ -60,7 +60,7 @@ type FileStore struct {
 // FileStoreFromDriverConf builds a FileStore from a reva driver config map.
 // Returns nil if the config carries no root path (driver does not support
 // coordinated uploads). Each service that mounts the same driver calls this
-// independently — the same pattern decomposedfs uses for its Aspects.
+// independently.
 func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
 	if driverConf == nil {
 		return nil
@@ -122,7 +122,7 @@ func NewFileStore(root string, opts TokenOptions, log *zerolog.Logger) *FileStor
 }
 
 // Setup creates the uploads directory eagerly so permission problems are caught
-// at startup rather than on the first upload. Mirrors decomposedfs tree.Setup().
+// at startup rather than on the first upload.
 func (fs *FileStore) Setup() error {
 	return os.MkdirAll(filepath.Join(fs.root, "uploads"), 0700)
 }

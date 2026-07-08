@@ -117,7 +117,7 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 
 	store := pkgupload.NewFileStoreFromConfig(conf.UploadDirectory, conf.Drivers[conf.Driver], log)
 	if store == nil {
-		return nil, fmt.Errorf("dataprovider: cannot determine upload directory — set upload_directory in config or driver root")
+		return nil, fmt.Errorf("dataprovider: cannot determine upload directory, set upload_directory in config or driver root")
 	}
 	if err := store.Setup(); err != nil {
 		return nil, fmt.Errorf("dataprovider: upload directory setup failed: %w", err)

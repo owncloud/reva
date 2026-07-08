@@ -51,27 +51,26 @@ import (
 
 const defaultFilePerm = os.FileMode(0664)
 
-// FileSession is a driver-agnostic upload session backed by a .info file and a
-// .bin staging file on disk. It satisfies the Session interface so the
-// Coordinator can drive it without any knowledge of decomposedfs internals.
+// FileSession is the Session implementation for disk-backed uploads. While an
+// upload is in progress, incoming bytes are staged in a .bin file and upload
+// metadata (size, owner, checksums, etc.) is persisted in a .info file. Both
+// survive process restarts, allowing TUS resumption.
+//
+// In scope: read/write the staged .bin file, persist/load upload metadata in the .info file.
+// Out of scope: TUS protocol, checksums, event publishing, postprocessing — those live in coordinatedUpload and coordinator.
 type FileSession struct {
 	store *FileStore
 	info  tusd.FileInfo
 }
 
-// --- tusd.Upload ---
-
-// GetInfo returns the TUS FileInfo for this session.
 func (s *FileSession) GetInfo(_ context.Context) (tusd.FileInfo, error) {
 	return s.info, nil
 }
 
-// GetReader opens the staged binary file for reading.
 func (s *FileSession) GetReader(_ context.Context) (io.ReadCloser, error) {
 	return os.Open(s.binPath())
 }
 
-// WriteChunk appends src to the staged binary file at the given offset.
 func (s *FileSession) WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error) {
 	file, err := os.OpenFile(s.binPath(), os.O_WRONLY|os.O_APPEND, defaultFilePerm)
 	if err != nil {
@@ -87,91 +86,10 @@ func (s *FileSession) WriteChunk(ctx context.Context, offset int64, src io.Reade
 	return n, nil
 }
 
-// FinishUpload is the tusd hook called after all bytes arrive.
-// For the coordinator path this is handled by coordinatedUpload.FinishUpload;
-// this method exists to satisfy the tusd.Upload interface.
-func (s *FileSession) FinishUpload(ctx context.Context) error {
-	return s.FinishBytesOnly(ctx)
-}
-
-// FinishBytesOnly computes and validates checksums and stores them on the session.
-// It does not commit anything to the storage backend.
-func (s *FileSession) FinishBytesOnly(ctx context.Context) error {
-	sha1h, md5h, adler32h, err := calculateChecksums(ctx, s.binPath())
-	if err != nil {
-		return err
-	}
-
-	if s.info.MetaData["checksum"] != "" {
-		parts := strings.SplitN(s.info.MetaData["checksum"], " ", 2)
-		if len(parts) != 2 {
-			return errtypes.BadRequest("invalid checksum format. must be '[algorithm] [checksum]'")
-		}
-		var checkErr error
-		switch parts[0] {
-		case "sha1":
-			checkErr = checkHash(parts[1], sha1h)
-		case "md5":
-			checkErr = checkHash(parts[1], md5h)
-		case "adler32":
-			checkErr = checkHash(parts[1], adler32h)
-		default:
-			checkErr = errtypes.BadRequest("unsupported checksum algorithm: " + parts[0])
-		}
-		if checkErr != nil {
-			s.Cleanup(false, true, true, false)
-			return checkErr
-		}
-	}
-
-	s.SetChecksums(sha1h.Sum(nil), md5h.Sum(nil), adler32h.Sum(nil))
-	return nil
-}
-
-// Terminate removes all on-disk state for this session.
-func (s *FileSession) Terminate(_ context.Context) error {
-	s.Cleanup(true, true, true, true)
-	return nil
-}
-
-// DeclareLength updates the upload length on the session and persists it.
-func (s *FileSession) DeclareLength(ctx context.Context, length int64) error {
-	s.info.Size = length
-	s.info.SizeIsDeferred = false
-	return s.Persist(ctx)
-}
-
-// ConcatUploads concatenates the staged binaries of partialUploads into this session's bin.
-func (s *FileSession) ConcatUploads(_ context.Context, partialUploads []tusd.Upload) error {
-	file, err := os.OpenFile(s.binPath(), os.O_WRONLY|os.O_APPEND, defaultFilePerm)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	for _, partial := range partialUploads {
-		fs, ok := partial.(*FileSession)
-		if !ok {
-			return fmt.Errorf("filestore: ConcatUploads: unexpected upload type %T", partial)
-		}
-		src, err := os.Open(fs.binPath())
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(file, src)
-		src.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-	}
-	return nil
-}
-
-// --- storage.UploadSession ---
 
 // Purge removes all on-disk state for this session.
 func (s *FileSession) Purge(ctx context.Context) {
-	s.Cleanup(true, true, true, true)
+	s.Cleanup(true, true)
 }
 
 // ScanData returns the AV scan result and scan date stored on the session.
@@ -183,8 +101,6 @@ func (s *FileSession) ScanData() (string, time.Time) {
 	d, _ := time.Parse(time.RFC3339, date)
 	return s.info.MetaData["scanResult"], d
 }
-
-// --- Session (coordinator-specific accessors) ---
 
 // ID returns the upload session ID.
 func (s *FileSession) ID() string {
@@ -256,6 +172,8 @@ func (s *FileSession) IsProcessing() bool {
 func (s *FileSession) SpaceOwner() *userpb.UserId {
 	return &userpb.UserId{
 		OpaqueId: s.info.Storage["SpaceOwnerOrManager"],
+		Idp:      s.info.Storage["SpaceOwnerIdp"],
+		Type:     userpb.UserType(userpb.UserType_value[s.info.Storage["SpaceOwnerType"]]),
 	}
 }
 
@@ -380,10 +298,8 @@ func (s *FileSession) Persist(ctx context.Context) error {
 }
 
 // Cleanup removes the staged binary and/or info file.
-// Unlike OcisSession.Cleanup, this implementation has no knowledge of storage
-// nodes — node reverting and unmark-processing are the coordinator's responsibility
-// via storage.FS.MarkProcessing / Delete calls.
-func (s *FileSession) Cleanup(revertNodeMetadata, cleanBin, cleanInfo, unmarkPostprocessing bool) {
+// Node deletion and processing flag changes are the coordinator's responsibility.
+func (s *FileSession) Cleanup(cleanBin, cleanInfo bool) {
 	log := s.store.log
 	if cleanBin {
 		if err := os.Remove(s.binPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -433,17 +349,13 @@ func (s *FileSession) URL(_ context.Context) (string, error) {
 	return joinURLParts(s.store.opts.DataGatewayEndpoint, tkn), nil
 }
 
-// ToFileInfo returns the underlying tusd.FileInfo.
 func (s *FileSession) ToFileInfo() tusd.FileInfo {
 	return s.info
 }
 
-// InitiatorID returns the initiator ID stored in the session metadata.
 func (s *FileSession) InitiatorID() string {
 	return s.info.MetaData["initiatorid"]
 }
-
-// --- internal helpers ---
 
 func (s *FileSession) binPath() string {
 	return filepath.Join(s.store.root, "uploads", s.info.ID)

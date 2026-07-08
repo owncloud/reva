@@ -448,49 +448,27 @@ var _ = Describe("Async file uploads", Ordered, func() {
 
 	})
 	When("a second upload is attempted while the first is still in postprocessing", func() {
-		// The coordinator serializes uploads via MarkProcessing: a second FinishUpload
-		// call while the first session holds the processing slot returns ResourceProcessing
-		// and the second session is cleaned up immediately.
+		// The coordinator serializes uploads via MarkProcessing: a second InitiateUpload
+		// while the first session holds the processing slot returns ResourceProcessing
+		// and cleans up immediately.
 
-		It("rejects the second FinishUpload with ResourceProcessing", func() {
+		It("rejects the second InitiateUpload with ResourceProcessing", func() {
 			// First upload is in postprocessing (BytesReceived consumed in BeforeEach).
-			// Initiate a second upload.
-			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
-			Expect(err).ToNot(HaveOccurred())
-			secondUploadID := uploadIds["simple"]
-
-			// Write bytes for the second upload.
-			up, err := coord.GetUpload(ctx, secondUploadID)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
-			Expect(err).ToNot(HaveOccurred())
-
-			// FinishUpload must fail because the node is already processing.
-			err = up.FinishUpload(ctx)
+			_, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
 			Expect(err).To(HaveOccurred())
-			_, isProcessing := err.(interface{ IsResourceProcessing() bool })
-			_ = isProcessing
 			Expect(err.Error()).To(ContainSubstring("resource is processing"))
 		})
 
-		It("cleans up the rejected session's bin and info files", func() {
-			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
-			Expect(err).ToNot(HaveOccurred())
-			secondUploadID := uploadIds["simple"]
+		It("leaves no orphan session files after rejection", func() {
+			// InitiateUpload fails before TouchBin/Persist, so no .bin or .info are created.
+			_, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).To(HaveOccurred())
 
-			up, err := coord.GetUpload(ctx, secondUploadID)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
-			Expect(err).ToNot(HaveOccurred())
-			_ = up.FinishUpload(ctx) // expect failure; error checked in other test
-
-			// Bin file must be removed.
-			_, statErr := os.Stat(filepath.Join(o.Root, "uploads", secondUploadID))
-			Expect(statErr).ToNot(BeNil(), "bin file should be cleaned up after rejection")
-
-			// Info file must be removed.
-			_, statErr = os.Stat(filepath.Join(o.Root, "uploads", secondUploadID+".info"))
-			Expect(statErr).ToNot(BeNil(), "info file should be cleaned up after rejection")
+			// No uploads directory entries should exist beyond the first session.
+			entries, readErr := os.ReadDir(filepath.Join(o.Root, "uploads"))
+			Expect(readErr).ToNot(HaveOccurred())
+			// Only the first upload's .bin and .info should be present.
+			Expect(len(entries)).To(Equal(2))
 		})
 	})
 
