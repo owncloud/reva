@@ -378,6 +378,34 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 		nodeName = filepath.Base(ref.GetPath())
 	}
 
+	if nodeExists {
+		if !existing.GetPermissionSet().GetInitiateFileUpload() {
+			return nil, errtypes.PermissionDenied(ref.GetPath())
+		}
+		if existing.GetType() == provider.ResourceType_RESOURCE_TYPE_CONTAINER {
+			return nil, errtypes.PreconditionFailed("resource is not a file")
+		}
+		if metadata["if-none-match"] == "*" {
+			return nil, errtypes.Aborted(fmt.Sprintf("parent %s already has a child %s, id %s", parentID, nodeName, nodeID))
+		}
+	} else {
+		parentRef := &provider.Reference{
+			ResourceId: &provider.ResourceId{SpaceId: spaceID},
+			Path:       dir,
+		}
+		parentMD, pErr := c.fs.GetMD(ctx, parentRef, []string{}, []string{})
+		switch pErr.(type) {
+		case nil:
+		case errtypes.IsNotFound:
+			return nil, errtypes.PreconditionFailed(pErr.Error())
+		default:
+			return nil, pErr
+		}
+		if !parentMD.GetPermissionSet().GetInitiateFileUpload() {
+			return nil, errtypes.PermissionDenied(ref.GetPath())
+		}
+	}
+
 	if nodeName == "" {
 		return nil, errtypes.BadRequest("coordinator: missing filename in ref")
 	}
