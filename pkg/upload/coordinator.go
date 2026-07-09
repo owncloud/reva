@@ -230,13 +230,15 @@ func (c *coordinator)handlePostprocessingFinished(ctx context.Context, ev events
 
 	log = c.log.With().Str("spaceid", session.SpaceID()).Str("nodeid", session.NodeID()).Logger()
 	ref := session.Reference()
-	if _, err := c.fs.GetMD(ctx, &ref, []string{}, []string{}); err != nil {
-		log.Debug().Err(err).Msg("node no longer exists or not accessible; cleaning up")
-		session.Cleanup(true, true)
-		if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
-			log.Error().Err(err).Msg("could not unmark processing during cleanup of inaccessible node")
+	if _, mdErr := c.fs.GetMD(ctx, &ref, []string{}, []string{}); mdErr != nil {
+		if _, notFound := mdErr.(errtypes.IsNotFound); notFound {
+			log.Debug().Err(mdErr).Msg("node deleted during postprocessing; cleaning up")
+			session.Cleanup(true, true)
+			if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
+				log.Error().Err(err).Msg("could not unmark processing during cleanup of deleted node")
+			}
+			return
 		}
-		return
 	}
 
 	var (
@@ -482,6 +484,21 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 		nodeName = existing.GetName()
 		spaceOwner = existing.GetOwner()
 
+		diskLock, _ := c.fs.GetLock(ctx, ref)
+		contextLockID, _ := ctxpkg.ContextGetLockID(ctx)
+		if diskLock != nil {
+			switch contextLockID {
+			case "":
+				return nil, errtypes.Locked(diskLock.LockId)
+			case diskLock.LockId:
+				// ok
+			default:
+				return nil, errtypes.Aborted("mismatching lock")
+			}
+		} else if contextLockID != "" {
+			return nil, errtypes.Aborted("not locked")
+		}
+
 		// For overwrites the existing bytes will be freed on commit, so net required
 		// space is uploadLength - existing.Size. Skip for size-deferred uploads.
 		if uploadLength >= 0 {
@@ -501,13 +518,18 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 		}
 	} else {
 		if uploadLength > 0 {
-			if _, _, remaining, qErr := c.fs.GetQuota(ctx, ref); qErr == nil && remaining < uint64(uploadLength) {
+			// ref points to the not-yet-existing file; resolve the space root instead so GetQuota finds an existing node.
+			spaceRef := &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: ref.GetResourceId().GetSpaceId()}}
+			if _, _, remaining, qErr := c.fs.GetQuota(ctx, spaceRef); qErr == nil && remaining < uint64(uploadLength) {
 				return nil, errtypes.InsufficientStorage("quota exceeded")
 			}
 		}
 
 		result, tfErr := c.fs.TouchFile(ctx, ref, false, mtime)
 		if tfErr != nil {
+			if _, ok := tfErr.(errtypes.IsNotFound); ok {
+				return nil, errtypes.PreconditionFailed(tfErr.Error())
+			}
 			return nil, tfErr
 		}
 		nodeID = result.ResourceID.GetOpaqueId()
@@ -627,6 +649,14 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 
 	if uploadLength == 0 {
 		// Zero-length uploads complete immediately without postprocessing.
+		if err := checksumAndFinish(ctx, session); err != nil {
+			c.rollback(ctx, session)
+			return nil, fmt.Errorf("coordinator: zero-length checksums: %w", err)
+		}
+		if err := session.Persist(ctx); err != nil {
+			c.rollback(ctx, session)
+			return nil, fmt.Errorf("coordinator: zero-length persist: %w", err)
+		}
 		commitRef := session.Reference()
 		if _, err := c.fs.CommitUpload(ctx, &commitRef, storage.UploadSource{
 			Body:      io.NopCloser(bytes.NewReader(nil)),
@@ -693,17 +723,12 @@ func (c *coordinator)Upload(ctx context.Context, req storage.UploadRequest, uff 
 			c.rollback(ctx, session)
 			return nil, err
 		}
+		executingUser, _ := ctxpkg.ContextGetUser(ctx)
 		if err := events.Publish(ctx, c.pub, events.BytesReceived{
-			UploadID:   session.ID(),
-			URL:        s,
-			SpaceOwner: session.SpaceOwner(),
-			ExecutingUser: &user.User{
-				Id: &user.UserId{
-					Type:     session.Executant().Type,
-					Idp:      session.Executant().Idp,
-					OpaqueId: session.Executant().OpaqueId,
-				},
-			},
+			UploadID:      session.ID(),
+			URL:           s,
+			SpaceOwner:    session.SpaceOwner(),
+			ExecutingUser: executingUser,
 			ResourceID: &provider.ResourceId{
 				StorageId: session.ProviderID(),
 				SpaceId:   session.SpaceID(),
