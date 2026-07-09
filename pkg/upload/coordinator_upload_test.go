@@ -42,6 +42,8 @@ import (
 
 // initiateAndGetID calls InitiateUpload on coord and returns the session ID.
 // It sets up the expected FS mock calls for a new-file happy path.
+// TouchFile and MarkProcessing(true) are NOT registered here — they happen in
+// FinishUpload/Upload, not InitiateUpload. Callers must register them as needed.
 func initiateAndGetID(t *testing.T, coord Coordinator, mockFs *mockFS, content string) string {
 	t.Helper()
 	ctx := ctxpkg.ContextSetUser(context.Background(), &userpb.User{
@@ -51,17 +53,19 @@ func initiateAndGetID(t *testing.T, coord Coordinator, mockFs *mockFS, content s
 
 	mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 	mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-	mockFs.On("TouchFile", mock.Anything, r, false, "").Return(&storage.TouchFileResult{
-		ResourceID: &provider.ResourceId{OpaqueId: "node1"},
-		SpaceID:    "space1",
-		SpaceOwner: &userpb.UserId{OpaqueId: "owner1"},
-	}, nil)
-	mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-	mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 	ids, err := coord.InitiateUpload(ctx, r, int64(len(content)), nil)
 	require.NoError(t, err)
 	return ids["simple"]
+}
+
+// touchFileResult returns the mock TouchFile result used by upload tests.
+func touchFileResultForUpload() *storage.TouchFileResult {
+	return &storage.TouchFileResult{
+		ResourceID: &provider.ResourceId{OpaqueId: "node1", SpaceId: "space1"},
+		SpaceID:    "space1",
+		SpaceOwner: &userpb.UserId{OpaqueId: "owner1"},
+	}
 }
 
 // newUploadStore creates a new FileStore at the same root as used by the coordinator.
@@ -76,8 +80,8 @@ func newUploadStore(t *testing.T, root string) *FileStore {
 	}, &log)
 }
 
-// TestChecksumAndFinish tests the checksumAndFinish package-level function.
-func TestChecksumAndFinish(t *testing.T) {
+// TestVerifyAndStoreChecksums tests the verifyAndStoreChecksums package-level function.
+func TestVerifyAndStoreChecksums(t *testing.T) {
 	t.Run("no checksum in metadata: sets checksums on session", func(t *testing.T) {
 		root := t.TempDir()
 		_, _, store := newTestCoordinatorWithStore(t, root, false, nil)
@@ -88,7 +92,7 @@ func TestChecksumAndFinish(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(len(content)), n)
 
-		err = checksumAndFinish(context.Background(), session)
+		err = verifyAndStoreChecksums(context.Background(), session)
 		require.NoError(t, err)
 
 		cs := session.Checksums()
@@ -112,7 +116,7 @@ func TestChecksumAndFinish(t *testing.T) {
 		session.SetMetadata("checksum", "sha1 "+expected)
 		require.NoError(t, session.Persist(context.Background()))
 
-		require.NoError(t, checksumAndFinish(context.Background(), session))
+		require.NoError(t, verifyAndStoreChecksums(context.Background(), session))
 	})
 
 	t.Run("wrong sha1 checksum returns ChecksumMismatch and cleans bin", func(t *testing.T) {
@@ -127,7 +131,7 @@ func TestChecksumAndFinish(t *testing.T) {
 		session.SetMetadata("checksum", "sha1 0000000000000000000000000000000000000000")
 		require.NoError(t, session.Persist(context.Background()))
 
-		err = checksumAndFinish(context.Background(), session)
+		err = verifyAndStoreChecksums(context.Background(), session)
 		require.Error(t, err)
 		_, isMismatch := err.(errtypes.ChecksumMismatch)
 		assert.True(t, isMismatch)
@@ -143,6 +147,8 @@ func TestUpload_Sync(t *testing.T) {
 		content := "hello"
 		sessionID := initiateAndGetID(t, coord, mockFs, content)
 
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
+		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, mock.AnythingOfType("string")).Return(nil)
 
@@ -199,7 +205,7 @@ func TestUpload_Sync(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("checksumAndFinish failure triggers rollback", func(t *testing.T) {
+	t.Run("verifyAndStoreChecksums failure triggers rollback", func(t *testing.T) {
 		root := t.TempDir()
 		coord, mockFs, _ := newTestCoordinatorWithStore(t, root, false, nil)
 		content := "test"
@@ -212,6 +218,8 @@ func TestUpload_Sync(t *testing.T) {
 		sess.SetMetadata("checksum", "sha1 0000000000000000000000000000000000000000")
 		require.NoError(t, sess.Persist(context.Background()))
 
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
+		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, sessionID).Return(nil)
 		mockFs.On("Delete", mock.Anything, mock.Anything).Return((*storage.DeleteResult)(nil), nil)
 
@@ -233,6 +241,9 @@ func TestUpload_Async(t *testing.T) {
 		coord, mockFs, _ := newTestCoordinatorWithStore(t, root, true, pub)
 		content := "asyncdata"
 		sessionID := initiateAndGetID(t, coord, mockFs, content)
+
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
+		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		ctx := context.Background()
 		var uffCalled bool
@@ -270,6 +281,8 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 		_, err = up.WriteChunk(ctx, 0, strings.NewReader(content))
 		require.NoError(t, err)
 
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
+		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, sessionID).Return(nil)
 
@@ -290,6 +303,9 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 		require.NoError(t, err)
 		_, err = up.WriteChunk(ctx, 0, strings.NewReader(content))
 		require.NoError(t, err)
+
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
+		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		err = up.FinishUpload(ctx)
 		require.NoError(t, err)
@@ -313,6 +329,7 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 		up, err := coord.GetUpload(ctx, session.ID())
 		require.NoError(t, err)
 
+		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, session.ID()).Return(nil)
 

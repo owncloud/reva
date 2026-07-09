@@ -104,9 +104,9 @@ func TestRollback(t *testing.T) {
 	})
 }
 
-// TestCommitSync covers commitSync: happy path, missing .bin, and CommitUpload failure.
-func TestCommitSync(t *testing.T) {
-	t.Run("happy path: commits, unmarks, removes bin, keeps info", func(t *testing.T) {
+// TestFinishSync covers finishSync: happy path, missing .bin, and CommitUpload failure.
+func TestFinishSync(t *testing.T) {
+	t.Run("happy path: commits, unmarks, removes bin and info", func(t *testing.T) {
 		root := t.TempDir()
 		coord, fs, store := newTestCoordinatorWithStore(t, root, false, nil)
 		session := newPopulatedSession(t, store, "/dir", "file.txt", "node1", "space1", false)
@@ -120,13 +120,13 @@ func TestCommitSync(t *testing.T) {
 		fs.On("CommitUpload", mock.Anything, &ref, mock.AnythingOfType("storage.UploadSource")).Return((*provider.ResourceInfo)(nil), nil)
 		fs.On("MarkProcessing", mock.Anything, &ref, false, loaded.ID()).Return(nil)
 
-		err = coord.(*coordinator).commitSync(context.Background(), loaded)
+		err = coord.(*coordinator).finishSync(context.Background(), loaded)
 		require.NoError(t, err)
 
 		fs.AssertExpectations(t)
 		assert.NoFileExists(t, loaded.BinPath())
 		infoPath := fileSessionPath(store.root, loaded.ID())
-		assert.FileExists(t, infoPath)
+		assert.NoFileExists(t, infoPath)
 	})
 
 	t.Run("missing bin triggers rollback and returns error", func(t *testing.T) {
@@ -140,7 +140,7 @@ func TestCommitSync(t *testing.T) {
 		fs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 		fs.On("Delete", mock.Anything, &ref).Return((*storage.DeleteResult)(nil), nil)
 
-		err := coord.(*coordinator).commitSync(context.Background(), session)
+		err := coord.(*coordinator).finishSync(context.Background(), session)
 		require.Error(t, err)
 		fs.AssertExpectations(t)
 	})
@@ -159,7 +159,7 @@ func TestCommitSync(t *testing.T) {
 		fs.On("MarkProcessing", mock.Anything, &ref, false, loaded.ID()).Return(nil)
 		fs.On("Delete", mock.Anything, &ref).Return((*storage.DeleteResult)(nil), nil)
 
-		err = coord.(*coordinator).commitSync(context.Background(), loaded)
+		err = coord.(*coordinator).finishSync(context.Background(), loaded)
 		require.Error(t, err)
 		fs.AssertExpectations(t)
 	})

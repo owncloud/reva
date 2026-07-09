@@ -80,9 +80,6 @@ func TestInitiateUpload_NewFile(t *testing.T) {
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		fs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		fs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		fs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		fs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		ids, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.NoError(t, err)
@@ -120,19 +117,16 @@ func TestInitiateUpload_NewFile(t *testing.T) {
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		fs.On("GetQuota", mock.Anything, r).Return(uint64(0), uint64(0), uint64(0), errors.New("quota unavailable"))
-		fs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		fs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		fs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.NoError(t, err)
-		fs.AssertCalled(t, "TouchFile", mock.Anything, r, false, "")
+		fs.AssertNotCalled(t, "TouchFile", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 
 // TestInitiateUpload_Overwrite covers overwrite (existing node) scenarios.
 func TestInitiateUpload_Overwrite(t *testing.T) {
-	t.Run("happy path overwrite proceeds with MarkProcessing(true)", func(t *testing.T) {
+	t.Run("happy path overwrite creates session without touching node", func(t *testing.T) {
 		root := t.TempDir()
 		coord, fs, _ := newTestCoordinatorWithStore(t, root, false, nil)
 		ctx := authedCtx()
@@ -140,15 +134,15 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 		existing := existingNodeInfo("node1", "space1", 20)
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return(existing, nil)
-		// quota ref will be based on existing node id
 		spaceRef := &provider.Reference{ResourceId: existing.GetId()}
 		fs.On("GetQuota", mock.Anything, spaceRef).Return(uint64(100), uint64(50), uint64(50), nil)
-		fs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
+		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
 
 		ids, err := coord.InitiateUpload(ctx, r, 30, nil)
 		require.NoError(t, err)
 		require.NotEmpty(t, ids["simple"])
 		fs.AssertNotCalled(t, "TouchFile", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		fs.AssertNotCalled(t, "MarkProcessing", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("quota exceeded for overwrite", func(t *testing.T) {
@@ -159,6 +153,7 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 		existing := existingNodeInfo("node1", "space1", 5)
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return(existing, nil)
+		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
 		spaceRef := &provider.Reference{ResourceId: existing.GetId()}
 		// remaining=90, net_required=100-5=95 > 90
 		fs.On("GetQuota", mock.Anything, spaceRef).Return(uint64(200), uint64(110), uint64(90), nil)
@@ -180,7 +175,7 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 		spaceRef := &provider.Reference{ResourceId: existing.GetId()}
 		// remaining=0 but net_required=0, should still succeed
 		fs.On("GetQuota", mock.Anything, spaceRef).Return(uint64(100), uint64(100), uint64(0), nil)
-		fs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
+		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 30, nil)
 		require.NoError(t, err)
@@ -194,7 +189,7 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 		existing := existingNodeInfo("node1", "space1", 20)
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return(existing, nil)
-		fs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
+		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, -1, map[string]string{"sizedeferred": "true"})
 		require.NoError(t, err)
@@ -212,8 +207,7 @@ func TestInitiateUpload_ZeroLength(t *testing.T) {
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResult("node1", "space1"), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, mock.AnythingOfType("string")).Return(nil)
@@ -237,8 +231,7 @@ func TestInitiateUpload_ZeroLength(t *testing.T) {
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResult("node1", "space1"), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), errors.New("commit failed"))
 		// rollback: MarkProcessing(false), Delete (ref is session.Reference(), ResourceId-based)
@@ -265,47 +258,7 @@ func TestInitiateUpload_ErrorPaths(t *testing.T) {
 		fs.AssertNotCalled(t, "TouchFile", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
-	t.Run("TouchFile failure returns error, no session on disk", func(t *testing.T) {
-		root := t.TempDir()
-		coord, mockFs, store := newTestCoordinatorWithStore(t, root, false, nil)
-		ctx := authedCtx()
-		r := ref("/dir/file.txt")
-
-		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return((*storage.TouchFileResult)(nil), errors.New("touch failed"))
-
-		_, err := coord.InitiateUpload(ctx, r, 10, nil)
-		require.Error(t, err)
-
-		// No session files should exist.
-		infos, globErr := filepath.Glob(filepath.Join(store.root, "uploads", "*.info"))
-		require.NoError(t, globErr)
-		assert.Empty(t, infos)
-	})
-
-	t.Run("MarkProcessing(true) failure: session files cleaned, node deleted", func(t *testing.T) {
-		root := t.TempDir()
-		coord, mockFs, store := newTestCoordinatorWithStore(t, root, false, nil)
-		ctx := authedCtx()
-		r := ref("/dir/file.txt")
-
-		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(errors.New("mark failed"))
-		mockFs.On("Delete", mock.Anything, r).Return((*storage.DeleteResult)(nil), nil)
-
-		_, err := coord.InitiateUpload(ctx, r, 10, nil)
-		require.Error(t, err)
-
-		infos, globErr := filepath.Glob(filepath.Join(store.root, "uploads", "*.info"))
-		require.NoError(t, globErr)
-		assert.Empty(t, infos)
-	})
-
-	t.Run("TouchBin failure when uploads dir is missing: node deleted", func(t *testing.T) {
+	t.Run("TouchBin failure when uploads dir is missing: no node to delete", func(t *testing.T) {
 		root := t.TempDir()
 		coord, mockFs, store := newTestCoordinatorWithStore(t, root, false, nil)
 		ctx := authedCtx()
@@ -316,13 +269,11 @@ func TestInitiateUpload_ErrorPaths(t *testing.T) {
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		mockFs.On("Delete", mock.Anything, r).Return((*storage.DeleteResult)(nil), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.Error(t, err)
-		mockFs.AssertCalled(t, "Delete", mock.Anything, r)
+		mockFs.AssertNotCalled(t, "TouchFile", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockFs.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
 	})
 }
 
@@ -336,9 +287,6 @@ func TestInitiateUpload_Metadata(t *testing.T) {
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, map[string]string{
 			"checksum": "crc32 abc123",
@@ -356,9 +304,6 @@ func TestInitiateUpload_Metadata(t *testing.T) {
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, map[string]string{
 			"checksum": "nospace",
@@ -376,9 +321,6 @@ func TestInitiateUpload_Metadata(t *testing.T) {
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
 		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
-		mockFs.On("TouchFile", mock.Anything, r, false, "").Return(touchFileResult("node1", "space1"), nil)
-		mockFs.On("GetMD", mock.Anything, mock.Anything, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound("")).Maybe()
-		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, map[string]string{
 			"checksum": "sha1 aabbccdd",

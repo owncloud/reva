@@ -256,6 +256,7 @@ func (s *FileSession) Metadata() map[string]string {
 		"mtime":        s.info.MetaData["mtime"],
 		"nodeExists":   s.info.Storage["NodeExists"],
 		"versionsPath": s.info.MetaData["versionsPath"],
+		"sessionID":    s.info.ID,
 	}
 }
 

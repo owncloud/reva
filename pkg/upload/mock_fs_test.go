@@ -173,8 +173,9 @@ func (m *mockFS) UnsetArbitraryMetadata(_ context.Context, _ *provider.Reference
 	panic("not implemented: UnsetArbitraryMetadata")
 }
 
-func (m *mockFS) GetLock(_ context.Context, _ *provider.Reference) (*provider.Lock, error) {
-	panic("not implemented: GetLock")
+func (m *mockFS) GetLock(ctx context.Context, ref *provider.Reference) (*provider.Lock, error) {
+	args := m.Called(ctx, ref)
+	return args.Get(0).(*provider.Lock), args.Error(1)
 }
 
 func (m *mockFS) SetLock(_ context.Context, _ *provider.Reference, _ *provider.Lock) (*storage.SetLockResult, error) {
