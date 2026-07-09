@@ -42,6 +42,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/rhttp/datatx/metrics"
 	"github.com/owncloud/reva/v2/pkg/storage"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/chunking"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
@@ -69,6 +70,16 @@ func impersonatingUser(ctx context.Context) *user.User {
 }
 
 var errNotImplemented = tusd.NewError("ERR_NOT_IMPLEMENTED", "use InitiateUpload on the CS3 API to start a new upload", 501)
+
+// rewriteChunkedRef strips the chunk suffix from ref.Path and returns the chunk basename.
+// Only called when chunking.IsChunked(ref.GetPath()) is true.
+func rewriteChunkedRef(ref *provider.Reference) (*provider.Reference, string, error) {
+	ci, err := chunking.GetChunkBLOBInfo(ref.GetPath())
+	if err != nil {
+		return nil, "", errtypes.BadRequest(err.Error())
+	}
+	return &provider.Reference{ResourceId: ref.ResourceId, Path: ci.Path}, filepath.Base(ref.GetPath()), nil
+}
 
 // rollback unmarks processing, cleans up session files, and deletes the placeholder
 // node if it was created by this upload (NodeExists=false at initiation).
@@ -241,18 +252,20 @@ type Coordinator interface {
 
 // coordinator is the concrete implementation of Coordinator.
 type coordinator struct {
-	fs       storage.FS
-	store    SessionStore
-	pub      events.Publisher
-	async    bool
-	mountID  string
-	numConc  int
-	conGroup string
-	log      *zerolog.Logger
+	fs           storage.FS
+	store        SessionStore
+	pub          events.Publisher
+	async        bool
+	mountID      string
+	numConc      int
+	conGroup     string
+	log          *zerolog.Logger
+	chunkHandler *chunking.ChunkHandler // nil when legacy chunking v1 is not needed
 }
 
 // NewCoordinator constructs a Coordinator. Call Start to begin consuming events.
 // async=true requires a non-nil pub.
+// chunkFolder enables legacy chunking v1 support; pass "" to disable it.
 func NewCoordinator(
 	fs storage.FS,
 	store SessionStore,
@@ -262,6 +275,7 @@ func NewCoordinator(
 	consumerGroup string,
 	numConsumers int,
 	log *zerolog.Logger,
+	chunkFolder string,
 ) (Coordinator, error) {
 	if async && pub == nil {
 		return nil, fmt.Errorf("need event stream for async upload processing")
@@ -269,19 +283,33 @@ func NewCoordinator(
 	if numConsumers <= 0 {
 		numConsumers = 1
 	}
+	var ch *chunking.ChunkHandler
+	if chunkFolder != "" {
+		ch = chunking.NewChunkHandler(chunkFolder)
+	}
 	return &coordinator{
-		fs:       fs,
-		store:    store,
-		pub:      pub,
-		async:    async,
-		mountID:  mountID,
-		numConc:  numConsumers,
-		conGroup: consumerGroup,
-		log:      log,
+		fs:           fs,
+		store:        store,
+		pub:          pub,
+		async:        async,
+		mountID:      mountID,
+		numConc:      numConsumers,
+		conGroup:     consumerGroup,
+		log:          log,
+		chunkHandler: ch,
 	}, nil
 }
 
-func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
+func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
+	var chunkName string
+	if chunking.IsChunked(ref.GetPath()) { // check legacy chunking v1
+		var rerr error
+		ref, chunkName, rerr = rewriteChunkedRef(ref)
+		if rerr != nil {
+			return nil, rerr
+		}
+	}
+
 	existing, err := c.fs.GetMD(ctx, ref, []string{}, []string{})
 	var nodeExists bool
 	switch err.(type) {
@@ -424,6 +452,9 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 	if !mtimeSet {
 		session.SetMetadata("mtime", utils.TimeToOCMtime(time.Now()))
 	}
+	if chunkName != "" { // check legacy chunking v1
+		session.SetStorageValue("Chunk", chunkName)
+	}
 
 	if err := session.TouchBin(); err != nil {
 		return nil, fmt.Errorf("coordinator: could not create bin file: %w", err)
@@ -455,13 +486,26 @@ func (c *coordinator)InitiateUpload(ctx context.Context, ref *provider.Reference
 // Upload handles the simple (single-PUT) upload path so the coordinator owns
 // the complete upload lifecycle regardless of the datatx protocol used.
 // simple.go calls fs.Upload(); when fs is a *Coordinator this method intercepts.
-func (c *coordinator)Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
+func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
 	id := strings.TrimPrefix(req.Ref.GetPath(), "/")
 	session, err := c.store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	ctx = session.Context(ctx)
+
+	if session.Chunk() != "" { // check legacy chunking v1
+		assembled, assembledSize, done, err := c.chunkHandler.Assemble(session.Chunk(), req.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !done {
+			session.Cleanup(true, true)
+			return nil, errtypes.PartialContent(req.Ref.String())
+		}
+		defer assembled.Close()
+		req.Body, req.Length = assembled, assembledSize
+	}
 
 	size, err := session.WriteChunk(ctx, 0, req.Body)
 	if err != nil {

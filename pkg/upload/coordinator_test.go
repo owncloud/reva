@@ -43,25 +43,25 @@ func TestNewCoordinator(t *testing.T) {
 	fs := &mockFS{}
 
 	t.Run("async without publisher returns error", func(t *testing.T) {
-		_, err := NewCoordinator(fs, store, nil, true, "m", "g", 1, &log)
+		_, err := NewCoordinator(fs, store, nil, true, "m", "g", 1, &log, "")
 		require.Error(t, err)
 	})
 
 	t.Run("sync without publisher succeeds", func(t *testing.T) {
-		coord, err := NewCoordinator(fs, store, nil, false, "m", "g", 1, &log)
+		coord, err := NewCoordinator(fs, store, nil, false, "m", "g", 1, &log, "")
 		require.NoError(t, err)
 		require.NotNil(t, coord)
 	})
 
 	t.Run("async with publisher succeeds", func(t *testing.T) {
 		pub := &mockPublisher{}
-		coord, err := NewCoordinator(fs, store, pub, true, "m", "g", 1, &log)
+		coord, err := NewCoordinator(fs, store, pub, true, "m", "g", 1, &log, "")
 		require.NoError(t, err)
 		require.NotNil(t, coord)
 	})
 
 	t.Run("numConsumers zero defaults to 1", func(t *testing.T) {
-		coord, err := NewCoordinator(fs, store, nil, false, "m", "g", 0, &log)
+		coord, err := NewCoordinator(fs, store, nil, false, "m", "g", 0, &log, "")
 		require.NoError(t, err)
 		require.NotNil(t, coord)
 		c := coord.(*coordinator)

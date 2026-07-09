@@ -236,7 +236,7 @@ func newTestCoordinator(t *testing.T, root string, async bool, pub events.Publis
 	log := zerolog.Nop()
 	store := newTestStore(t, root)
 	fs := &mockFS{}
-	coord, err := NewCoordinator(fs, store, pub, async, "test-mount", "test-group", 1, &log)
+	coord, err := NewCoordinator(fs, store, pub, async, "test-mount", "test-group", 1, &log, "")
 	require.NoError(t, err)
 	return coord, fs
 }
@@ -247,7 +247,7 @@ func newTestCoordinatorWithStore(t *testing.T, root string, async bool, pub even
 	log := zerolog.Nop()
 	store := newTestStore(t, root)
 	fs := &mockFS{}
-	coord, err := NewCoordinator(fs, store, pub, async, "test-mount", "test-group", 1, &log)
+	coord, err := NewCoordinator(fs, store, pub, async, "test-mount", "test-group", 1, &log, "")
 	require.NoError(t, err)
 	return coord, fs, store
 }

@@ -208,7 +208,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		d := dfs.(*Decomposedfs)
 		fileStore := pkgupload.NewFileStore(o.Root, pkgupload.TokenOptions{}, &zerolog.Logger{})
 		var coordErr error
-		coord, coordErr = pkgupload.NewCoordinator(d, fileStore, aspects.EventStream, true, "", "dcfs", 1, &zerolog.Logger{})
+		coord, coordErr = pkgupload.NewCoordinator(d, fileStore, aspects.EventStream, true, "", "dcfs", 1, &zerolog.Logger{}, "")
 		Expect(coordErr).ToNot(HaveOccurred())
 		Expect(coord.Start(aspects.EventStream)).To(Succeed())
 		fs = d
@@ -448,26 +448,40 @@ var _ = Describe("Async file uploads", Ordered, func() {
 
 	})
 	When("a second upload is attempted while the first is still in postprocessing", func() {
-		// The coordinator serializes uploads via MarkProcessing: a second InitiateUpload
-		// while the first session holds the processing slot returns ResourceProcessing
-		// and cleans up immediately.
+		// The coordinator serializes uploads via MarkProcessing: a second FinishUpload
+		// while the first session holds the processing slot returns ResourceProcessing.
+		// InitiateUpload itself succeeds — the conflict is detected when bytes arrive.
 
-		It("rejects the second InitiateUpload with ResourceProcessing", func() {
+		It("rejects the second FinishUpload with ResourceProcessing", func() {
 			// First upload is in postprocessing (BytesReceived consumed in BeforeEach).
-			_, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
+			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).ToNot(HaveOccurred())
+			secondUploadID := uploadIds["simple"]
+
+			up, err := coord.GetUpload(ctx, secondUploadID)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
+			Expect(err).ToNot(HaveOccurred())
+			err = up.FinishUpload(ctx)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("resource is processing"))
 		})
 
 		It("leaves no orphan session files after rejection", func() {
-			// InitiateUpload fails before TouchBin/Persist, so no .bin or .info are created.
-			_, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
-			Expect(err).To(HaveOccurred())
+			uploadIds, err := coord.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).ToNot(HaveOccurred())
+			secondUploadID := uploadIds["simple"]
 
-			// No uploads directory entries should exist beyond the first session.
+			up, err := coord.GetUpload(ctx, secondUploadID)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = up.WriteChunk(ctx, 0, bytes.NewReader(secondContent))
+			Expect(err).ToNot(HaveOccurred())
+			_ = up.FinishUpload(ctx) // expected to fail
+
+			// touchAndMark rollback removes .bin and .info for the second session.
+			// Only the first upload's .bin and .info should remain.
 			entries, readErr := os.ReadDir(filepath.Join(o.Root, "uploads"))
 			Expect(readErr).ToNot(HaveOccurred())
-			// Only the first upload's .bin and .info should be present.
 			Expect(len(entries)).To(Equal(2))
 		})
 	})
