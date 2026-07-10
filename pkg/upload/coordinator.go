@@ -31,7 +31,6 @@ import (
 
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"go.opentelemetry.io/otel"
@@ -125,10 +124,10 @@ func (c *coordinator) triggerPostprocessing(ctx context.Context, session Session
 	}
 	executingUser, _ := ctxpkg.ContextGetUser(ctx)
 	if err := events.Publish(ctx, c.pub, events.BytesReceived{
-		UploadID:          session.ID(),
-		URL:               s,
-		SpaceOwner:        session.SpaceOwner(),
-		ExecutingUser:     executingUser,
+		UploadID:      session.ID(),
+		URL:           s,
+		SpaceOwner:    session.SpaceOwner(),
+		ExecutingUser: executingUser,
 		ResourceID: &provider.ResourceId{
 			StorageId: session.ProviderID(),
 			SpaceId:   session.SpaceID(),
@@ -324,6 +323,29 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 	var nodeID, spaceID, parentID, dir, nodeName string
 	var spaceOwner *user.UserId
 
+	// check quota
+	if uploadLength >= 0 {
+		spaceRef := &provider.Reference{ResourceId: &provider.ResourceId{
+			StorageId: ref.GetResourceId().GetStorageId(),
+			SpaceId:   ref.GetResourceId().GetSpaceId(),
+		}}
+		if _, _, remaining, qErr := c.fs.GetQuota(ctx, spaceRef); qErr == nil {
+			var existingSize uint64
+			if nodeExists {
+				existingSize = existing.GetSize()
+			}
+			netRequired := uint64(uploadLength)
+			if existingSize < netRequired {
+				netRequired -= existingSize
+			} else {
+				netRequired = 0
+			}
+			if remaining < netRequired {
+				return nil, errtypes.InsufficientStorage("quota exceeded")
+			}
+		}
+	}
+
 	if nodeExists {
 		nodeID = existing.GetId().GetOpaqueId()
 		spaceID = existing.GetId().GetSpaceId()
@@ -346,33 +368,7 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 		} else if contextLockID != "" {
 			return nil, errtypes.Aborted("not locked")
 		}
-
-		// For overwrites the existing bytes will be freed on commit, so net required
-		// space is uploadLength - existing.Size. Skip for size-deferred uploads.
-		if uploadLength >= 0 {
-			spaceRef := &provider.Reference{ResourceId: existing.GetId()}
-			if _, _, remaining, qErr := c.fs.GetQuota(ctx, spaceRef); qErr == nil {
-				existingSize := existing.GetSize()
-				netRequired := uint64(uploadLength)
-				if existingSize < netRequired {
-					netRequired -= existingSize
-				} else {
-					netRequired = 0
-				}
-				if remaining < netRequired {
-					return nil, errtypes.InsufficientStorage("quota exceeded")
-				}
-			}
-		}
 	} else {
-		if uploadLength > 0 {
-			if _, _, remaining, qErr := c.fs.GetQuota(ctx, ref); qErr == nil && remaining < uint64(uploadLength) {
-				return nil, errtypes.InsufficientStorage("quota exceeded")
-			}
-		}
-
-		// Pre-generate a node ID; the node is created in FinishUpload once bytes have arrived.
-		nodeID = uuid.New().String()
 		spaceID = ref.GetResourceId().GetSpaceId()
 		dir = filepath.Dir(ref.GetPath())
 		nodeName = filepath.Base(ref.GetPath())
@@ -418,9 +414,9 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 	session.SetStorageValue("NodeName", nodeName)
 	session.SetMetadata("dir", dir)
 	session.SetStorageValue("Dir", dir)
-	session.SetStorageValue("NodeId", nodeID)
 	session.SetStorageValue("SpaceRoot", spaceID)
 	if nodeExists {
+		session.SetStorageValue("NodeId", nodeID)
 		session.SetStorageValue("NodeExists", "true")
 	}
 	session.SetStorageValue("NodeParentId", parentID)
@@ -533,6 +529,7 @@ func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff
 		}
 		defer assembled.Close()
 		req.Body, req.Length = assembled, assembledSize
+		session.SetSize(assembledSize)
 	}
 
 	size, err := session.WriteChunk(ctx, 0, req.Body)
@@ -571,7 +568,7 @@ func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff
 }
 
 // ListUploadSessions returns upload sessions matching the given filter.
-func (c *coordinator)ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
+func (c *coordinator) ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
 	if filter.ID != nil && *filter.ID != "" {
 		session, err := c.store.Get(ctx, *filter.ID)
 		if err != nil {
@@ -614,4 +611,3 @@ func (c *coordinator)ListUploadSessions(ctx context.Context, filter storage.Uplo
 	}
 	return result, nil
 }
-
