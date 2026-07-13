@@ -100,11 +100,12 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) error {
 		c.rollback(ctx, session)
 		return err
 	}
+	cs := session.Checksums()
 	if _, err := c.fs.CommitUpload(ctx, &ref, storage.UploadSource{
 		Body:      f,
 		Length:    session.Size(),
 		Metadata:  session.Metadata(),
-		Checksums: session.Checksums(),
+		Checksums: cs,
 	}); err != nil {
 		c.rollback(ctx, session)
 		return err
@@ -562,14 +563,21 @@ func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff
 		uff(session.SpaceOwner(), &executant, uploadRef)
 	}
 
-	return &provider.ResourceInfo{
+	ri := &provider.ResourceInfo{
 		Id: &provider.ResourceId{
 			StorageId: session.ProviderID(),
 			SpaceId:   session.SpaceID(),
 			OpaqueId:  session.NodeID(),
 		},
 		Name: session.Filename(),
-	}, nil
+	}
+	if mt, ok := session.Metadata()["mtime"]; ok && mt != "" {
+		if t, err := utils.MTimeToTime(mt); err == nil {
+			ri.Etag, _ = utils.CalculateEtag(session.NodeID(), t)
+			ri.Mtime = utils.TimeToTS(t)
+		}
+	}
+	return ri, nil
 }
 
 // ListUploadSessions returns upload sessions matching the given filter.
