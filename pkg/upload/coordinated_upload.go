@@ -91,7 +91,7 @@ func (u *coordinatedUpload) ConcatUploads(ctx context.Context, partials []tusd.U
 }
 
 func (u *coordinatedUpload) FinishUpload(ctx context.Context) error {
-	return u.coord.finishUpload(ctx, u.session)
+	return u.coord.finishUpload(u.session.Context(ctx), u.session)
 }
 
 // UseIn registers the coordinator as the TUS data store in the composer.

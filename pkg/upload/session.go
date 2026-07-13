@@ -79,6 +79,7 @@ type Session interface {
 	ProviderID() string
 	SpaceID() string
 	NodeID() string
+	NodeParentID() string
 	NodeExists() bool
 	Dir() string
 	URL(ctx context.Context) (string, error)
@@ -187,6 +188,11 @@ func (s *FileSession) SpaceID() string {
 // NodeID returns the node ID for this upload.
 func (s *FileSession) NodeID() string {
 	return s.info.Storage["NodeId"]
+}
+
+// NodeParentID returns the parent node ID for this upload.
+func (s *FileSession) NodeParentID() string {
+	return s.info.Storage["NodeParentId"]
 }
 
 // NodeExists returns whether the target node existed when the upload was initiated.

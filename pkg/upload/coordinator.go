@@ -208,8 +208,11 @@ func verifyAndStoreChecksums(ctx context.Context, session Session) error {
 func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
 	if !session.NodeExists() {
 		pathRef := &provider.Reference{
-			ResourceId: &provider.ResourceId{SpaceId: session.SpaceID()},
-			Path:       filepath.Join(session.Dir(), session.Filename()),
+			ResourceId: &provider.ResourceId{
+				SpaceId:  session.SpaceID(),
+				OpaqueId: session.NodeParentID(),
+			},
+			Path: session.Filename(),
 		}
 		result, err := c.fs.TouchFile(ctx, pathRef, false, session.Metadata()["mtime"])
 		if err != nil {
@@ -386,7 +389,7 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 		}
 	} else {
 		parentRef := &provider.Reference{
-			ResourceId: &provider.ResourceId{SpaceId: spaceID},
+			ResourceId: ref.GetResourceId(),
 			Path:       dir,
 		}
 		parentMD, pErr := c.fs.GetMD(ctx, parentRef, []string{}, []string{})
@@ -400,6 +403,8 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 		if !parentMD.GetPermissionSet().GetInitiateFileUpload() {
 			return nil, errtypes.PermissionDenied(ref.GetPath())
 		}
+		parentID = parentMD.GetId().GetOpaqueId()
+		spaceID = parentMD.GetId().GetSpaceId()
 	}
 
 	if nodeName == "" {
