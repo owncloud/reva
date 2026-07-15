@@ -30,6 +30,7 @@ import (
 	"time"
 
 	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
+	"github.com/rs/zerolog"
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -53,6 +54,7 @@ func init() {
 
 // CS3 represents a metadata storage with a cs3 storage backend
 type CS3 struct {
+	log       zerolog.Logger
 	SpaceRoot *provider.ResourceId
 
 	providerAddr      string
@@ -63,6 +65,9 @@ type CS3 struct {
 
 	dataGatewayClient *http.Client
 }
+
+// SetLogger injects a logger; useful in tests to capture trace output.
+func (cs3 *CS3) SetLogger(log zerolog.Logger) { cs3.log = log }
 
 // NewCS3 returns a new CS3 instance. Use an authenticated context and be sure to define SpaceRoot manually.
 func NewCS3(gwAddr, providerAddr string) (s *CS3) {
@@ -162,6 +167,7 @@ func (cs3 *CS3) SimpleUpload(ctx context.Context, uploadpath string, content []b
 	ctx, span := tracer.Start(ctx, "SimpleUpload")
 	defer span.End()
 
+	cs3.log.Debug().Str("path", uploadpath).Msg("cs3:SimpleUpload:start")
 	_, err := cs3.Upload(ctx, UploadRequest{
 		Path:    uploadpath,
 		Content: content,
@@ -173,6 +179,8 @@ func (cs3 *CS3) SimpleUpload(ctx context.Context, uploadpath string, content []b
 func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse, error) {
 	ctx, span := tracer.Start(ctx, "Upload")
 	defer span.End()
+
+	cs3.log.Debug().Str("path", req.Path).Msg("cs3:Upload:start")
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -238,6 +246,8 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 		return nil, errors.New("metadata storage doesn't support the simple upload protocol")
 	}
 
+	cs3.log.Debug().Str("path", req.Path).Str("endpoint", endpoint).Msg("cs3:Upload:initiate_done")
+
 	httpReq, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(req.Content))
 	if err != nil {
 		return nil, err
@@ -253,6 +263,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 		return nil, err
 	}
 	defer resp.Body.Close()
+	cs3.log.Debug().Str("path", req.Path).Int("status", resp.StatusCode).Msg("cs3:Upload:put_done")
 	if err := errtypes.NewErrtypeFromHTTPStatusCode(resp.StatusCode, httpReq.URL.Path); err != nil {
 		return nil, err
 	}
@@ -260,6 +271,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 	if ocEtag := resp.Header.Get("OC-ETag"); ocEtag != "" {
 		etag = ocEtag
 	}
+	cs3.log.Debug().Str("path", req.Path).Str("etag", etag).Msg("cs3:Upload:complete")
 	return &UploadResponse{
 		Etag:   etag,
 		FileID: resp.Header.Get("OC-Fileid"),

@@ -74,6 +74,8 @@ func (session *OcisSession) WriteChunk(ctx context.Context, offset int64, src io
 	}
 	defer file.Close()
 
+	log.Debug().Int64("offset", offset).Msg("decomposedfs:WriteChunk:start")
+
 	// calculate cheksum here? needed for the TUS checksum extension. https://tus.io/protocols/resumable-upload.html#checksum
 	// TODO but how do we get the `Upload-Checksum`? WriteChunk() only has a context, offset and the reader ...
 	// It is sent with the PATCH request, well or in the POST when the creation-with-upload extension is used
@@ -95,6 +97,7 @@ func (session *OcisSession) WriteChunk(ctx context.Context, offset int64, src io
 	// No need to persist the session as the offset is determined by stating the blob in the GetUpload / ReadSession codepath.
 	// The session offset is written to disk in FinishUpload
 	session.info.Offset += n
+	log.Debug().Int64("n", n).Msg("decomposedfs:WriteChunk:complete")
 	return n, nil
 }
 
@@ -114,12 +117,13 @@ func (session *OcisSession) GetReader(ctx context.Context) (io.ReadCloser, error
 // implements tusd.DataStore interface
 // returns tusd errors
 func (session *OcisSession) FinishUpload(ctx context.Context) error {
+	log := appctx.GetLogger(ctx)
+	log.Debug().Msg("decomposedfs:FinishUpload:start")
 	err := session.FinishUploadDecomposed(ctx)
 
 	if err != nil {
 		// this is part of the tusd integration and we might be able to
 		// log the error in another place
-		log := appctx.GetLogger(ctx)
 		log.Error().Err(err).Msg("failed to finish upload")
 	}
 
@@ -140,6 +144,7 @@ func (session *OcisSession) FinishUploadDecomposed(ctx context.Context) error {
 	ctx, span := tracer.Start(session.Context(ctx), "FinishUpload")
 	defer span.End()
 	log := appctx.GetLogger(ctx)
+	log.Debug().Str("session", session.ID()).Msg("decomposedfs:FinishUploadDecomposed:start")
 
 	ctx = ctxpkg.ContextSetInitiator(ctx, session.InitiatorID())
 
@@ -246,6 +251,7 @@ func (session *OcisSession) FinishUploadDecomposed(ctx context.Context) error {
 		metrics.UploadSessionsFinalized.Inc()
 	}
 
+	log.Debug().Str("session", session.ID()).Msg("decomposedfs:FinishUploadDecomposed:complete")
 	return session.store.tp.Propagate(ctx, n, session.SizeDiff())
 }
 

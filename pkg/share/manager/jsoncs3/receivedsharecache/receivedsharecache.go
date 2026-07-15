@@ -157,6 +157,10 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 			// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
 			// Thas happens when the cache thinks there is no file.
 			// continue with sync below
+		case errtypes.TooEarly:
+			log.Debug().Msg("upload slot busy when persisting received share: retrying...")
+			// storage-system has an upload in progress for this node; wait for it to finish
+			// continue with sync below
 		default:
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting added received share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting added received share failed")
@@ -169,11 +173,14 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 			timer.Stop()
 			return ctx.Err()
 		}
-		if err := c.syncWithLock(ctx, userID); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("persisting added received share failed. giving up.")
-			return err
+		if serr := c.syncWithLock(ctx, userID); serr != nil {
+			if _, ok := serr.(errtypes.IsTooEarly); !ok {
+				span.RecordError(serr)
+				span.SetStatus(codes.Error, serr.Error())
+				log.Error().Err(serr).Msg("persisting added received share failed. giving up.")
+				return serr
+			}
+			log.Debug().Msg("sync skipped: resource is processing, will retry")
 		}
 	}
 	return err
@@ -256,6 +263,10 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 			// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
 			// Thas happens when the cache thinks there is no file.
 			// continue with sync below
+		case errtypes.TooEarly:
+			log.Debug().Msg("upload slot busy when persisting received share: retrying...")
+			// storage-system has an upload in progress for this node; wait for it to finish
+			// continue with sync below
 		default:
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting added received share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting added received share failed")
@@ -268,11 +279,14 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 			timer.Stop()
 			return ctx.Err()
 		}
-		if err := c.syncWithLock(ctx, userID); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("persisting added received share failed. giving up.")
-			return err
+		if serr := c.syncWithLock(ctx, userID); serr != nil {
+			if _, ok := serr.(errtypes.IsTooEarly); !ok {
+				span.RecordError(serr)
+				span.SetStatus(codes.Error, serr.Error())
+				log.Error().Err(serr).Msg("persisting added received share failed. giving up.")
+				return serr
+			}
+			log.Debug().Msg("sync skipped: resource is processing, will retry")
 		}
 	}
 	return err
@@ -365,6 +379,9 @@ func (c *Cache) persist(ctx context.Context, userID string) error {
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 
+	log := appctx.GetLogger(ctx)
+	log.Debug().Str("user", userID).Msg("receivedsharecache:persist:start")
+
 	rss, ok := c.ReceivedSpaces.Load(userID)
 	if !ok {
 		span.SetStatus(codes.Ok, "no received shares")
@@ -395,6 +412,7 @@ func (c *Cache) persist(ctx context.Context, userID string) error {
 		ur.IfNoneMatch = []string{"*"}
 	}
 
+	log.Debug().Str("user", userID).Str("path", jsonPath).Str("etag", ur.IfMatchEtag).Msg("receivedsharecache:persist:upload")
 	res, err := c.storage.Upload(ctx, ur)
 	if err != nil {
 		span.RecordError(err)
@@ -403,6 +421,7 @@ func (c *Cache) persist(ctx context.Context, userID string) error {
 	}
 	rss.etag = res.Etag
 
+	log.Debug().Str("user", userID).Str("etag", res.Etag).Msg("receivedsharecache:persist:done")
 	span.SetStatus(codes.Ok, "")
 	return nil
 }

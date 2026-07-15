@@ -11,7 +11,9 @@ import (
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
 	v1beta11 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	ruser "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/events/stream"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
@@ -68,9 +70,9 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		firstContent  = []byte("0123456789")
 		secondContent = []byte("01234567890123456789")
 
-		ctx = ruser.ContextSetUser(context.Background(), user)
+		ctx context.Context
 
-		pub      chan interface{}
+		pub chan interface{}
 		con      chan interface{}
 		uploadID string
 
@@ -132,6 +134,9 @@ var _ = Describe("Async file uploads", Ordered, func() {
 	)
 
 	BeforeEach(func() {
+		zl := zerolog.New(os.Stdout).Level(zerolog.DebugLevel)
+		ctx = appctx.WithLogger(ruser.ContextSetUser(context.Background(), user), &zl)
+
 		// setup test
 		tmpRoot, err := helpers.TempDir("reva-unit-tests-*-root")
 		Expect(err).ToNot(HaveOccurred())
@@ -402,6 +407,67 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 1)
 		})
 
+	})
+	When("Two uploads are processed sequentially (TooEarly prevents parallel uploads)", func() {
+		var secondUploadID string
+
+		JustBeforeEach(func() {
+			// first upload must finish before second can start
+			succeedPostprocessing(uploadID)
+
+			// upload again - only possible now that ProcessingID is cleared
+			uploadIds, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(len(uploadIds)).To(Equal(2))
+			Expect(uploadIds["simple"]).ToNot(BeEmpty())
+			Expect(uploadIds["tus"]).ToNot(BeEmpty())
+
+			uploadRef := &provider.Reference{Path: "/" + uploadIds["simple"]}
+
+			_, err = fs.Upload(ctx, storage.UploadRequest{
+				Ref:    uploadRef,
+				Body:   io.NopCloser(bytes.NewReader(secondContent)),
+				Length: int64(len(secondContent)),
+			}, nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			secondUploadID = uploadIds["simple"]
+
+			// wait for bytes received event
+			_, ok := (<-pub).(events.BytesReceived)
+			Expect(ok).To(BeTrue())
+		})
+
+		It("rejects a concurrent InitiateUpload with TooEarly", func() {
+			// secondUploadID session is still in-progress (BytesReceived published, not yet finished)
+			_, err := fs.InitiateUpload(ctx, ref, 20, map[string]string{})
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsTooEarly)
+			Expect(ok).To(BeTrue())
+
+			// node is visible but locked: status=processing, not yet readable
+			exists, status, _ := fileStatus()
+			Expect(exists).To(BeTrue())
+			Expect(status).To(Equal("processing"))
+		})
+
+		It("succeeds when processed", func() {
+			succeedPostprocessing(secondUploadID)
+
+			_, status, size := fileStatus()
+			Expect(status).To(Equal(""))
+			Expect(size).To(Equal(len(secondContent)))
+			Expect(parentSize()).To(Equal(len(secondContent)))
+		})
+
+		It("restores the previous version when deleted", func() {
+			failPostprocessing(secondUploadID, events.PPOutcomeDelete)
+
+			_, status, size := fileStatus()
+			Expect(status).To(Equal(""))
+			Expect(size).To(Equal(len(firstContent)))
+			Expect(parentSize()).To(Equal(len(firstContent)))
+		})
 	})
 	When("Two uploads are processed in parallel", func() {
 		var secondUploadID string
