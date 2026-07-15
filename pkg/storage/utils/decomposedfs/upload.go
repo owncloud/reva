@@ -296,28 +296,6 @@ func (fs *Decomposedfs) InitiateUpload(ctx context.Context, ref *provider.Refere
 		return nil, err
 	}
 
-	if n.Exists {
-		// Atomically reserve the upload slot. If another session is already uploading
-		// this node, reject immediately so the caller retries with the updated etag
-		// rather than racing to FinishUpload and corrupting the node on cleanup.
-		f, err := lockedfile.OpenFile(fs.lu.MetadataBackend().LockfilePath(n.InternalPath()), os.O_RDWR|os.O_CREATE, 0600)
-		if err != nil {
-			return nil, err
-		}
-		n.ResetXattrsCache()
-		if n.IsProcessing(ctx) {
-			_ = f.Close()
-			return nil, errtypes.TooEarly("upload in progress for node " + n.ID)
-		}
-		if err := n.SetXattrsWithContext(ctx, node.Attributes{
-			prefixes.StatusPrefix: []byte(node.ProcessingStatus + session.ID()),
-		}, false); err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		_ = f.Close()
-	}
-
 	usr := ctxpkg.ContextMustGetUser(ctx)
 
 	// fill future node info
