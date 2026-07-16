@@ -103,6 +103,76 @@ func TestConnPoolEvictsUnhealthyConnection(t *testing.T) {
 	}
 }
 
+func TestConnPoolDoRetriesOnceOnNetworkError(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	var calls int
+	err := p.do(func(conn ldap.Client) error {
+		calls++
+		if calls == 1 {
+			return ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected do to succeed after one retry, got %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected fn to be called twice (initial + 1 retry), got %d", calls)
+	}
+	if got := atomic.LoadInt32(dialCount); got != 2 {
+		t.Fatalf("expected a redial for the retry attempt, got %d dials", got)
+	}
+}
+
+func TestConnPoolDoGivesUpAfterMaxRetries(t *testing.T) {
+	p, _ := newTestPool(2, time.Second)
+
+	networkErr := ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
+	var calls int
+	err := p.do(func(conn ldap.Client) error {
+		calls++
+		return networkErr
+	})
+	if err == nil || !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
+		t.Fatalf("expected a network error after exhausting retries, got %v", err)
+	}
+	if want := defaultRetries + 1; calls != want {
+		t.Fatalf("expected fn to be called %d times, got %d", want, calls)
+	}
+}
+
+func TestConnPoolDoDoesNotRetryNonNetworkError(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	nonNetworkErr := errors.New("ldap: invalid credentials")
+	var calls int
+	err := p.do(func(conn ldap.Client) error {
+		calls++
+		return nonNetworkErr
+	})
+	if !errors.Is(err, nonNetworkErr) {
+		t.Fatalf("expected the non-network error to be returned as-is, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected fn to be called exactly once (no retry for non-network errors), got %d", calls)
+	}
+	if got := atomic.LoadInt32(dialCount); got != 1 {
+		t.Fatalf("expected exactly 1 dial (connection reused, no eviction), got %d", got)
+	}
+}
+
+func TestConnPoolGetLastErrorReturnsNilWithoutCheckout(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	if err := p.GetLastError(); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if got := atomic.LoadInt32(dialCount); got != 0 {
+		t.Fatalf("expected GetLastError not to check out a connection, got %d dials", got)
+	}
+}
+
 func TestConnPoolExhaustionTimesOut(t *testing.T) {
 	p, _ := newTestPool(1, 50*time.Millisecond)
 

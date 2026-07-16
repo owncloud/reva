@@ -108,9 +108,12 @@ func (p *ConnPool) SetLogger(logger *zerolog.Logger) {
 // checkout reserves a pool slot (blocking up to p.timeout) and returns a connection: an idle one if
 // available, otherwise a freshly dialed one.
 func (p *ConnPool) checkout() (ldap.Client, error) {
+	timer := time.NewTimer(p.timeout)
+	defer timer.Stop()
+
 	select {
 	case p.sem <- struct{}{}:
-	case <-time.After(p.timeout):
+	case <-timer.C:
 		return nil, ErrPoolExhausted
 	}
 
@@ -152,14 +155,25 @@ func (p *ConnPool) release(conn ldap.Client, opErr error) {
 	<-p.sem
 }
 
+// do checks out a connection, runs fn, and releases the connection. Checked-out idle connections
+// are not health-checked before use, so a connection that went stale while idle (server-side idle
+// timeout, LB/firewall reaping) is expected to fail the first op after being idle; on a network
+// error, do retries once more with a freshly checked-out connection (the failed one was evicted by
+// release) instead of surfacing the failure to the caller, mirroring ConnWithReconnect's retry.
 func (p *ConnPool) do(fn func(conn ldap.Client) error) error {
-	conn, err := p.checkout()
-	if err != nil {
-		return err
+	var opErr error
+	for try := 0; try <= defaultRetries; try++ {
+		conn, err := p.checkout()
+		if err != nil {
+			return err
+		}
+		opErr = fn(conn)
+		p.release(conn, opErr)
+		if opErr == nil || !ldap.IsErrorWithCode(opErr, ldap.ErrorNetwork) {
+			return opErr
+		}
 	}
-	opErr := fn(conn)
-	p.release(conn, opErr)
-	return opErr
+	return ldap.NewError(ldap.ErrorNetwork, errMaxRetries)
 }
 
 // Close closes the pool: currently idle connections are closed immediately, further checkouts are
@@ -233,14 +247,10 @@ func (p *ConnPool) Extended(request *ldap.ExtendedRequest) (*ldap.ExtendedRespon
 	return res, err
 }
 
-// GetLastError implements the ldap.Client interface
+// GetLastError implements the ldap.Client interface. A pool has no single "last" connection to
+// report on, so this always returns nil; it is unused by any caller of ConnPool today.
 func (p *ConnPool) GetLastError() error {
-	var lastErr error
-	_ = p.do(func(conn ldap.Client) error {
-		lastErr = conn.GetLastError()
-		return nil
-	})
-	return lastErr
+	return nil
 }
 
 // IsClosing implements the ldap.Client interface

@@ -111,6 +111,7 @@ func GetLDAPClientWithPool(c *LDAPConn) (ldap.Client, error) {
 			PoolCheckoutTimeout: c.PoolCheckoutTimeout,
 		},
 	)
+	pool.SetLogger(logger.New())
 	return pool, nil
 }
 
