@@ -56,6 +56,10 @@ type Config struct {
 	BindDN       string
 	BindPassword string
 	TLSConfig    *tls.Config
+
+	// PoolSize and PoolCheckoutTimeout are only used by NewLDAPPool; NewLDAPWithReconnect ignores them.
+	PoolSize            int
+	PoolCheckoutTimeout time.Duration
 }
 
 // NewLDAPWithReconnect Returns a new ConnWithReconnect initialized from config
