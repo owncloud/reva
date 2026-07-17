@@ -95,6 +95,21 @@ func (m *manager) Handler(coord pkgupload.Coordinator, _ storage.FS) (http.Handl
 		StoreComposer:         composer,
 		NotifyCompleteUploads: true,
 		Logger:                slog.New(tusdLogger{log: m.log}),
+		// NodeId is only known after FinishUpload (TouchFile assigns it for new files).
+		// The Storage map is shared by reference, so the value set by touchAndMark is
+		// visible here even though the session file is already deleted from disk.
+		PreFinishResponseCallback: func(hook tusd.HookEvent) (tusd.HTTPResponse, error) {
+			resourceid := &provider.ResourceId{
+				StorageId: hook.Upload.MetaData["providerID"],
+				SpaceId:   hook.Upload.Storage["SpaceRoot"],
+				OpaqueId:  hook.Upload.Storage["NodeId"],
+			}
+			return tusd.HTTPResponse{
+				Header: tusd.HTTPHeader{
+					net.HeaderOCFileID: storagespace.FormatResourceID(resourceid),
+				},
+			}, nil
+		},
 	}
 
 	if m.conf.CorsEnabled {

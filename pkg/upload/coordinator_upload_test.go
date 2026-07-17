@@ -34,6 +34,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	tusd "github.com/tus/tusd/v2/pkg/handler"
+
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/events"
@@ -336,6 +338,29 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 		err = up.FinishUpload(ctx)
 		require.NoError(t, err)
 		assert.Empty(t, pub.events)
+	})
+
+	t.Run("TouchFile returns AlreadyExists: FinishUpload returns 409", func(t *testing.T) {
+		root := t.TempDir()
+		coord, mockFs, store := newTestCoordinatorWithStore(t, root, false, nil)
+		session := newPopulatedSession(t, store, "/dir", "conflict.txt", "", "sp1", false)
+		require.NoError(t, session.Persist(context.Background()))
+
+		ctx := context.Background()
+		up, err := coord.GetUpload(ctx, session.ID())
+		require.NoError(t, err)
+		_, err = up.WriteChunk(ctx, 0, strings.NewReader("conflict"))
+		require.NoError(t, err)
+
+		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).
+			Return((*storage.TouchFileResult)(nil), errtypes.AlreadyExists("node-id"))
+
+		err = up.FinishUpload(ctx)
+		require.Error(t, err)
+
+		var tusErr tusd.Error
+		require.ErrorAs(t, err, &tusErr)
+		assert.Equal(t, 409, tusErr.HTTPResponse.StatusCode)
 	})
 }
 

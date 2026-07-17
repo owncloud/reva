@@ -243,6 +243,8 @@ func New(o *options.Options, aspects aspects.Aspects, log *zerolog.Logger) (stor
 		spaceTypeIndex:  spaceTypeIndex,
 		log:             log,
 	}
+	// TODO(OCISDEV-901): AsyncFileUploads is no longer set from oCIS config — async is now enforced at the
+	// coordinator level in storageprovider/dataprovider. Remove AsyncFileUploads from Options and this check.
 	fs.sessionStore = upload.NewSessionStore(fs, aspects, o.Root, o.AsyncFileUploads, o.Tokens, log)
 	if err = fs.trashbin.Setup(fs); err != nil {
 		return nil, err

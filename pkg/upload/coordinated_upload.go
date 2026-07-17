@@ -100,6 +100,8 @@ func (u *coordinatedUpload) FinishUpload(ctx context.Context) error {
 		return nil
 	case errtypes.ResourceProcessing, errtypes.TooEarly:
 		return tusd.NewError("ERR_TOO_EARLY", err.Error(), http.StatusTooEarly)
+	case errtypes.IsAlreadyExists:
+		return tusd.NewError("ERR_CONFLICT", err.Error(), http.StatusConflict)
 	case errtypes.Aborted:
 		return tusd.NewError("ERR_PRECONDITION_FAILED", err.Error(), http.StatusPreconditionFailed)
 	case errtypes.PreconditionFailed:

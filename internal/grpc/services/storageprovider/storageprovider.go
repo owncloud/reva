@@ -86,6 +86,7 @@ type eventconfig struct {
 	AuthPassword         string `mapstructure:"nats_password" docs:"event stream password"`
 	ConsumerGroup        string `mapstructure:"consumer_group" docs:"dcfs;Consumer group for the upload coordinator"`
 	NumConsumers         int    `mapstructure:"numconsumers" docs:"1;Number of concurrent postprocessing event consumers"`
+	AsyncUploads         bool   `mapstructure:"async_uploads" docs:"false;Require asynchronous upload processing; startup fails if the event stream is not configured"`
 }
 
 func (c *config) init() {
@@ -227,7 +228,10 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 	if err != nil {
 		return nil, err
 	}
-	async := evstream != nil
+	if c.Events.AsyncUploads && evstream == nil {
+		return nil, errors.New("storageprovider: async_uploads is enabled but no event stream is configured")
+	}
+	async := c.Events.AsyncUploads
 	coord, err := pkgupload.NewCoordinator(fs, store, evstream, async,
 		c.MountID, c.Events.ConsumerGroup, c.Events.NumConsumers, log,
 		filepath.Join(store.Root(), "uploads"))

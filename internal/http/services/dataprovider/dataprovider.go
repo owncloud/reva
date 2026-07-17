@@ -57,6 +57,7 @@ type config struct {
 	ConsumerGroup      string                            `mapstructure:"consumer_group"`
 	NumConsumers       int                               `mapstructure:"numconsumers"`
 	UploadDirectory    string                            `mapstructure:"upload_directory" docs:";Local directory for staging upload sessions. Overrides the driver's root. Required for drivers that have no local filesystem root."`
+	AsyncUploads       bool                              `mapstructure:"async_uploads"`
 }
 
 func (c *config) init() {
@@ -123,7 +124,10 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 	if err := store.Setup(); err != nil {
 		return nil, fmt.Errorf("dataprovider: upload directory setup failed: %w", err)
 	}
-	async := evstream != nil
+	if conf.AsyncUploads && evstream == nil {
+		return nil, fmt.Errorf("dataprovider: async_uploads is enabled but no event stream is configured")
+	}
+	async := conf.AsyncUploads
 	coord, err := pkgupload.NewCoordinator(fs, store, evstream, async,
 		conf.MountID, conf.ConsumerGroup, conf.NumConsumers, log,
 		filepath.Join(store.Root(), "uploads"))
