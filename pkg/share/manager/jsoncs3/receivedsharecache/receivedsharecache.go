@@ -174,13 +174,15 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 			return ctx.Err()
 		}
 		if serr := c.syncWithLock(ctx, userID); serr != nil {
-			if _, ok := serr.(errtypes.IsTooEarly); !ok {
+			_, isTooEarly := serr.(errtypes.IsTooEarly)
+			_, isInternal := serr.(errtypes.IsInternalError)
+			if !isTooEarly && !isInternal {
 				span.RecordError(serr)
 				span.SetStatus(codes.Error, serr.Error())
 				log.Error().Err(serr).Msg("persisting added received share failed. giving up.")
 				return serr
 			}
-			log.Debug().Msg("sync skipped: resource is processing, will retry")
+			log.Debug().Err(serr).Msg("sync transient error, will retry")
 		}
 	}
 	return err
@@ -280,13 +282,15 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 			return ctx.Err()
 		}
 		if serr := c.syncWithLock(ctx, userID); serr != nil {
-			if _, ok := serr.(errtypes.IsTooEarly); !ok {
+			_, isTooEarly := serr.(errtypes.IsTooEarly)
+			_, isInternal := serr.(errtypes.IsInternalError)
+			if !isTooEarly && !isInternal {
 				span.RecordError(serr)
 				span.SetStatus(codes.Error, serr.Error())
 				log.Error().Err(serr).Msg("persisting added received share failed. giving up.")
 				return serr
 			}
-			log.Debug().Msg("sync skipped: resource is processing, will retry")
+			log.Debug().Err(serr).Msg("sync transient error, will retry")
 		}
 	}
 	return err
