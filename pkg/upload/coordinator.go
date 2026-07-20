@@ -23,6 +23,8 @@ import (
 	"context"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+
+	"github.com/owncloud/reva/v2/pkg/storage"
 )
 
 // Coordinator owns the upload lifecycle.
@@ -33,14 +35,20 @@ type Coordinator interface {
 
 // coordinator is the concrete implementation of Coordinator.
 type coordinator struct {
+	fs storage.FS
 }
 
-// NewCoordinator constructs a coordinator.
-func NewCoordinator() *coordinator {
-	return &coordinator{}
+// NewCoordinator constructs a coordinator backed by the given storage driver.
+func NewCoordinator(fs storage.FS) *coordinator {
+	return &coordinator{fs: fs}
 }
 
 // InitiateUpload returns a list of protocols with urls that can be used to append bytes to a new upload session.
+//
+// For now this delegates straight to the underlying storage driver, preserving
+// existing behaviour. It lets us wire the coordinator into the storageprovider
+// and exercise the seam end-to-end before porting the driver-agnostic upload
+// logic into the coordinator itself.
 func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
-	panic("not implemented")
+	return c.fs.InitiateUpload(ctx, ref, uploadLength, metadata)
 }
