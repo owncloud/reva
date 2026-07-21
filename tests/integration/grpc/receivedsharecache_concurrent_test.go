@@ -93,7 +93,6 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		newCS3 := func() *metadata.CS3 {
 			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
 			cs3.SpaceRoot = spaceRoot
-			cs3.SetLogger(*appctx.GetLogger(ctx))
 			return cs3
 		}
 
@@ -136,7 +135,6 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		newCS3 := func() *metadata.CS3 {
 			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
 			cs3.SpaceRoot = spaceRoot
-			cs3.SetLogger(*appctx.GetLogger(ctx))
 			return cs3
 		}
 

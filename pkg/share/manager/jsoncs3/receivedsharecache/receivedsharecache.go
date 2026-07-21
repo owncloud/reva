@@ -101,7 +101,7 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 	defer unlock()
 
 	if _, ok := c.ReceivedSpaces.Load(userID); !ok {
-		err := c.syncWithLock(ctx, userID)
+		err := c.syncIfStale(ctx, userID)
 		if err != nil {
 			return err
 		}
@@ -111,7 +111,7 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
 
-	return c.retryPersist(ctx, span, userID, spaceID, func() error {
+	return c.retryPersist(ctx, userID, spaceID, func() error {
 		c.initializeIfNeeded(userID, spaceID)
 
 		rss, _ := c.ReceivedSpaces.Load(userID)
@@ -137,7 +137,7 @@ func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*Stat
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 	defer unlock()
 
-	err := c.syncWithLock(ctx, userID)
+	err := c.syncIfStale(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
 
-	return c.retryPersist(ctx, span, userID, spaceID, func() error {
+	return c.retryPersist(ctx, userID, spaceID, func() error {
 		c.initializeIfNeeded(userID, spaceID)
 
 		rss, _ := c.ReceivedSpaces.Load(userID)
@@ -180,13 +180,14 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 // List returns a list of received shares for a given user
 // The return list is guaranteed to be thread-safe
 func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, error) {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock := c.lockUser(userID)
-	span.End()
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "List")
+	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
+
+	unlock := c.lockUser(userID)
 	defer unlock()
 
-	err := c.syncWithLock(ctx, userID)
+	err := c.syncIfStale(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +216,8 @@ func isSyncTransient(err error) bool {
 	return isTooEarly || isInternal
 }
 
-func (c *Cache) retryPersist(ctx context.Context, span trace.Span, userID, spaceID string, persistFunc func() error) error {
+func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persistFunc func() error) error {
+	span := trace.SpanFromContext(ctx)
 	log := appctx.GetLogger(ctx).With().
 		Str("hostname", os.Getenv("HOSTNAME")).
 		Str("userID", userID).
@@ -262,7 +264,7 @@ func (c *Cache) retryPersist(ctx context.Context, span trace.Span, userID, space
 			timer.Stop()
 			return ctx.Err()
 		}
-		if serr := c.syncWithLock(ctx, userID); serr != nil {
+		if serr := c.syncIfStale(ctx, userID); serr != nil {
 			if !isSyncTransient(serr) {
 				span.RecordError(serr)
 				span.SetStatus(codes.Error, serr.Error())
@@ -275,8 +277,9 @@ func (c *Cache) retryPersist(ctx context.Context, span trace.Span, userID, space
 	return err
 }
 
-func (c *Cache) syncWithLock(ctx context.Context, userID string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Sync")
+// syncIfStale pulls the authoritative state from storage when the local replica is stale; caller must hold the user lock.
+func (c *Cache) syncIfStale(ctx context.Context, userID string) error {
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "SyncIfStale")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 
