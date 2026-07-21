@@ -110,9 +110,18 @@ func GetLDAPClientWithPool(c *LDAPConn) (ldap.Client, error) {
 			PoolSize:            c.PoolSize,
 			PoolCheckoutTimeout: c.PoolCheckoutTimeout,
 		},
+		logger.New(),
 	)
-	pool.SetLogger(logger.New())
 	return pool, nil
+}
+
+// GetLDAPClientFromConfig returns a connected ldap.Client for c: a bounded pool when
+// c.PoolEnabled, otherwise the single long-lived reconnecting connection.
+func GetLDAPClientFromConfig(c *LDAPConn) (ldap.Client, error) {
+	if c.PoolEnabled {
+		return GetLDAPClientWithPool(c)
+	}
+	return GetLDAPClientWithReconnect(c)
 }
 
 // GetLDAPClientForAuth initializes an LDAP connection. The connection is not authenticated

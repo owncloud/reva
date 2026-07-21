@@ -45,7 +45,7 @@ func (f *fakeConn) Close() error {
 // times it was called.
 func newTestPool(size int, timeout time.Duration) (*ConnPool, *int32) {
 	var dialCount int32
-	p := NewLDAPPool(Config{PoolSize: size, PoolCheckoutTimeout: timeout})
+	p := NewLDAPPool(Config{PoolSize: size, PoolCheckoutTimeout: timeout}, nil)
 	p.dial = func(Config) (ldap.Client, error) {
 		atomic.AddInt32(&dialCount, 1)
 		return &fakeConn{}, nil

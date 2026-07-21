@@ -23,7 +23,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -31,7 +31,12 @@ import (
 )
 
 const (
-	defaultPoolSize            = 5
+	// defaultPoolSize is the pool size used when Config.PoolSize is <= 0. It is a plain size, not a
+	// sentinel: there is no "unlimited" pool, a non-positive value always falls back to this default.
+	defaultPoolSize = 5
+	// defaultPoolCheckoutTimeout is the checkout timeout used when Config.PoolCheckoutTimeout is <=
+	// 0. Like PoolSize, there is no "wait forever" mode: a non-positive value falls back to this
+	// default rather than disabling the timeout.
 	defaultPoolCheckoutTimeout = 30 * time.Second
 )
 
@@ -42,25 +47,33 @@ var (
 	errPoolClosed    = errors.New("ldap: connection pool is closed")
 )
 
+// clientFactory dials and authenticates a new LDAP connection for the given config. ConnPool holds
+// it as a field, rather than calling dialLDAP directly, purely so tests can substitute a
+// network-free fake; every production pool uses dialLDAP.
+type clientFactory func(Config) (ldap.Client, error)
+
 // ConnPool is a bounded pool of authenticated LDAP connections. Connections are dialed and bound
 // lazily on checkout and reused across requests; connections that fail with a network error are
 // discarded and lazily re-dialed on a later checkout, instead of the pool eagerly reconnecting them.
 type ConnPool struct {
 	config  Config
 	timeout time.Duration
-	dial    func(Config) (ldap.Client, error)
+	dial    clientFactory
 	logger  *zerolog.Logger
 
-	sem  chan struct{}
+	// sem bounds the number of connections checked out at once: checkout blocks sending to it until
+	// a slot is free, release receives from it to free the slot. Its capacity is the pool size.
+	sem chan struct{}
+	// idle holds connections that are checked in and ready to be reused; it is buffered to the pool
+	// size so release never blocks. checkout drains it first before dialing a new connection.
 	idle chan ldap.Client
 
-	mu     sync.Mutex
-	closed bool
+	closed atomic.Bool
 }
 
-// NewLDAPPool returns a new ConnPool initialized from config. No connection is dialed until the
-// first checkout.
-func NewLDAPPool(config Config) *ConnPool {
+// NewLDAPPool returns a new ConnPool initialized from config, logging through logger (or silently
+// if logger is nil). No connection is dialed until the first checkout.
+func NewLDAPPool(config Config, logger *zerolog.Logger) *ConnPool {
 	size := config.PoolSize
 	if size <= 0 {
 		size = defaultPoolSize
@@ -69,17 +82,22 @@ func NewLDAPPool(config Config) *ConnPool {
 	if timeout <= 0 {
 		timeout = defaultPoolCheckoutTimeout
 	}
-	logger := zerolog.Nop()
+	if logger == nil {
+		nop := zerolog.Nop()
+		logger = &nop
+	}
 	return &ConnPool{
 		config:  config,
 		timeout: timeout,
 		dial:    dialLDAP,
-		logger:  &logger,
+		logger:  logger,
 		sem:     make(chan struct{}, size),
 		idle:    make(chan ldap.Client, size),
 	}
 }
 
+// dialLDAP dials config.URI and, if config.BindDN is set, binds as that DN: it establishes a fully
+// authenticated connection, not just a network connection.
 func dialLDAP(config Config) (ldap.Client, error) {
 	var l *ldap.Conn
 	var err error
@@ -100,11 +118,6 @@ func dialLDAP(config Config) (ldap.Client, error) {
 	return l, nil
 }
 
-// SetLogger sets the logger for the current instance
-func (p *ConnPool) SetLogger(logger *zerolog.Logger) {
-	p.logger = logger
-}
-
 // checkout reserves a pool slot (blocking up to p.timeout) and returns a connection: an idle one if
 // available, otherwise a freshly dialed one.
 func (p *ConnPool) checkout() (ldap.Client, error) {
@@ -117,10 +130,7 @@ func (p *ConnPool) checkout() (ldap.Client, error) {
 		return nil, ErrPoolExhausted
 	}
 
-	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-	if closed {
+	if p.IsClosing() {
 		<-p.sem
 		return nil, errPoolClosed
 	}
@@ -143,12 +153,10 @@ func (p *ConnPool) checkout() (ldap.Client, error) {
 // release returns conn to the pool, or closes and discards it if opErr is a network error (or the
 // pool has since been closed), and frees the slot reserved by checkout.
 func (p *ConnPool) release(conn ldap.Client, opErr error) {
-	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-
-	if closed || (opErr != nil && ldap.IsErrorWithCode(opErr, ldap.ErrorNetwork)) {
-		conn.Close()
+	if p.IsClosing() || (opErr != nil && ldap.IsErrorWithCode(opErr, ldap.ErrorNetwork)) {
+		if err := conn.Close(); err != nil {
+			p.logger.Error().Err(err).Msg("error closing pooled LDAP connection")
+		}
 	} else {
 		p.idle <- conn
 	}
@@ -179,18 +187,16 @@ func (p *ConnPool) do(fn func(conn ldap.Client) error) error {
 // Close closes the pool: currently idle connections are closed immediately, further checkouts are
 // rejected, and connections already checked out are closed as they're returned.
 func (p *ConnPool) Close() error {
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
+	if !p.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	p.closed = true
-	p.mu.Unlock()
 
 	for {
 		select {
 		case conn := <-p.idle:
-			conn.Close()
+			if err := conn.Close(); err != nil {
+				p.logger.Error().Err(err).Msg("error closing pooled LDAP connection")
+			}
 		default:
 			return nil
 		}
@@ -255,9 +261,7 @@ func (p *ConnPool) GetLastError() error {
 
 // IsClosing implements the ldap.Client interface
 func (p *ConnPool) IsClosing() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.closed
+	return p.closed.Load()
 }
 
 // Remaining methods to fulfill ldap.Client interface

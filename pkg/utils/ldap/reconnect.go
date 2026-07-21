@@ -50,18 +50,6 @@ type ConnWithReconnect struct {
 	logger  *zerolog.Logger
 }
 
-// Config holds the basic configuration of the LDAP Connection
-type Config struct {
-	URI          string
-	BindDN       string
-	BindPassword string
-	TLSConfig    *tls.Config
-
-	// PoolSize and PoolCheckoutTimeout are only used by NewLDAPPool; NewLDAPWithReconnect ignores them.
-	PoolSize            int
-	PoolCheckoutTimeout time.Duration
-}
-
 // NewLDAPWithReconnect Returns a new ConnWithReconnect initialized from config
 func NewLDAPWithReconnect(config Config) *ConnWithReconnect {
 	conn := ConnWithReconnect{

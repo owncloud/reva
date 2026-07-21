@@ -78,11 +78,7 @@ func New(m map[string]interface{}) (auth.Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	if manager.c.LDAPConn.PoolEnabled {
-		manager.ldapClient, err = utils.GetLDAPClientWithPool(&manager.c.LDAPConn)
-	} else {
-		manager.ldapClient, err = utils.GetLDAPClientWithReconnect(&manager.c.LDAPConn)
-	}
+	manager.ldapClient, err = utils.GetLDAPClientFromConfig(&manager.c.LDAPConn)
 	if err != nil {
 		return nil, err
 	}
