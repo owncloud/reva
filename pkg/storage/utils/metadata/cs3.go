@@ -167,7 +167,7 @@ func (cs3 *CS3) SimpleUpload(ctx context.Context, uploadpath string, content []b
 	ctx, span := tracer.Start(ctx, "SimpleUpload")
 	defer span.End()
 
-	cs3.log.Debug().Str("path", uploadpath).Msg("cs3:SimpleUpload:start")
+	cs3.log.Debug().Str("path", uploadpath).Msg("cs3.SimpleUpload.start")
 	_, err := cs3.Upload(ctx, UploadRequest{
 		Path:    uploadpath,
 		Content: content,
@@ -180,7 +180,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 	ctx, span := tracer.Start(ctx, "Upload")
 	defer span.End()
 
-	cs3.log.Debug().Str("path", req.Path).Msg("cs3:Upload:start")
+	cs3.log.Debug().Str("path", req.Path).Msg("cs3.Upload.start")
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -246,7 +246,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 		return nil, errors.New("metadata storage doesn't support the simple upload protocol")
 	}
 
-	cs3.log.Debug().Str("path", req.Path).Str("endpoint", endpoint).Msg("cs3:Upload:initiate_done")
+	cs3.log.Debug().Str("path", req.Path).Str("endpoint", endpoint).Msg("cs3.Upload.initiate_done")
 
 	httpReq, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(req.Content))
 	if err != nil {
@@ -263,7 +263,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 		return nil, err
 	}
 	defer resp.Body.Close()
-	cs3.log.Debug().Str("path", req.Path).Int("status", resp.StatusCode).Msg("cs3:Upload:put_done")
+	cs3.log.Debug().Str("path", req.Path).Int("status", resp.StatusCode).Msg("cs3.Upload.put_done")
 	if err := errtypes.NewErrtypeFromHTTPStatusCode(resp.StatusCode, httpReq.URL.Path); err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 	if ocEtag := resp.Header.Get("OC-ETag"); ocEtag != "" {
 		etag = ocEtag
 	}
-	cs3.log.Debug().Str("path", req.Path).Str("etag", etag).Msg("cs3:Upload:complete")
+	cs3.log.Debug().Str("path", req.Path).Str("etag", etag).Msg("cs3.Upload.complete")
 	return &UploadResponse{
 		Etag:   etag,
 		FileID: resp.Header.Get("OC-Fileid"),
