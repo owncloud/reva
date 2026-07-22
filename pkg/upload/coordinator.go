@@ -49,31 +49,28 @@ type coordinator struct {
 	store SessionStore
 }
 
-// NewCoordinator constructs a coordinator backed by the given storage driver.
-func NewCoordinator(fs storage.FS) *coordinator {
-	return &coordinator{fs: fs}
+// NewCoordinator constructs a coordinator backed by the given storage driver
+// and session store. The store must use an on-disk session format the driver's
+// data path can read (the decomposedfs family: ocis/s3ng/posix).
+func NewCoordinator(fs storage.FS, store SessionStore) *coordinator {
+	return &coordinator{fs: fs, store: store}
 }
 
 // InitiateUpload returns a list of protocols with urls that can be used to append bytes to a new upload session.
-//
-// For now this delegates straight to the underlying storage driver, preserving
-// existing behaviour. It lets us wire the coordinator into the storageprovider
-// and exercise the seam end-to-end before porting the driver-agnostic upload
-// logic into the coordinator itself.
 func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
-	return c.fs.InitiateUpload(ctx, ref, uploadLength, metadata)
+	return c.initiateUpload(ctx, ref, uploadLength, metadata)
 }
 
 // initiateUpload is the driver-agnostic port of decomposedfs.InitiateUpload.
 //
-// It is DEAD CODE for now: the exported pass-through above still serves all
-// traffic. This method is copied verbatim from the colleague's OCISDEV-900 branch
-// so we can validate it block-by-block against main before wiring it in. Two known
-// divergences from main will be fixed here (not inherited):
-//   - F1: mint the new-file NodeId here (main's behaviour) so OC-FileId is populated.
-//   - quota fails open on GetQuota error; main aborts.
+// Known open divergences from main, tracked as findings and NOT yet resolved:
+//   - F1: new-file NodeId is not minted here → node-less OC-FileId header.
+//   - B2: permission-gated GetMD hides deny-granted files → late 409 instead of 403.
+//   - B6/B7: spaceOwner manager-fallback and posix scoping (SpaceGid, RunInBaseScope).
 //
-// The zero-length finish branch is stubbed until finishUpload (data path) is ported.
+// The zero-length finish branch is stubbed (finishUpload/data path not ported).
+// Until those are addressed, only wire a store for drivers/paths where the gaps
+// are acceptable.
 func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
 	var chunkName string
 	if chunking.IsChunked(ref.GetPath()) { // check legacy chunking v1
@@ -84,6 +81,12 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		}
 	}
 
+	// nodeExists=false is overloaded: genuinely absent, or exists-but-hidden by a deny-grant.
+	//
+	// TODO(OCISDEV-900, finding B2): permission-gated GetMD hides a deny-granted
+	// file as NotFound, so we take the new-file branch (200) and fail late at
+	// finish with 409 instead of main's up-front 403 — an existence oracle plus a
+	// wasted upload. Accepted for now; a clean fix needs a permission-free resolve.
 	existing, err := c.fs.GetMD(ctx, ref, []string{}, []string{})
 	var nodeExists bool
 	switch err.(type) {
@@ -104,6 +107,7 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 			StorageId: ref.GetResourceId().GetStorageId(),
 			SpaceId:   ref.GetResourceId().GetSpaceId(),
 		}}
+		// GetQuota is permission-gated: roles that can upload but lack GetQuota (Uploader, share) error here, so we fail open and let finish enforce.
 		if _, _, remaining, qErr := c.fs.GetQuota(ctx, spaceRef); qErr == nil {
 			var existingSize uint64
 			if nodeExists {
@@ -138,6 +142,9 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		}
 		dir = filepath.Dir(relPath)
 		nodeName = existing.GetName()
+		// TODO(OCISDEV-900, finding B6): main uses SpaceOwnerOrManager (falls back to a
+		// manager when owner is nil/SPACE_OWNER, e.g. project drives). GetOwner() has no
+		// such fallback, and the new-file branch never sets spaceOwner at all.
 		spaceOwner = existing.GetOwner()
 
 		diskLock, _ := c.fs.GetLock(ctx, ref)
@@ -179,10 +186,9 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		switch pErr.(type) {
 		case nil:
 		case errtypes.IsNotFound:
-			// RFC 4918: missing intermediate dir → 409, no permission → 404.
-			// GetMD returns NotFound for both (hides resources from unauthorized callers).
-			// Walk up the path: if an ancestor is visible, the dir is truly missing (409).
-			// If nothing is visible up to the root, caller has no access (404).
+			// GetMD collapses "dir missing" and "dir hidden (no access)" both into NotFound.
+			// Walk up: if any ancestor is visible, the dir is genuinely missing → PreconditionFailed.
+			// If nothing is visible up to the root, the caller has no access → PermissionDenied.
 			ancestor := dir
 			permDenied := true
 			for ancestor != "." && ancestor != "/" {
@@ -230,6 +236,11 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		session.SetStorageValue("SpaceOwnerIdp", spaceOwner.GetIdp())
 		session.SetStorageValue("SpaceOwnerType", utils.UserTypeToString(spaceOwner.GetType()))
 	}
+
+	// TODO(OCISDEV-900, finding B7): main copies CtxKeySpaceGID into the session
+	// (upload.go:188) to drive posix uid/gid scoping at commit. That key lives in the
+	// decomposedfs package; reading it here would make the driver-agnostic coordinator
+	// depend on a concrete driver. posix-only concern (unset on ocis/s3ng). Deferred.
 
 	usr := ctxpkg.ContextMustGetUser(ctx)
 	session.SetExecutant(usr)
@@ -285,6 +296,10 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		session.SetStorageValue("Chunk", chunkName)
 	}
 
+	// TODO(OCISDEV-900, finding B7): main wraps TouchBin+Persist in fs.um.RunInBaseScope
+	// (upload.go:316) so the .bin/.info files get correct posix ownership. That usermapper
+	// lives in decomposedfs; the driver-agnostic coordinator can't reach it. posix-only
+	// (no-op on ocis/s3ng). Same root cause as SpaceGid; deferred.
 	if err := session.TouchBin(); err != nil {
 		return nil, fmt.Errorf("coordinator: could not create bin file: %w", err)
 	}
@@ -296,9 +311,10 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 	metrics.UploadSessionsInitiated.Inc()
 
 	if uploadLength == 0 {
-		// Zero-length uploads complete immediately without postprocessing.
-		// TODO: port finishUpload (data path) in its own step; until then this
-		// branch is unreachable because initiateUpload is not wired in.
+		// Zero-length uploads must finish immediately (main: FinishUploadDecomposed, upload.go:333).
+		// The finish/data path is not ported yet, so this is stubbed. HARD BLOCKER on wiring
+		// initiateUpload into the live path: an empty-file upload (e.g. touch over WebDAV) would
+		// hit this — finish must be ported BEFORE the swap, not after.
 		return nil, errtypes.NotSupported("coordinator: zero-length finish not yet ported")
 	}
 
