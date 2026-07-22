@@ -37,7 +37,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // name is the Tracer name used to identify this instrumentation library.
@@ -111,7 +110,7 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
 
-	return c.retryPersist(ctx, userID, spaceID, func() error {
+	err := c.retryPersist(ctx, userID, spaceID, func() error {
 		c.initializeIfNeeded(userID, spaceID)
 
 		rss, _ := c.ReceivedSpaces.Load(userID)
@@ -127,6 +126,13 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 
 		return c.persist(ctx, userID)
 	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
+	}
+	return err
 }
 
 // Get returns one entry from the cache
@@ -160,7 +166,7 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
 
-	return c.retryPersist(ctx, userID, spaceID, func() error {
+	err := c.retryPersist(ctx, userID, spaceID, func() error {
 		c.initializeIfNeeded(userID, spaceID)
 
 		rss, _ := c.ReceivedSpaces.Load(userID)
@@ -175,6 +181,13 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 
 		return c.persist(ctx, userID)
 	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
+	}
+	return err
 }
 
 // List returns a list of received shares for a given user
@@ -217,7 +230,6 @@ func isSyncTransient(err error) bool {
 }
 
 func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persistFunc func() error) error {
-	span := trace.SpanFromContext(ctx)
 	log := appctx.GetLogger(ctx).With().
 		Str("hostname", os.Getenv("HOSTNAME")).
 		Str("userID", userID).
@@ -233,7 +245,6 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		err = persistFunc()
 		switch err.(type) {
 		case nil:
-			span.SetStatus(codes.Ok, "")
 			return nil
 		case errtypes.Aborted:
 			// this is the expected status code from the server when the if-match etag check fails
@@ -253,7 +264,6 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			// continue with sync below
 			log.Debug().Int("attempt", attempt).Msg("CAS failed: TooEarly (upload in progress), retrying")
 		default:
-			span.SetStatus(codes.Error, fmt.Sprintf("persisting received share failed, giving up: %s", err.Error()))
 			log.Error().Int("attempt", attempt).Err(err).Msg("persisting received share failed, giving up")
 			return err
 		}
@@ -266,8 +276,6 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		}
 		if serr := c.syncIfStale(ctx, userID); serr != nil {
 			if !isSyncTransient(serr) {
-				span.RecordError(serr)
-				span.SetStatus(codes.Error, serr.Error())
 				log.Error().Int("attempt", attempt).Err(serr).Msg("lost update: re-read failed, aborting")
 				return serr
 			}
