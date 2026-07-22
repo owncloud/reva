@@ -215,14 +215,16 @@ func TestConnPoolConcurrentCheckoutRelease(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 50 {
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			conn, err := p.checkout()
 			if err != nil {
 				t.Errorf("checkout failed: %v", err)
 				return
 			}
 			p.release(conn, nil)
-		})
+		}()
 	}
 	wg.Wait()
 
