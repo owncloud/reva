@@ -21,11 +21,16 @@ package receivedsharecache_test
 import (
 	"context"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/appctx"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/rs/zerolog"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -49,7 +54,8 @@ var _ = Describe("Cache", func() {
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
+		zl := zerolog.New(os.Stdout).Level(zerolog.DebugLevel)
+		ctx = appctx.WithLogger(context.Background(), &zl)
 
 		var err error
 		tmpdir, err = os.MkdirTemp("", "providercache-test")
@@ -69,6 +75,50 @@ var _ = Describe("Cache", func() {
 		if tmpdir != "" {
 			os.RemoveAll(tmpdir)
 		}
+	})
+
+	Describe("List", func() {
+		Context("when no cache file exists yet", func() {
+			It("creates the cache file on first call", func() {
+				_, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = os.Stat(tmpdir + "/users/" + userID + "/received.json")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("returns empty spaces", func() {
+				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(BeEmpty())
+			})
+
+			It("is readable by a fresh cache instance after first call", func() {
+				_, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+
+				// a new cache instance must be able to read the bootstrapped file
+				c2 := receivedsharecache.New(storage, 0*time.Second)
+				spaces, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(BeEmpty())
+			})
+
+			It("allows adding a share after bootstrap", func() {
+				_, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+
+				rs := &collaboration.ReceivedShare{
+					Share: share,
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				}
+				Expect(c.Add(ctx, userID, spaceID, rs)).To(Succeed())
+
+				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces[spaceID].States).To(HaveKey(shareID))
+			})
+		})
 	})
 
 	Describe("Add", func() {
@@ -97,6 +147,46 @@ var _ = Describe("Cache", func() {
 			s, err := c.Get(ctx, userID, spaceID, shareID)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(s).ToNot(BeNil())
+		})
+	})
+
+	Describe("concurrent writes from multiple cache instances", func() {
+		It("preserves the share when 15 replicas write the same file simultaneously", func() {
+			const numReplicas = 15
+
+			// barrier releases all 15 Upload calls at once — every replica is a loser
+			// except one, maximising retry pressure on a single shared file.
+			bs := newBarrierStorage(storage, numReplicas)
+			replicas := make([]receivedsharecache.Cache, numReplicas)
+			for i := range replicas {
+				replicas[i] = receivedsharecache.New(bs, 0*time.Second)
+			}
+
+			errs := make([]error, numReplicas)
+			var wg sync.WaitGroup
+			for i := 0; i < numReplicas; i++ {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					rs := &collaboration.ReceivedShare{
+						Share: &collaboration.Share{
+							Id: &collaboration.ShareId{OpaqueId: "share-0"},
+						},
+						State: collaboration.ShareState_SHARE_STATE_PENDING,
+					}
+					errs[idx] = replicas[idx].Add(ctx, userID, spaceID, rs)
+				}(i)
+			}
+			wg.Wait()
+			for i, err := range errs {
+				Expect(err).ToNot(HaveOccurred(), "replica %d failed", i)
+			}
+
+			fresh := receivedsharecache.New(storage, 0*time.Second)
+			spaces, err := fresh.List(ctx, userID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces[spaceID]).ToNot(BeNil())
+			Expect(spaces[spaceID].States).To(HaveKey("share-0"))
 		})
 	})
 
@@ -154,6 +244,63 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil())
 			})
+
+			It("returns context.Canceled immediately when ctx is already canceled", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+
+				err := c2.Remove(canceled, userID, spaceID, shareID)
+				Expect(err).To(MatchError(context.Canceled))
+				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(0)))
+			})
+
+			It("exits the backoff sleep when ctx is canceled", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				ctx2, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+				defer cancel()
+
+				start := time.Now()
+				_ = c2.Remove(ctx2, userID, spaceID, shareID)
+				Expect(time.Since(start)).To(BeNumerically("<", 200*time.Millisecond))
+			})
 		})
 	})
 })
+
+// barrierStorage wraps a Storage and holds Upload calls until n goroutines have
+// arrived, then releases them all at once. This makes the concurrent-write race
+// reproducible regardless of OS goroutine scheduling.
+type barrierStorage struct {
+	metadata.Storage
+	arrived   int32
+	n         int32
+	ready     chan struct{}
+	closeOnce sync.Once
+}
+
+func newBarrierStorage(s metadata.Storage, n int) *barrierStorage {
+	return &barrierStorage{Storage: s, n: int32(n), ready: make(chan struct{})}
+}
+
+func (b *barrierStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if atomic.AddInt32(&b.arrived, 1) >= b.n {
+		b.closeOnce.Do(func() { close(b.ready) })
+	}
+	<-b.ready
+	return b.Storage.Upload(ctx, req)
+}
+
+type alwaysFailStorage struct {
+	metadata.Storage
+	uploads int32
+}
+
+func (a *alwaysFailStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	atomic.AddInt32(&a.uploads, 1)
+	return nil, errtypes.PreconditionFailed("injected")
+}
