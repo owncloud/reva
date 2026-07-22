@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -61,9 +62,10 @@ type ConnPool struct {
 	dial    clientFactory
 	logger  *zerolog.Logger
 
-	// sem bounds the number of connections checked out at once: checkout blocks sending to it until
-	// a slot is free, release receives from it to free the slot. Its capacity is the pool size.
-	sem chan struct{}
+	// sem bounds the number of connections checked out at once: checkout acquires it (blocking with
+	// p.timeout until a slot is free), release releases it to free the slot. Its weight is the pool
+	// size.
+	sem *semaphore.Weighted
 	// idle holds connections that are checked in and ready to be reused; it is buffered to the pool
 	// size so release never blocks. checkout drains it first before dialing a new connection.
 	idle chan ldap.Client
@@ -91,7 +93,7 @@ func NewLDAPPool(config Config, logger *zerolog.Logger) *ConnPool {
 		timeout: timeout,
 		dial:    dialLDAP,
 		logger:  logger,
-		sem:     make(chan struct{}, size),
+		sem:     semaphore.NewWeighted(int64(size)),
 		idle:    make(chan ldap.Client, size),
 	}
 }
@@ -99,13 +101,7 @@ func NewLDAPPool(config Config, logger *zerolog.Logger) *ConnPool {
 // dialLDAP dials config.URI and, if config.BindDN is set, binds as that DN: it establishes a fully
 // authenticated connection, not just a network connection.
 func dialLDAP(config Config) (ldap.Client, error) {
-	var l *ldap.Conn
-	var err error
-	if config.TLSConfig != nil {
-		l, err = ldap.DialURL(config.URI, ldap.DialWithTLSConfig(config.TLSConfig))
-	} else {
-		l, err = ldap.DialURL(config.URI)
-	}
+	l, err := ldap.DialURL(config.URI, ldap.DialWithTLSConfig(config.TLSConfig))
 	if err != nil {
 		return nil, err
 	}
@@ -121,17 +117,15 @@ func dialLDAP(config Config) (ldap.Client, error) {
 // checkout reserves a pool slot (blocking up to p.timeout) and returns a connection: an idle one if
 // available, otherwise a freshly dialed one.
 func (p *ConnPool) checkout() (ldap.Client, error) {
-	timer := time.NewTimer(p.timeout)
-	defer timer.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
 
-	select {
-	case p.sem <- struct{}{}:
-	case <-timer.C:
+	if err := p.sem.Acquire(ctx, 1); err != nil {
 		return nil, ErrPoolExhausted
 	}
 
 	if p.IsClosing() {
-		<-p.sem
+		p.sem.Release(1)
 		return nil, errPoolClosed
 	}
 
@@ -144,7 +138,7 @@ func (p *ConnPool) checkout() (ldap.Client, error) {
 	p.logger.Debug().Msg("dialing new pooled LDAP connection")
 	conn, err := p.dial(p.config)
 	if err != nil {
-		<-p.sem
+		p.sem.Release(1)
 		return nil, err
 	}
 	return conn, nil
@@ -160,7 +154,7 @@ func (p *ConnPool) release(conn ldap.Client, opErr error) {
 	} else {
 		p.idle <- conn
 	}
-	<-p.sem
+	p.sem.Release(1)
 }
 
 // do checks out a connection, runs fn, and releases the connection. Checked-out idle connections
