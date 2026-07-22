@@ -70,7 +70,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 
 		ctx = ruser.ContextSetUser(context.Background(), user)
 
-		pub      chan interface{}
+		pub chan interface{}
 		con      chan interface{}
 		uploadID string
 
