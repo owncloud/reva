@@ -22,12 +22,14 @@ package upload
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/google/uuid"
 
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
@@ -64,13 +66,8 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 // initiateUpload is the driver-agnostic port of decomposedfs.InitiateUpload.
 //
 // Known open divergences from main, tracked as findings and NOT yet resolved:
-//   - F1: new-file NodeId is not minted here → node-less OC-FileId header.
 //   - B2: permission-gated GetMD hides deny-granted files → late 409 instead of 403.
 //   - B6/B7: spaceOwner manager-fallback and posix scoping (SpaceGid, RunInBaseScope).
-//
-// The zero-length finish branch is stubbed (finishUpload/data path not ported).
-// Until those are addressed, only wire a store for drivers/paths where the gaps
-// are acceptable.
 func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
 	var chunkName string
 	if chunking.IsChunked(ref.GetPath()) { // check legacy chunking v1
@@ -229,6 +226,9 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 	if nodeExists {
 		session.SetStorageValue("NodeId", nodeID)
 		session.SetStorageValue("NodeExists", "true")
+	} else {
+		// mint the future node id for the new file (main: upload.go:308)
+		session.SetStorageValue("NodeId", uuid.New().String())
 	}
 	session.SetStorageValue("NodeParentId", parentID)
 	if spaceOwner != nil {
@@ -311,17 +311,146 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 	metrics.UploadSessionsInitiated.Inc()
 
 	if uploadLength == 0 {
-		// Zero-length uploads must finish immediately (main: FinishUploadDecomposed, upload.go:333).
-		// The finish/data path is not ported yet, so this is stubbed. HARD BLOCKER on wiring
-		// initiateUpload into the live path: an empty-file upload (e.g. touch over WebDAV) would
-		// hit this — finish must be ported BEFORE the swap, not after.
-		return nil, errtypes.NotSupported("coordinator: zero-length finish not yet ported")
+		// zero-length uploads have no bytes to append, so finish immediately (main: upload.go:333)
+		if err := c.finishUpload(ctx, session); err != nil {
+			return nil, err
+		}
 	}
 
 	return map[string]string{
 		"simple": session.ID(),
 		"tus":    session.ID(),
 	}, nil
+}
+
+// finishUpload lands a fully-received upload: create the node (new files), verify
+// checksums, then commit the staged bytes. Zero-length uploads always finish here
+// synchronously; the async postprocessing path is not ported yet.
+func (c *coordinator) finishUpload(ctx context.Context, session Session) error {
+	if err := c.touchAndMark(ctx, session); err != nil {
+		return err
+	}
+	if err := verifyAndStoreChecksums(ctx, session); err != nil {
+		c.rollback(ctx, session)
+		return err
+	}
+	if err := session.Persist(ctx); err != nil {
+		c.rollback(ctx, session)
+		return err
+	}
+
+	metrics.UploadProcessing.Inc()
+	metrics.UploadSessionsBytesReceived.Inc()
+
+	return c.finishSync(ctx, session)
+}
+
+// touchAndMark creates the node for new files (via the public TouchFile, since
+// CommitUpload requires an existing node) and marks it as processing. TouchFile
+// mints the real node id, so we overwrite the id minted at initiate.
+func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
+	if !session.NodeExists() {
+		pathRef := &provider.Reference{
+			ResourceId: &provider.ResourceId{
+				SpaceId:  session.SpaceID(),
+				OpaqueId: session.NodeParentID(),
+			},
+			Path: session.Filename(),
+		}
+		result, err := c.fs.TouchFile(ctx, pathRef, false, session.Metadata()["mtime"])
+		if err != nil {
+			session.Cleanup(true, true)
+			if _, ok := err.(errtypes.IsNotFound); ok {
+				return errtypes.PreconditionFailed(err.Error())
+			}
+			return err
+		}
+		session.SetStorageValue("NodeId", result.ResourceID.GetOpaqueId())
+		session.SetStorageValue("SpaceRoot", result.SpaceID)
+		if result.SpaceOwner != nil {
+			session.SetStorageValue("SpaceOwnerOrManager", result.SpaceOwner.GetOpaqueId())
+			session.SetStorageValue("SpaceOwnerIdp", result.SpaceOwner.GetIdp())
+			session.SetStorageValue("SpaceOwnerType", utils.UserTypeToString(result.SpaceOwner.GetType()))
+		}
+	}
+	nodeRef := session.Reference()
+	if err := c.fs.MarkProcessing(ctx, &nodeRef, true, session.ID()); err != nil {
+		session.Cleanup(true, true)
+		if !session.NodeExists() {
+			_, _ = c.fs.Delete(ctx, &nodeRef)
+		}
+		return err
+	}
+	return session.Persist(ctx)
+}
+
+// finishSync commits the staged bytes inline, then unmarks processing and cleans up.
+func (c *coordinator) finishSync(ctx context.Context, session Session) error {
+	ref := session.Reference()
+	f, err := os.Open(session.BinPath())
+	if err != nil {
+		c.rollback(ctx, session)
+		return err
+	}
+	if _, err := c.fs.CommitUpload(ctx, &ref, storage.UploadSource{
+		Body:      f,
+		Length:    session.Size(),
+		Metadata:  session.Metadata(),
+		Checksums: session.Checksums(),
+	}); err != nil {
+		c.rollback(ctx, session)
+		return err
+	}
+	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
+	session.Cleanup(true, true)
+	metrics.UploadSessionsFinalized.Inc()
+	return nil
+}
+
+// rollback unmarks processing, cleans up session files, and deletes the node if
+// this upload created it (NodeExists=false at initiation).
+func (c *coordinator) rollback(ctx context.Context, session Session) {
+	ref := session.Reference()
+	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
+	session.Cleanup(true, true)
+	if !session.NodeExists() {
+		_, _ = c.fs.Delete(ctx, &ref)
+	}
+}
+
+// verifyAndStoreChecksums computes checksums over the staged binary, validates any
+// client-supplied checksum, and stores the results on the session for CommitUpload.
+func verifyAndStoreChecksums(ctx context.Context, session Session) error {
+	sha1h, md5h, adler32h, err := calculateChecksums(ctx, session.BinPath())
+	if err != nil {
+		return err
+	}
+	info, err := session.GetInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if checksum := info.MetaData["checksum"]; checksum != "" {
+		parts := strings.SplitN(checksum, " ", 2)
+		if len(parts) != 2 {
+			return errtypes.BadRequest("invalid checksum format. must be '[algorithm] [checksum]'")
+		}
+		var checkErr error
+		switch parts[0] {
+		case "sha1":
+			checkErr = checkHash(parts[1], sha1h)
+		case "md5":
+			checkErr = checkHash(parts[1], md5h)
+		case "adler32":
+			checkErr = checkHash(parts[1], adler32h)
+		default:
+			checkErr = errtypes.BadRequest("unsupported checksum algorithm: " + parts[0])
+		}
+		if checkErr != nil {
+			return checkErr
+		}
+	}
+	session.SetChecksums(sha1h.Sum(nil), md5h.Sum(nil), adler32h.Sum(nil))
+	return nil
 }
 
 // rewriteChunkedRef parses a legacy chunking-v1 path, returning a reference to the
