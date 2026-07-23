@@ -80,7 +80,7 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 
 	// nodeExists=false is overloaded: genuinely absent, or exists-but-hidden by a deny-grant.
 	//
-	// TODO(OCISDEV-900, finding B2): permission-gated GetMD hides a deny-granted
+	// TODO(OCISDEV-900): permission-gated GetMD hides a deny-granted
 	// file as NotFound, so we take the new-file branch (200) and fail late at
 	// finish with 409 instead of main's up-front 403 — an existence oracle plus a
 	// wasted upload. Accepted for now; a clean fix needs a permission-free resolve.
@@ -227,6 +227,7 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		session.SetStorageValue("NodeId", nodeID)
 		session.SetStorageValue("NodeExists", "true")
 	} else {
+		//todo not sure if this is correct
 		// mint the future node id for the new file (main: upload.go:308)
 		session.SetStorageValue("NodeId", uuid.New().String())
 	}
