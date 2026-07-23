@@ -50,14 +50,6 @@ type ConnWithReconnect struct {
 	logger  *zerolog.Logger
 }
 
-// Config holds the basic configuration of the LDAP Connection
-type Config struct {
-	URI          string
-	BindDN       string
-	BindPassword string
-	TLSConfig    *tls.Config
-}
-
 // NewLDAPWithReconnect Returns a new ConnWithReconnect initialized from config
 func NewLDAPWithReconnect(config Config) *ConnWithReconnect {
 	conn := ConnWithReconnect{
@@ -195,14 +187,7 @@ func (c *ConnWithReconnect) ldapAutoConnect(config Config) {
 func (c *ConnWithReconnect) ldapConnect(config Config) (*ldap.Conn, error) {
 	c.logger.Debug().Msgf("Connecting to %s", config.URI)
 
-	var err error
-	var l *ldap.Conn
-	if config.TLSConfig != nil {
-		l, err = ldap.DialURL(config.URI, ldap.DialWithTLSConfig(config.TLSConfig))
-	} else {
-		l, err = ldap.DialURL(config.URI)
-	}
-
+	l, err := ldap.DialURL(config.URI, ldap.DialWithTLSConfig(config.TLSConfig))
 	if err != nil {
 		c.logger.Error().Err(err).Msg("could not get ldap Connection")
 		return nil, err
