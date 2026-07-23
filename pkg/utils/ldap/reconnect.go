@@ -286,7 +286,15 @@ func (c *ConnWithReconnect) ExternalBind() error {
 
 // ModifyWithResult implements the ldap.Client interface
 func (c *ConnWithReconnect) ModifyWithResult(m *ldap.ModifyRequest) (*ldap.ModifyResult, error) {
-	return nil, ldap.NewError(ldap.LDAPResultNotSupported, fmt.Errorf("not implemented"))
+	var err error
+	var res *ldap.ModifyResult
+
+	retryErr := c.retry(func(c ldap.Client) error {
+		res, err = c.ModifyWithResult(m)
+		return err
+	})
+
+	return res, retryErr
 }
 
 // Compare implements the ldap.Client interface
@@ -295,8 +303,16 @@ func (c *ConnWithReconnect) Compare(dn, attribute, value string) (bool, error) {
 }
 
 // PasswordModify implements the ldap.Client interface
-func (c *ConnWithReconnect) PasswordModify(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
-	return nil, ldap.NewError(ldap.LDAPResultNotSupported, fmt.Errorf("not implemented"))
+func (c *ConnWithReconnect) PasswordModify(m *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
+	var err error
+	var res *ldap.PasswordModifyResult
+
+	retryErr := c.retry(func(c ldap.Client) error {
+		res, err = c.PasswordModify(m)
+		return err
+	})
+
+	return res, retryErr
 }
 
 // SearchWithPaging implements the ldap.Client interface
