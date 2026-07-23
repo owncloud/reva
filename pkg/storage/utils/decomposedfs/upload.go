@@ -444,6 +444,10 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 		return nil, err
 	}
 
+	if err := n.CheckLock(ctx); err != nil {
+		return nil, err
+	}
+
 	// scope to space owner GID for posix deployments; no-op with NullMapper
 	if spaceGID, ok := ctx.Value(CtxKeySpaceGID).(uint32); ok {
 		unscope, err := fs.um.ScopeUserByIds(-1, int(spaceGID))
