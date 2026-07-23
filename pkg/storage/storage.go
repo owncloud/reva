@@ -69,6 +69,12 @@ type UnlockResult struct {
 	SpaceID    string
 }
 
+type UploadChecksums struct {
+	SHA1    []byte
+	MD5     []byte
+	Adler32 []byte
+}
+
 type UploadInfo struct {
 	NodeExisted       bool // true when the target node existed before the upload started
 	Size              int64
