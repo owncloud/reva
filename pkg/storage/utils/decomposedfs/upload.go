@@ -434,7 +434,8 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 
 	n, err := fs.lu.NodeFromResource(ctx, ref)
 	if err != nil {
-		return nil, err
+		appctx.GetLogger(ctx).Error().Err(err).Msg("PrepareUpload: unexpected NodeFromResource failure")
+		return nil, errtypes.InternalError("PrepareUpload: node lookup failed unexpectedly")
 	}
 	if !n.Exists {
 		return nil, errtypes.NotFound(ref.String())
