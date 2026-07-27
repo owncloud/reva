@@ -303,7 +303,13 @@ func (p *ConnPool) Unbind() error {
 
 // ModifyWithResult implements the ldap.Client interface
 func (p *ConnPool) ModifyWithResult(m *ldap.ModifyRequest) (*ldap.ModifyResult, error) {
-	return nil, ldap.NewError(ldap.LDAPResultNotSupported, fmt.Errorf("not implemented"))
+	var res *ldap.ModifyResult
+	err := p.do(func(conn ldap.Client) error {
+		var err error
+		res, err = conn.ModifyWithResult(m)
+		return err
+	})
+	return res, err
 }
 
 // Compare implements the ldap.Client interface
@@ -312,8 +318,14 @@ func (p *ConnPool) Compare(dn, attribute, value string) (bool, error) {
 }
 
 // PasswordModify implements the ldap.Client interface
-func (p *ConnPool) PasswordModify(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
-	return nil, ldap.NewError(ldap.LDAPResultNotSupported, fmt.Errorf("not implemented"))
+func (p *ConnPool) PasswordModify(m *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
+	var res *ldap.PasswordModifyResult
+	err := p.do(func(conn ldap.Client) error {
+		var err error
+		res, err = conn.PasswordModify(m)
+		return err
+	})
+	return res, err
 }
 
 // SearchWithPaging implements the ldap.Client interface

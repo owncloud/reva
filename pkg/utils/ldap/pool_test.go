@@ -29,16 +29,34 @@ import (
 )
 
 // fakeConn is a minimal ldap.Client double used to test pool bookkeeping without a real LDAP
-// server. It embeds a nil ldap.Client so it satisfies the interface; only Close is overridden,
-// which is the only method the pool itself calls on connections it manages.
+// server. It embeds a nil ldap.Client so it satisfies the interface; only Close is overridden by
+// default (the only method the pool itself calls on connections it manages), with
+// passwordModifyFunc/modifyWithResultFunc as optional overrides for tests exercising those methods.
 type fakeConn struct {
 	ldap.Client
 	closed bool
+
+	passwordModifyFunc   func(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error)
+	modifyWithResultFunc func(*ldap.ModifyRequest) (*ldap.ModifyResult, error)
 }
 
 func (f *fakeConn) Close() error {
 	f.closed = true
 	return nil
+}
+
+func (f *fakeConn) PasswordModify(req *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
+	if f.passwordModifyFunc == nil {
+		return nil, errors.New("fakeConn: passwordModifyFunc not set")
+	}
+	return f.passwordModifyFunc(req)
+}
+
+func (f *fakeConn) ModifyWithResult(req *ldap.ModifyRequest) (*ldap.ModifyResult, error) {
+	if f.modifyWithResultFunc == nil {
+		return nil, errors.New("fakeConn: modifyWithResultFunc not set")
+	}
+	return f.modifyWithResultFunc(req)
 }
 
 // newTestPool returns a pool with a fake, network-free dial function and a counter of how many
@@ -207,6 +225,120 @@ func TestConnPoolCloseDrainsIdleAndRejectsCheckout(t *testing.T) {
 	}
 	if _, err := p.checkout(); !errors.Is(err, errPoolClosed) {
 		t.Fatalf("expected errPoolClosed, got %v", err)
+	}
+}
+
+func TestConnPoolPasswordModify(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	var gotReq *ldap.PasswordModifyRequest
+	p.dial = func(Config) (ldap.Client, error) {
+		atomic.AddInt32(dialCount, 1)
+		return &fakeConn{
+			passwordModifyFunc: func(req *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
+				gotReq = req
+				return &ldap.PasswordModifyResult{GeneratedPassword: "generated"}, nil
+			},
+		}, nil
+	}
+
+	req := ldap.NewPasswordModifyRequest("uid=test", "old", "new")
+	res, err := p.PasswordModify(req)
+	if err != nil {
+		t.Fatalf("PasswordModify failed: %v", err)
+	}
+	if gotReq != req {
+		t.Fatalf("expected the request to be forwarded to the underlying connection")
+	}
+	if res.GeneratedPassword != "generated" {
+		t.Fatalf("expected the result to be forwarded from the underlying connection, got %q", res.GeneratedPassword)
+	}
+}
+
+func TestConnPoolModifyWithResult(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	var gotReq *ldap.ModifyRequest
+	p.dial = func(Config) (ldap.Client, error) {
+		atomic.AddInt32(dialCount, 1)
+		return &fakeConn{
+			modifyWithResultFunc: func(req *ldap.ModifyRequest) (*ldap.ModifyResult, error) {
+				gotReq = req
+				return &ldap.ModifyResult{}, nil
+			},
+		}, nil
+	}
+
+	req := ldap.NewModifyRequest("uid=test", nil)
+	_, err := p.ModifyWithResult(req)
+	if err != nil {
+		t.Fatalf("ModifyWithResult failed: %v", err)
+	}
+	if gotReq != req {
+		t.Fatalf("expected the request to be forwarded to the underlying connection")
+	}
+}
+
+func TestConnPoolPasswordModifyRetriesOnceOnNetworkError(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	var calls int
+	p.dial = func(Config) (ldap.Client, error) {
+		atomic.AddInt32(dialCount, 1)
+		return &fakeConn{
+			passwordModifyFunc: func(req *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
+				calls++
+				if calls == 1 {
+					return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
+				}
+				return &ldap.PasswordModifyResult{GeneratedPassword: "generated"}, nil
+			},
+		}, nil
+	}
+
+	req := ldap.NewPasswordModifyRequest("uid=test", "old", "new")
+	res, err := p.PasswordModify(req)
+	if err != nil {
+		t.Fatalf("expected PasswordModify to succeed after one retry, got %v", err)
+	}
+	if res.GeneratedPassword != "generated" {
+		t.Fatalf("expected the result to be forwarded from the retried connection, got %q", res.GeneratedPassword)
+	}
+	if calls != 2 {
+		t.Fatalf("expected passwordModifyFunc to be called twice (initial + 1 retry), got %d", calls)
+	}
+	if got := atomic.LoadInt32(dialCount); got != 2 {
+		t.Fatalf("expected a redial for the retry attempt, got %d dials", got)
+	}
+}
+
+func TestConnPoolModifyWithResultRetriesOnceOnNetworkError(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	var calls int
+	p.dial = func(Config) (ldap.Client, error) {
+		atomic.AddInt32(dialCount, 1)
+		return &fakeConn{
+			modifyWithResultFunc: func(req *ldap.ModifyRequest) (*ldap.ModifyResult, error) {
+				calls++
+				if calls == 1 {
+					return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
+				}
+				return &ldap.ModifyResult{}, nil
+			},
+		}, nil
+	}
+
+	req := ldap.NewModifyRequest("uid=test", nil)
+	_, err := p.ModifyWithResult(req)
+	if err != nil {
+		t.Fatalf("expected ModifyWithResult to succeed after one retry, got %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected modifyWithResultFunc to be called twice (initial + 1 retry), got %d", calls)
+	}
+	if got := atomic.LoadInt32(dialCount); got != 2 {
+		t.Fatalf("expected a redial for the retry attempt, got %d dials", got)
 	}
 }
 
