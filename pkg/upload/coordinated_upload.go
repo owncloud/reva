@@ -16,6 +16,10 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
+// This file holds the whole tusd adapter surface: the per-upload
+// coordinatedUpload type plus the coordinator methods that exist only to satisfy
+// tusd's DataStore interfaces. Upload logic itself lives in coordinator.go.
+
 package upload
 
 import (
@@ -29,6 +33,8 @@ import (
 
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 )
+
+var errNotImplemented = tusd.NewError("ERR_NOT_IMPLEMENTED", "use InitiateUpload on the CS3 API to start a new upload", http.StatusNotImplemented)
 
 // coordinatedUpload adapts a single upload session to the tusd.Upload interface
 // family.
@@ -137,4 +143,51 @@ func (u *coordinatedUpload) ConcatUploads(ctx context.Context, partials []tusd.U
 		}
 	}
 	return nil
+}
+
+// UseIn registers the coordinator as tusd's data store, in place of the driver's
+// own store. This is what makes the TUS data path run through the coordinator for
+// every driver, so finishing an upload ends in driver.CommitUpload.
+//
+// The opt-in extensions mirror what the drivers registered before, so no TUS
+// capability is lost: without them tusd answers those requests with 501.
+func (c *coordinator) UseIn(composer *tusd.StoreComposer) {
+	composer.UseCore(c)
+	composer.UseTerminater(c)
+	composer.UseConcater(c)
+	composer.UseLengthDeferrer(c)
+}
+
+// NewUpload is unsupported: tusd may not create sessions on its own. Uploads are
+// always started through the CS3 InitiateUpload call, which performs the
+// permission, quota and lock checks that tusd knows nothing about.
+func (c *coordinator) NewUpload(_ context.Context, _ tusd.FileInfo) (tusd.Upload, error) {
+	return nil, errNotImplemented
+}
+
+// GetUpload loads the session with the given id and wraps it so the TUS data
+// path runs through the coordinator. This is the only place a coordinatedUpload
+// is constructed.
+func (c *coordinator) GetUpload(ctx context.Context, id string) (tusd.Upload, error) {
+	session, err := c.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &coordinatedUpload{session: session, coord: c}, nil
+}
+
+// The As* methods let tusd reach the extension interfaces on an upload it holds as
+// a plain tusd.Upload. Every upload we hand out is a *coordinatedUpload, which
+// implements all three.
+
+func (c *coordinator) AsTerminatableUpload(up tusd.Upload) tusd.TerminatableUpload {
+	return up.(*coordinatedUpload)
+}
+
+func (c *coordinator) AsLengthDeclarableUpload(up tusd.Upload) tusd.LengthDeclarableUpload {
+	return up.(*coordinatedUpload)
+}
+
+func (c *coordinator) AsConcatableUpload(up tusd.Upload) tusd.ConcatableUpload {
+	return up.(*coordinatedUpload)
 }
