@@ -59,14 +59,24 @@ func ref(path string) *provider.Reference {
 	return &provider.Reference{Path: path}
 }
 
+// dirInfo returns a minimal ResourceInfo for a directory with upload permission.
+func dirInfo() *provider.ResourceInfo {
+	return &provider.ResourceInfo{
+		Type: provider.ResourceType_RESOURCE_TYPE_CONTAINER,
+		Id:   &provider.ResourceId{OpaqueId: "dir1", SpaceId: "space1"},
+		PermissionSet: &provider.ResourcePermissions{InitiateFileUpload: true},
+	}
+}
+
 // existingNodeInfo builds a ResourceInfo as GetMD would return for an existing node.
 func existingNodeInfo(nodeID, spaceID string, size uint64) *provider.ResourceInfo {
 	return &provider.ResourceInfo{
-		Id:   &provider.ResourceId{OpaqueId: nodeID, SpaceId: spaceID},
-		Name: filepath.Base("/dir/file.txt"),
-		Path: "/dir/file.txt",
-		Size: size,
-		Owner: &userpb.UserId{OpaqueId: "owner1"},
+		Id:            &provider.ResourceId{OpaqueId: nodeID, SpaceId: spaceID},
+		Name:          filepath.Base("/dir/file.txt"),
+		Path:          "/dir/file.txt",
+		Size:          size,
+		Owner:         &userpb.UserId{OpaqueId: "owner1"},
+		PermissionSet: &provider.ResourcePermissions{InitiateFileUpload: true},
 	}
 }
 
@@ -79,7 +89,8 @@ func TestInitiateUpload_NewFile(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		fs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		fs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		fs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 
 		ids, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.NoError(t, err)
@@ -100,7 +111,7 @@ func TestInitiateUpload_NewFile(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		fs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(90), uint64(5), nil)
+		fs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(90), uint64(5), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.Error(t, err)
@@ -116,7 +127,8 @@ func TestInitiateUpload_NewFile(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		fs.On("GetQuota", mock.Anything, r).Return(uint64(0), uint64(0), uint64(0), errors.New("quota unavailable"))
+		fs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		fs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(0), uint64(0), uint64(0), errors.New("quota unavailable"))
 
 		_, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.NoError(t, err)
@@ -134,8 +146,7 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 		existing := existingNodeInfo("node1", "space1", 20)
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return(existing, nil)
-		spaceRef := &provider.Reference{ResourceId: existing.GetId()}
-		fs.On("GetQuota", mock.Anything, spaceRef).Return(uint64(100), uint64(50), uint64(50), nil)
+		fs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
 
 		ids, err := coord.InitiateUpload(ctx, r, 30, nil)
@@ -154,9 +165,8 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return(existing, nil)
 		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
-		spaceRef := &provider.Reference{ResourceId: existing.GetId()}
 		// remaining=90, net_required=100-5=95 > 90
-		fs.On("GetQuota", mock.Anything, spaceRef).Return(uint64(200), uint64(110), uint64(90), nil)
+		fs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(200), uint64(110), uint64(90), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 100, nil)
 		require.Error(t, err)
@@ -172,9 +182,8 @@ func TestInitiateUpload_Overwrite(t *testing.T) {
 		existing := existingNodeInfo("node1", "space1", 50)
 
 		fs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return(existing, nil)
-		spaceRef := &provider.Reference{ResourceId: existing.GetId()}
 		// remaining=0 but net_required=0, should still succeed
-		fs.On("GetQuota", mock.Anything, spaceRef).Return(uint64(100), uint64(100), uint64(0), nil)
+		fs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(100), uint64(0), nil)
 		fs.On("GetLock", mock.Anything, mock.Anything).Return((*provider.Lock)(nil), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 30, nil)
@@ -206,10 +215,12 @@ func TestInitiateUpload_ZeroLength(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		mockFs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResult("node1", "space1"), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
-		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
+		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, mock.AnythingOfType("string")).Return(nil)
 
 		ids, err := coord.InitiateUpload(ctx, r, 0, nil)
@@ -230,10 +241,12 @@ func TestInitiateUpload_ZeroLength(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		mockFs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResult("node1", "space1"), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
-		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), errors.New("commit failed"))
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
+		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("commit failed"))
 		// rollback: MarkProcessing(false), Delete (ref is session.Reference(), ResourceId-based)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("Delete", mock.Anything, mock.Anything).Return((*storage.DeleteResult)(nil), nil)
@@ -268,7 +281,8 @@ func TestInitiateUpload_ErrorPaths(t *testing.T) {
 		require.NoError(t, os.RemoveAll(filepath.Join(store.root, "uploads")))
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		mockFs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, nil)
 		require.Error(t, err)
@@ -286,7 +300,8 @@ func TestInitiateUpload_Metadata(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		mockFs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, map[string]string{
 			"checksum": "crc32 abc123",
@@ -303,7 +318,8 @@ func TestInitiateUpload_Metadata(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		mockFs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, map[string]string{
 			"checksum": "nospace",
@@ -320,7 +336,8 @@ func TestInitiateUpload_Metadata(t *testing.T) {
 		r := ref("/dir/file.txt")
 
 		mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-		mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+		mockFs.On("GetMD", mock.Anything, ref("/dir"), []string{}, []string{}).Return(dirInfo(), nil)
+		mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 10, map[string]string{
 			"checksum": "sha1 aabbccdd",

@@ -50,7 +50,7 @@ func TestHandlePostprocessingFinished_Continue(t *testing.T) {
 		mockFs.On("GetMD", mock.Anything, &ref, []string{}, []string{}).Return(&provider.ResourceInfo{
 			Id: &provider.ResourceId{OpaqueId: "n1", SpaceId: "sp1"},
 		}, nil)
-		mockFs.On("CommitUpload", mock.Anything, &ref, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
+		mockFs.On("CommitUpload", mock.Anything, &ref, mock.Anything, mock.Anything).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 
 		coord.(*coordinator).handlePostprocessingFinished(ctx, events.PostprocessingFinished{
@@ -77,7 +77,7 @@ func TestHandlePostprocessingFinished_Continue(t *testing.T) {
 		mockFs.On("GetMD", mock.Anything, &ref, []string{}, []string{}).Return(&provider.ResourceInfo{
 			Id: &provider.ResourceId{OpaqueId: "n1", SpaceId: "sp1"},
 		}, nil)
-		mockFs.On("CommitUpload", mock.Anything, &ref, mock.Anything).Return((*provider.ResourceInfo)(nil), errors.New("disk full"))
+		mockFs.On("CommitUpload", mock.Anything, &ref, mock.Anything, mock.Anything).Return(errors.New("disk full"))
 
 		coord.(*coordinator).handlePostprocessingFinished(ctx, events.PostprocessingFinished{
 			UploadID: session.ID(),

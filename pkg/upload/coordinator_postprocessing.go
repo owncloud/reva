@@ -142,13 +142,12 @@ func (c *coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 		} else {
 			defer f.Close()
 			commitRef := session.Reference()
-			_, commitErr := c.fs.CommitUpload(ctx, &commitRef, storage.UploadSource{
-				Body:      f,
-				Length:    session.Size(),
-				Metadata:  session.Metadata(),
-				Checksums: session.Checksums(),
+			commitErr := c.fs.CommitUpload(ctx, &commitRef, session.ID(), storage.UploadSource{
+				Body:   f,
+				Length: session.Size(),
 			})
 			if commitErr != nil {
+				// TODO: call driver.RollbackUpload to undo PrepareUpload side-effects (not yet implemented)
 				log.Error().Err(commitErr).Msg("could not commit upload")
 				failed = true
 				keepUpload = true

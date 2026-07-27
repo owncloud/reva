@@ -53,8 +53,15 @@ func initiateAndGetID(t *testing.T, coord Coordinator, mockFs *mockFS, content s
 	})
 	r := &provider.Reference{Path: "/dir/file.txt"}
 
+	parentRef := &provider.Reference{Path: "/dir"}
+	dirMD := &provider.ResourceInfo{
+		Type:          provider.ResourceType_RESOURCE_TYPE_CONTAINER,
+		Id:            &provider.ResourceId{OpaqueId: "dir1", SpaceId: "space1"},
+		PermissionSet: &provider.ResourcePermissions{InitiateFileUpload: true},
+	}
 	mockFs.On("GetMD", mock.Anything, r, []string{}, []string{}).Return((*provider.ResourceInfo)(nil), errtypes.NotFound(""))
-	mockFs.On("GetQuota", mock.Anything, r).Return(uint64(100), uint64(50), uint64(50), nil)
+	mockFs.On("GetMD", mock.Anything, parentRef, []string{}, []string{}).Return(dirMD, nil)
+	mockFs.On("GetQuota", mock.Anything, mock.Anything).Return(uint64(100), uint64(50), uint64(50), nil)
 
 	ids, err := coord.InitiateUpload(ctx, r, int64(len(content)), nil)
 	require.NoError(t, err)
@@ -151,7 +158,8 @@ func TestUpload_Sync(t *testing.T) {
 
 		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
-		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
+		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, mock.AnythingOfType("string")).Return(nil)
 
 		ctx := context.Background()
@@ -246,6 +254,7 @@ func TestUpload_Async(t *testing.T) {
 
 		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
 
 		ctx := context.Background()
 		var uffCalled bool
@@ -285,7 +294,8 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 
 		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
-		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
+		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, sessionID).Return(nil)
 
 		err = up.FinishUpload(ctx)
@@ -308,6 +318,7 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 
 		mockFs.On("TouchFile", mock.Anything, mock.Anything, false, mock.Anything).Return(touchFileResultForUpload(), nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
 
 		err = up.FinishUpload(ctx)
 		require.NoError(t, err)
@@ -332,7 +343,8 @@ func TestCoordinatedUpload_FinishUpload(t *testing.T) {
 		require.NoError(t, err)
 
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
-		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything).Return((*provider.ResourceInfo)(nil), nil)
+		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
+		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, session.ID()).Return(nil)
 
 		err = up.FinishUpload(ctx)

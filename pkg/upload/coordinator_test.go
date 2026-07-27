@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -117,7 +116,7 @@ func TestFinishSync(t *testing.T) {
 		require.NoError(t, err)
 
 		ref := loaded.Reference()
-		fs.On("CommitUpload", mock.Anything, &ref, mock.AnythingOfType("storage.UploadSource")).Return((*provider.ResourceInfo)(nil), nil)
+		fs.On("CommitUpload", mock.Anything, &ref, mock.AnythingOfType("string"), mock.AnythingOfType("storage.UploadSource")).Return(nil)
 		fs.On("MarkProcessing", mock.Anything, &ref, false, loaded.ID()).Return(nil)
 
 		err = coord.(*coordinator).finishSync(context.Background(), loaded)
@@ -154,7 +153,7 @@ func TestFinishSync(t *testing.T) {
 		require.NoError(t, err)
 
 		ref := loaded.Reference()
-		fs.On("CommitUpload", mock.Anything, &ref, mock.Anything).Return((*provider.ResourceInfo)(nil), errors.New("commit error"))
+		fs.On("CommitUpload", mock.Anything, &ref, mock.Anything, mock.Anything).Return(errors.New("commit error"))
 		// rollback calls MarkProcessing(false) and Delete (new file)
 		fs.On("MarkProcessing", mock.Anything, &ref, false, loaded.ID()).Return(nil)
 		fs.On("Delete", mock.Anything, &ref).Return((*storage.DeleteResult)(nil), nil)

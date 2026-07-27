@@ -64,10 +64,15 @@ func (m *mockFS) MarkProcessing(ctx context.Context, ref *provider.Reference, pr
 	return args.Error(0)
 }
 
-func (m *mockFS) CommitUpload(ctx context.Context, ref *provider.Reference, source storage.UploadSource) (*provider.ResourceInfo, error) {
-	args := m.Called(ctx, ref, source)
-	ri, _ := args.Get(0).(*provider.ResourceInfo)
-	return ri, args.Error(1)
+func (m *mockFS) CommitUpload(ctx context.Context, ref *provider.Reference, sessionID string, source storage.UploadSource) error {
+	args := m.Called(ctx, ref, sessionID, source)
+	return args.Error(0)
+}
+
+func (m *mockFS) PrepareUpload(ctx context.Context, ref *provider.Reference, sessionID string, info storage.UploadInfo) (*storage.PrepareUploadResult, error) {
+	args := m.Called(ctx, ref, sessionID, info)
+	res, _ := args.Get(0).(*storage.PrepareUploadResult)
+	return res, args.Error(1)
 }
 
 func (m *mockFS) Delete(ctx context.Context, ref *provider.Reference) (*storage.DeleteResult, error) {

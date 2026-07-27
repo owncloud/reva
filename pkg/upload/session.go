@@ -22,11 +22,11 @@ import (
 	"context"
 	"crypto/md5"  //nolint:gosec
 	"crypto/sha1" //nolint:gosec
-	"hash/adler32"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash"
+	"hash/adler32"
 	"io"
 	"os"
 	"path/filepath"
@@ -123,7 +123,6 @@ func (s *FileSession) WriteChunk(ctx context.Context, offset int64, src io.Reade
 	s.info.Offset += n
 	return n, nil
 }
-
 
 // Purge removes all on-disk state for this session.
 func (s *FileSession) Purge(ctx context.Context) {
@@ -434,8 +433,8 @@ func fileSessionPath(root, id string) string {
 
 // calculateChecksums computes sha1, md5, and adler32 in a single pass over path.
 func calculateChecksums(_ context.Context, path string) (hash.Hash, hash.Hash, hash.Hash32, error) {
-	sha1h := sha1.New()   //nolint:gosec
-	md5h := md5.New()    //nolint:gosec
+	sha1h := sha1.New() //nolint:gosec
+	md5h := md5.New()   //nolint:gosec
 	adler32h := adler32.New()
 
 	f, err := os.Open(path)

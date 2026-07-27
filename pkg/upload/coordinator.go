@@ -100,13 +100,11 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) error {
 		c.rollback(ctx, session)
 		return err
 	}
-	cs := session.Checksums()
-	if _, err := c.fs.CommitUpload(ctx, &ref, storage.UploadSource{
-		Body:      f,
-		Length:    session.Size(),
-		Metadata:  session.Metadata(),
-		Checksums: cs,
+	if err := c.fs.CommitUpload(ctx, &ref, session.ID(), storage.UploadSource{
+		Body:   f,
+		Length: session.Size(),
 	}); err != nil {
+		// TODO: call driver.RollbackUpload to undo PrepareUpload side-effects (not yet implemented)
 		c.rollback(ctx, session)
 		return err
 	}
@@ -161,6 +159,16 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) error {
 
 	metrics.UploadProcessing.Inc()
 	metrics.UploadSessionsBytesReceived.Inc()
+
+	ref := session.Reference()
+	if _, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), storage.UploadInfo{
+		NodeExisted: session.NodeExists(),
+		Size:        session.Size(),
+		Checksums:   session.Checksums(),
+	}); err != nil {
+		c.rollback(ctx, session)
+		return err
+	}
 
 	if !c.async || session.Size() == 0 {
 		return c.finishSync(ctx, session)
