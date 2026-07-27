@@ -641,7 +641,11 @@ func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Refere
 	}
 
 	curProcessingID, err := n.ProcessingID(ctx)
-	if err != nil || curProcessingID != sessionID {
+	if err != nil {
+		appctx.GetLogger(ctx).Warn().Err(err).Str("sessionID", sessionID).Msg("RollbackUpload: could not read processing ID, skipping")
+		return nil
+	}
+	if curProcessingID != sessionID {
 		return nil
 	}
 
