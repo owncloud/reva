@@ -630,7 +630,7 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Reference, sessionID string, nodeExisted bool, sizeDiff int64) error {
 	n, err := fs.lu.NodeFromResource(ctx, ref)
 	if err != nil {
-		return errtypes.InternalError("RollbackUpload: node lookup failed")
+		return fmt.Errorf("RollbackUpload: node lookup failed: %w", err)
 	}
 	if !n.Exists {
 		return nil // new node; coordinator calls Delete separately
@@ -642,8 +642,7 @@ func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Refere
 
 	curProcessingID, err := n.ProcessingID(ctx)
 	if err != nil {
-		appctx.GetLogger(ctx).Warn().Err(err).Str("sessionID", sessionID).Msg("RollbackUpload: could not read processing ID, skipping")
-		return nil
+		return fmt.Errorf("RollbackUpload: could not read processing ID: %w", err)
 	}
 	if curProcessingID != sessionID {
 		return nil
@@ -653,11 +652,10 @@ func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Refere
 		if err := n.RevertCurrentRevision(ctx, false); err != nil {
 			return err
 		}
-	}
-
-	if sizeDiff != 0 {
-		if err := fs.tp.Propagate(ctx, n, -sizeDiff); err != nil {
-			appctx.GetLogger(ctx).Error().Err(err).Msg("RollbackUpload: could not revert propagate")
+		if sizeDiff != 0 {
+			if err := fs.tp.Propagate(ctx, n, -sizeDiff); err != nil {
+				appctx.GetLogger(ctx).Error().Err(err).Msg("RollbackUpload: could not revert propagate")
+			}
 		}
 	}
 
