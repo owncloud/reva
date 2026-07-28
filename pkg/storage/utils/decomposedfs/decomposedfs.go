@@ -177,6 +177,10 @@ func New(o *options.Options, aspects aspects.Aspects, log *zerolog.Logger) (stor
 		log = &zerolog.Logger{}
 	}
 
+	if aspects.DisableVersioning {
+		o.DisableVersioning = true
+	}
+
 	err := aspects.Tree.Setup()
 	if err != nil {
 		log.Error().Err(err).Msg("could not setup tree")
