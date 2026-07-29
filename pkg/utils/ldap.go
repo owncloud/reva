@@ -64,8 +64,10 @@ func tlsConfigFromLDAPConn(c *LDAPConn) (*tls.Config, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "Error reading LDAP CA Cert '%s.'", c.CACert)
 		}
-		rpool, _ := x509.SystemCertPool()
-		rpool.AppendCertsFromPEM(pemBytes)
+		rpool := x509.NewCertPool()
+		if !rpool.AppendCertsFromPEM(pemBytes) {
+			return nil, errors.Errorf("Error adding LDAP CA Cert '%s': no valid certificates found", c.CACert)
+		}
 		return &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    rpool,
