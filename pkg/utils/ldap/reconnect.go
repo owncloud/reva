@@ -88,8 +88,15 @@ func NewReadPolicy(maxRetries int, baseDelay, maxDelay time.Duration) RetryPolic
 }
 
 // NewWritePolicy returns a RetryPolicy for write operations.
-// Only retries on connection-establishment failures that provably never reached the server.
-// Never retries Timeout/LocalError/Busy/Unavailable to avoid double-writes.
+// Only retries on connection-establishment failures that provably never reached the server:
+// ServerDown/ConnectError are raised before the request packet is sent.
+//
+// ErrorNetwork is deliberately NOT retryable for writes: go-ldap's Add/Modify/Del send the
+// request packet (doRequest) and then read the response (readPacket), so a connection drop
+// during the response read surfaces as ErrorNetwork AFTER the mutation was already transmitted.
+// Retrying such a write would double-apply it.
+//
+// Never retries Timeout/LocalError/Busy/Unavailable either, for the same double-write reason.
 func NewWritePolicy(maxRetries int, baseDelay, maxDelay time.Duration) RetryPolicy {
 	return RetryPolicy{
 		MaxRetries: maxRetries,
@@ -97,8 +104,7 @@ func NewWritePolicy(maxRetries int, baseDelay, maxDelay time.Duration) RetryPoli
 		MaxDelay:   maxDelay,
 		isRetryable: func(code uint16) bool {
 			switch code {
-			case ldap.ErrorNetwork,
-				ldap.LDAPResultServerDown,
+			case ldap.LDAPResultServerDown,
 				ldap.LDAPResultConnectError:
 				return true
 			}
@@ -193,9 +199,9 @@ func (c *ConnWithReconnect) RetryOp(policy RetryPolicy, fn func(*ldap.Conn) erro
 				}
 				bo.Reset()
 			}
-			if d := bo.NextBackOff(); d != backoff.Stop {
-				c.sleepFn(d)
-			}
+			// backoff/v5 ExponentialBackOff has no MaxElapsedTime and NextBackOff never
+			// returns Stop, so every retry sleeps the returned interval.
+			c.sleepFn(bo.NextBackOff())
 		}
 
 		if policy.needsReconnect(code) {

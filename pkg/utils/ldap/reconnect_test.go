@@ -98,7 +98,7 @@ func TestReadWritePolicyRetryableCodes(t *testing.T) {
 	}{
 		// Tier 1 — reconnect codes
 		{"read retries ErrorNetwork", ldap.ErrorNetwork, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write retries ErrorNetwork", ldap.ErrorNetwork, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, true},
+		{"write does not retry ErrorNetwork", ldap.ErrorNetwork, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
 		{"read retries ServerDown", ldap.LDAPResultServerDown, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
 		{"write retries ServerDown", ldap.LDAPResultServerDown, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, true},
 		{"read retries ConnectError", ldap.LDAPResultConnectError, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
@@ -252,4 +252,67 @@ func TestRetryPolicyConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRetryOpExhaustionPreservesErrorCode: on exhaustion RetryOp must return the
+// last real error code (Busy here), not mask it as ErrorNetwork.
+func TestRetryOpExhaustionPreservesErrorCode(t *testing.T) {
+	p := NewReadPolicy(1, 0, 0)
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	err := c.RetryOp(p, func(_ *ldap.Conn) error {
+		return ldap.NewError(ldap.LDAPResultBusy, errors.New("server busy"))
+	})
+
+	require.Error(t, err)
+	assert.False(t, ldap.IsErrorWithCode(err, ldap.ErrorNetwork),
+		"exhaustion must not mask real error code with ErrorNetwork")
+	assert.True(t, ldap.IsErrorWithCode(err, ldap.LDAPResultBusy),
+		"exhaustion must preserve the last real error code")
+}
+
+// TestWritePolicyOpaqueErrorNotRetried: a non-*ldap.Error from a write op maps to a
+// non-retryable code and must not be retried (guards against defaulting opaque
+// errors to the retryable ErrorNetwork).
+func TestWritePolicyOpaqueErrorNotRetried(t *testing.T) {
+	var calls int32
+	p := NewWritePolicy(1, 0, 0)
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(c.write, func(_ *ldap.Conn) error {
+		atomic.AddInt32(&calls, 1)
+		return errors.New("opaque non-ldap error")
+	})
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls),
+		"opaque non-*ldap.Error must not be retried on a write op")
+}
+
+// TestRetryPolicyBackoffGrowsWhenMaxDelayZero: with MaxDelay unset the backoff must
+// still grow beyond BaseDelay (falling back to the library default cap), not
+// oscillate at BaseDelay. With 8 retries at BaseDelay=10ms, the max sleep must
+// exceed 2×BaseDelay.
+func TestRetryPolicyBackoffGrowsWhenMaxDelayZero(t *testing.T) {
+	const maxRetries = 8
+	const baseDelay = 10 * time.Millisecond
+	p := NewReadPolicy(maxRetries, baseDelay, 0)
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(p, func(_ *ldap.Conn) error {
+		return ldap.NewError(ldap.LDAPResultServerDown, errors.New("down"))
+	})
+
+	require.Len(t, slept, maxRetries, "should sleep maxRetries times before exhaustion")
+
+	maxSleep := slept[0]
+	for _, d := range slept[1:] {
+		if d > maxSleep {
+			maxSleep = d
+		}
+	}
+	assert.Greater(t, maxSleep, 2*baseDelay,
+		"backoff with BaseDelay=%v MaxDelay=0 must grow; got maxSleep=%v", baseDelay, maxSleep)
 }
