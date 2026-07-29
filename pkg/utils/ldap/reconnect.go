@@ -147,25 +147,6 @@ func (c *ConnWithReconnect) SetLogger(logger *zerolog.Logger) {
 	c.logger = logger
 }
 
-// SetDialFn overrides the dial implementation. Intended for tests only.
-func (c *ConnWithReconnect) SetDialFn(fn func(Config) (*ldap.Conn, error)) {
-	c.dialFn = fn
-}
-
-// SetReadPolicy overrides the read retry policy. Intended for tests only.
-func (c *ConnWithReconnect) SetReadPolicy(p RetryPolicy) {
-	c.read = p
-}
-
-// SetWritePolicy overrides the write retry policy. Intended for tests only.
-func (c *ConnWithReconnect) SetWritePolicy(p RetryPolicy) {
-	c.write = p
-}
-
-// SetSleepFn overrides the sleep function. Intended for tests only.
-func (c *ConnWithReconnect) SetSleepFn(fn func(time.Duration)) {
-	c.sleepFn = fn
-}
 
 // ldapErrCode extracts the LDAP result code from an error.
 // Non-LDAP errors (e.g. plain network errors) are treated as ErrorNetwork.
