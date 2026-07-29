@@ -158,7 +158,9 @@ func ldapErrCode(err error) uint16 {
 	if errors.As(err, &lerr) {
 		return lerr.ResultCode
 	}
-	return ldap.ErrorNetwork
+	// Unknown error type: use a non-retryable sentinel rather than ErrorNetwork,
+	// which is retryable for writes and could cause double-apply.
+	return ldap.LDAPResultOther
 }
 
 // RetryOp executes fn under the given retry policy.
@@ -186,7 +188,9 @@ func (c *ConnWithReconnect) RetryOp(policy RetryPolicy, fn func(*ldap.Conn) erro
 			if bo == nil {
 				bo = backoff.NewExponentialBackOff()
 				bo.InitialInterval = policy.BaseDelay
-				bo.MaxInterval = policy.MaxDelay
+				if policy.MaxDelay > 0 {
+					bo.MaxInterval = policy.MaxDelay
+				}
 				bo.Reset()
 			}
 			if d := bo.NextBackOff(); d != backoff.Stop {
@@ -201,7 +205,7 @@ func (c *ConnWithReconnect) RetryOp(policy RetryPolicy, fn func(*ldap.Conn) erro
 			}
 		}
 	}
-	return ldap.NewError(ldap.ErrorNetwork, errMaxRetries)
+	return err
 }
 
 // Search implements the ldap.Client interface
