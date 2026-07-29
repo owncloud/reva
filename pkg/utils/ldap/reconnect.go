@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"time"
 
-	backoff "github.com/cenkalti/backoff"
+	backoff "github.com/cenkalti/backoff/v5"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/rs/zerolog"
 )
@@ -187,7 +187,6 @@ func (c *ConnWithReconnect) RetryOp(policy RetryPolicy, fn func(*ldap.Conn) erro
 				bo = backoff.NewExponentialBackOff()
 				bo.InitialInterval = policy.BaseDelay
 				bo.MaxInterval = policy.MaxDelay
-				bo.MaxElapsedTime = 0
 				bo.Reset()
 			}
 			if d := bo.NextBackOff(); d != backoff.Stop {
