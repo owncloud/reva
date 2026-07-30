@@ -56,6 +56,9 @@ type Coordinator interface {
 	// Upload writes the whole body of a non-resumable (PUT) upload into the
 	// session named by req.Ref.Path and finishes it.
 	Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error)
+	// StartPostprocessing subscribes to postprocessing results and enables async
+	// uploads. Call once, before serving requests.
+	StartPostprocessing(stream events.Consumer, group, mountID string, numConsumers int) error
 }
 
 // coordinator is the concrete implementation of Coordinator.
@@ -64,7 +67,11 @@ type coordinator struct {
 	store        SessionStore
 	chunkHandler *chunking.ChunkHandler
 	pub          events.Publisher
-	async        bool
+	// async and mountID are set by StartPostprocessing and read by the upload
+	// path, which runs on request goroutines. StartPostprocessing is called once
+	// during service construction, before any request is served.
+	async   bool
+	mountID string
 }
 
 // NewCoordinator constructs a coordinator backed by the given storage driver
@@ -77,11 +84,10 @@ type coordinator struct {
 // pub receives the UploadReady event that tells the rest of the system a file is
 // available; pass nil to disable publishing.
 //
-// async makes finished uploads wait for postprocessing (virus scanning) before
-// their bytes are committed. It requires pub: without a publisher there is
-// nothing to start postprocessing, so the upload would never complete.
-func NewCoordinator(fs storage.FS, store SessionStore, chunkFolder string, pub events.Publisher, async bool) *coordinator {
-	c := &coordinator{fs: fs, store: store, pub: pub, async: async && pub != nil}
+// Uploads commit inline until StartPostprocessing is called: deferring the commit
+// is only safe once something is listening for the result.
+func NewCoordinator(fs storage.FS, store SessionStore, chunkFolder string, pub events.Publisher) *coordinator {
+	c := &coordinator{fs: fs, store: store, pub: pub}
 	if chunkFolder != "" {
 		c.chunkHandler = chunking.NewChunkHandler(chunkFolder)
 	}

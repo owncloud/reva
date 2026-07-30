@@ -94,14 +94,20 @@ var _ = Describe("Async uploads via the coordinator", func() {
 		pub, con chan interface{}
 		uploadID string
 
-		fs    storage.FS
-		coord pkgupload.Coordinator
-		o     *options.Options
-		bs    *treemocks.Blobstore
+		fs       storage.FS
+		coord    pkgupload.Coordinator
+		evstream stream.Chan
+		o        *options.Options
+		bs       *treemocks.Blobstore
 
-		// upload runs a full upload through the coordinator and returns the
-		// session id, leaving it staged and awaiting postprocessing.
-		upload = func(content []byte) string {
+		// Set in the outer BeforeEach and overridable by an inner one, then acted on
+		// in JustBeforeEach, which runs after both.
+		startAsync bool
+		mountID    string
+
+		// initiateAndUpload runs a full upload through the coordinator and returns
+		// the session id, without asserting anything about what it published.
+		initiateAndUpload = func(content []byte) string {
 			ids, err := coord.InitiateUpload(ctx, ref, int64(len(content)), map[string]string{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(ids["simple"]).ToNot(BeEmpty())
@@ -113,12 +119,20 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			}, nil)
 			Expect(err).ToNot(HaveOccurred())
 
+			return ids["simple"]
+		}
+
+		// upload stages an upload and leaves it awaiting postprocessing. Only valid
+		// on the async path: inline uploads publish UploadReady, not BytesReceived.
+		upload = func(content []byte) string {
+			id := initiateAndUpload(content)
+
 			ev, ok := (<-pub).(events.BytesReceived)
 			Expect(ok).To(BeTrue(), "expected BytesReceived: the upload must not commit before postprocessing")
-			Expect(ev.UploadID).To(Equal(ids["simple"]))
+			Expect(ev.UploadID).To(Equal(id))
 			Expect(ev.URL).ToNot(BeEmpty(), "postprocessing needs a URL to fetch the staged bytes from")
 
-			return ids["simple"]
+			return id
 		}
 
 		succeedPostprocessing = func(id string) {
@@ -209,7 +223,7 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			}, nil)
 
 		pub, con = make(chan interface{}), make(chan interface{})
-		evstream := stream.Chan{pub, con}
+		evstream = stream.Chan{pub, con}
 		t := tree.New(lu, bs, o, store.Create(), &zerolog.Logger{})
 
 		fs, err = decomposedfs.New(o, aspects.Aspects{
@@ -229,12 +243,7 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			TransferExpires:      86400,
 		}, &zl)
 		Expect(sessionStore.Setup()).To(Succeed())
-		c := pkgupload.NewCoordinator(fs, sessionStore, filepath.Join(o.Root, "uploads"), evstream, true)
-		coord = c
-
-		ch, err := events.Consume(evstream, "coordinator-test", pkgupload.RegisteredEvents...)
-		Expect(err).ToNot(HaveOccurred())
-		go c.Postprocessing(ch)
+		coord = pkgupload.NewCoordinator(fs, sessionStore, filepath.Join(o.Root, "uploads"), evstream)
 
 		resp, err := fs.CreateStorageSpace(ctx, &provider.CreateStorageSpaceRequest{Owner: user, Type: "personal"})
 		Expect(err).ToNot(HaveOccurred())
@@ -253,8 +262,19 @@ var _ = Describe("Async uploads via the coordinator", func() {
 				Expect(len(data)).To(Equal(int(n.Blobsize)), "the committed blob must match the declared size")
 			})
 
-		uploadID = upload(firstContent)
-		bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
+		// Most scenarios test the async path. Inner blocks flip these before
+		// JustBeforeEach acts on them.
+		startAsync, mountID = true, ""
+	})
+
+	JustBeforeEach(func() {
+		// Starting the consumer is what switches the coordinator to async uploads;
+		// the two are inseparable by design, so there is no separate flag to set.
+		if startAsync {
+			Expect(coord.StartPostprocessing(evstream, "coordinator-test", mountID, 1)).To(Succeed())
+			uploadID = upload(firstContent)
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
+		}
 	})
 
 	AfterEach(func() {
@@ -305,7 +325,9 @@ var _ = Describe("Async uploads via the coordinator", func() {
 	When("the uploaded file creates a new version", func() {
 		var secondUploadID string
 
-		BeforeEach(func() {
+		// JustBeforeEach, not BeforeEach: this builds on the upload the outer
+		// JustBeforeEach stages, which has not happened yet at BeforeEach time.
+		JustBeforeEach(func() {
 			succeedPostprocessing(uploadID)
 			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 1)
 			Expect(revisionCount()).To(Equal(0))
@@ -339,7 +361,7 @@ var _ = Describe("Async uploads via the coordinator", func() {
 	When("two uploads to the same file are processed in parallel", func() {
 		var secondUploadID string
 
-		BeforeEach(func() {
+		JustBeforeEach(func() {
 			succeedPostprocessing(uploadID)
 			// Both uploads are staged before either is postprocessed.
 			uploadID = upload(firstContent)
@@ -382,6 +404,66 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			exists, _, size := fileStatus()
 			Expect(exists).To(BeTrue())
 			Expect(size).To(Equal(len(secondContent)))
+		})
+	})
+
+	When("postprocessing was never started", func() {
+		BeforeEach(func() {
+			startAsync = false
+		})
+
+		// The guarantee that keeps the two switches from drifting apart: with no
+		// consumer running, nothing would ever arrive to finish a deferred upload, so
+		// the coordinator must commit inline instead of staging and waiting forever.
+		It("commits inline instead of waiting for a scan that will never come", func() {
+			id := initiateAndUpload(firstContent)
+
+			ev, ok := (<-pub).(events.UploadReady)
+			Expect(ok).To(BeTrue(), "an inline commit announces the file directly, without a scan round trip")
+			Expect(ev.Failed).To(BeFalse())
+
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 1)
+			exists, status, size := fileStatus()
+			Expect(exists).To(BeTrue())
+			Expect(status).To(BeEmpty(), "the upload must not be left in processing")
+			Expect(size).To(Equal(len(firstContent)))
+			Expect(stagedBytesExist(id)).To(BeFalse())
+		})
+	})
+
+	When("the coordinator serves a specific storage", func() {
+		BeforeEach(func() {
+			mountID = "storage-users-1"
+		})
+
+		// Postprocessing broadcasts its results to every storage provider, so each
+		// has to recognise its own. Acting on another storage's event would commit an
+		// upload this provider knows nothing about.
+		It("ignores results belonging to a different storage", func() {
+			otherStorage := upload(secondContent)
+
+			// One consumer processes the stream in order, so once the second result
+			// has been acted on the first has already been seen and dropped.
+			con <- events.PostprocessingFinished{
+				UploadID:   otherStorage,
+				Outcome:    events.PPOutcomeContinue,
+				ResourceID: &provider.ResourceId{StorageId: "some-other-storage"},
+			}
+			con <- events.PostprocessingFinished{
+				UploadID:   uploadID,
+				Outcome:    events.PPOutcomeContinue,
+				ResourceID: &provider.ResourceId{StorageId: mountID},
+			}
+
+			ev, ok := (<-pub).(events.UploadReady)
+			Expect(ok).To(BeTrue())
+			Expect(ev.Failed).To(BeFalse())
+			Expect(ev.UploadID).To(Equal(uploadID), "the other storage's upload must not be announced")
+
+			// Only the upload addressed to this storage was committed; the other one is
+			// left untouched for the provider that actually owns it.
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 1)
+			Expect(stagedBytesExist(otherStorage)).To(BeTrue(), "a filtered upload must be left alone, not cleaned up")
 		})
 	})
 })

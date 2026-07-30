@@ -200,8 +200,11 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 	if err := store.Setup(); err != nil {
 		return nil, fmt.Errorf("storageprovider: upload directory setup failed: %w", err)
 	}
-	coordinator := upload.NewCoordinator(fs, store, filepath.Join(store.Root(), "uploads"), evstream,
-		upload.AsyncUploadsFromDriverConf(c.Drivers[c.Driver]))
+	// No StartPostprocessing call yet, so the coordinator commits uploads inline.
+	// Starting it here would put a second consumer in the driver's event group,
+	// where the two would steal each other's results; the driver still owns that
+	// subscription. Switching the pair over is OCISDEV-900's remaining step.
+	coordinator := upload.NewCoordinator(fs, store, filepath.Join(store.Root(), "uploads"), evstream)
 
 	// parse data server url
 	u, err := url.Parse(c.DataServerURL)

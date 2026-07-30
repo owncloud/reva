@@ -331,11 +331,32 @@ func TestNewFileStoreFromConfig_UploadDirKeepsDriverTokens(t *testing.T) {
 	assert.Equal(t, "https://dl.example.com/data/", fs.opts.DownloadEndpoint)
 }
 
-// AsyncUploadsFromDriverConf
+// AsyncConfFromDriverConf
 
-func TestAsyncUploadsFromDriverConf(t *testing.T) {
-	assert.False(t, AsyncUploadsFromDriverConf(nil))
-	assert.False(t, AsyncUploadsFromDriverConf(map[string]interface{}{"root": "/x"}))
-	assert.False(t, AsyncUploadsFromDriverConf(map[string]interface{}{"asyncfileuploads": false}))
-	assert.True(t, AsyncUploadsFromDriverConf(map[string]interface{}{"asyncfileuploads": true}))
+func TestAsyncConfFromDriverConf(t *testing.T) {
+	assert.False(t, AsyncConfFromDriverConf(nil).Enabled)
+	assert.False(t, AsyncConfFromDriverConf(map[string]interface{}{"root": "/x"}).Enabled)
+	assert.False(t, AsyncConfFromDriverConf(map[string]interface{}{"asyncfileuploads": false}).Enabled)
+	assert.True(t, AsyncConfFromDriverConf(map[string]interface{}{"asyncfileuploads": true}).Enabled)
+}
+
+// The coordinator takes over the driver's subscription, so it has to resolve the
+// group to the same value the driver does, default included.
+func TestAsyncConfFromDriverConfConsumerGroup(t *testing.T) {
+	assert.Equal(t, "dcfs", AsyncConfFromDriverConf(map[string]interface{}{}).ConsumerGroup)
+	assert.Equal(t, "dcfs", AsyncConfFromDriverConf(map[string]interface{}{
+		"events": map[string]interface{}{"numconsumers": 3},
+	}).ConsumerGroup)
+
+	ac := AsyncConfFromDriverConf(map[string]interface{}{
+		"asyncfileuploads": true,
+		"mount_id":         "storage-users-1",
+		"events": map[string]interface{}{
+			"consumer_group": "custom",
+			"numconsumers":   4,
+		},
+	})
+	assert.Equal(t, "custom", ac.ConsumerGroup)
+	assert.Equal(t, 4, ac.NumConsumers)
+	assert.Equal(t, "storage-users-1", ac.MountID)
 }
