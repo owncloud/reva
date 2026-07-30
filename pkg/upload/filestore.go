@@ -86,9 +86,31 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 // Returns nil only when neither source resolves to a non-empty path.
 func NewFileStoreFromConfig(uploadDir string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
 	if uploadDir != "" {
-		return NewFileStore(uploadDir, TokenOptions{}, log)
+		// Still take the tokens from the driver config: they sign the transfer URL
+		// that postprocessing downloads the staged bytes from, and a service-level
+		// upload directory says nothing about them.
+		return newFileStoreWithTokens(uploadDir, driverConf, log)
 	}
 	return FileStoreFromDriverConf(driverConf, log)
+}
+
+// AsyncUploadsFromDriverConf reports whether the driver is configured to run
+// uploads through postprocessing.
+//
+// The key is decomposedfs's (options.go: `asyncfileuploads`), read straight off
+// the driver config map the services already hand us. Reading the driver's own
+// key rather than introducing a service-level one keeps a single source of truth:
+// if the coordinator and the driver disagreed, uploads would either commit twice
+// or never get scanned.
+func AsyncUploadsFromDriverConf(driverConf map[string]interface{}) bool {
+	if driverConf == nil {
+		return false
+	}
+	var ac struct {
+		AsyncFileUploads bool `mapstructure:"asyncfileuploads"`
+	}
+	_ = mapstructure.Decode(driverConf, &ac)
+	return ac.AsyncFileUploads
 }
 
 func newFileStoreWithTokens(root string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {

@@ -116,7 +116,8 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 	if err := store.Setup(); err != nil {
 		return nil, fmt.Errorf("dataprovider: upload directory setup failed: %w", err)
 	}
-	coord := pkgupload.NewCoordinator(fs, store, filepath.Join(store.Root(), "uploads"), evstream)
+	coord := pkgupload.NewCoordinator(fs, store, filepath.Join(store.Root(), "uploads"), evstream,
+		pkgupload.AsyncUploadsFromDriverConf(conf.Drivers[conf.Driver]))
 
 	dataTXs, err := getDataTXs(conf, coord, fs, evstream, log)
 	if err != nil {

@@ -200,7 +200,8 @@ func New(m map[string]interface{}, ss *grpc.Server, log *zerolog.Logger) (rgrpc.
 	if err := store.Setup(); err != nil {
 		return nil, fmt.Errorf("storageprovider: upload directory setup failed: %w", err)
 	}
-	coordinator := upload.NewCoordinator(fs, store, filepath.Join(store.Root(), "uploads"), evstream)
+	coordinator := upload.NewCoordinator(fs, store, filepath.Join(store.Root(), "uploads"), evstream,
+		upload.AsyncUploadsFromDriverConf(c.Drivers[c.Driver]))
 
 	// parse data server url
 	u, err := url.Parse(c.DataServerURL)

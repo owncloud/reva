@@ -312,3 +312,30 @@ func TestNewFileStoreFromConfig_BothEmptyReturnsNil(t *testing.T) {
 
 	assert.Nil(t, fs)
 }
+
+// A service-level upload directory must not drop the driver's tokens: they sign
+// the transfer URL postprocessing downloads the staged bytes from.
+func TestNewFileStoreFromConfig_UploadDirKeepsDriverTokens(t *testing.T) {
+	uploadDir := t.TempDir()
+	fs := NewFileStoreFromConfig(uploadDir, map[string]interface{}{
+		"root": "/ignored",
+		"tokens": map[string]interface{}{
+			"transfer_shared_secret": "s3cret",
+			"download_endpoint":      "https://dl.example.com/data/",
+		},
+	}, nopLog())
+
+	require.NotNil(t, fs)
+	assert.Equal(t, uploadDir, fs.root)
+	assert.Equal(t, "s3cret", fs.opts.TransferSharedSecret)
+	assert.Equal(t, "https://dl.example.com/data/", fs.opts.DownloadEndpoint)
+}
+
+// AsyncUploadsFromDriverConf
+
+func TestAsyncUploadsFromDriverConf(t *testing.T) {
+	assert.False(t, AsyncUploadsFromDriverConf(nil))
+	assert.False(t, AsyncUploadsFromDriverConf(map[string]interface{}{"root": "/x"}))
+	assert.False(t, AsyncUploadsFromDriverConf(map[string]interface{}{"asyncfileuploads": false}))
+	assert.True(t, AsyncUploadsFromDriverConf(map[string]interface{}{"asyncfileuploads": true}))
+}

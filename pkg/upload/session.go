@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +69,8 @@ type Session interface {
 	SetScanData(result string, date time.Time)
 	Checksums() storage.UploadChecksums
 	SetChecksums(sha1, md5, adler32 []byte)
+	SizeDiff() int64
+	SetSizeDiff(d int64)
 	Metadata() map[string]string
 	Persist(ctx context.Context) error
 	Cleanup(cleanBin, cleanInfo bool)
@@ -253,6 +256,20 @@ func (s *FileSession) Metadata() map[string]string {
 		"if-none-match":       s.info.MetaData["if-none-match"],
 		"if-unmodified-since": s.info.MetaData["if-unmodified-since"],
 	}
+}
+
+// SizeDiff returns the tree size change PrepareUpload propagated optimistically.
+// Rolling an upload back has to undo exactly that amount.
+func (s *FileSession) SizeDiff() int64 {
+	d, _ := strconv.ParseInt(s.info.MetaData["sizeDiff"], 10, 64)
+	return d
+}
+
+// SetSizeDiff records the size change PrepareUpload reported. It is persisted
+// because the async path prepares and commits in different processes, so the
+// value cannot be held in memory between the two.
+func (s *FileSession) SetSizeDiff(d int64) {
+	s.info.MetaData["sizeDiff"] = strconv.FormatInt(d, 10)
 }
 
 // SetScanData stores AV scan results on the session.

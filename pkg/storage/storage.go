@@ -149,8 +149,9 @@ type FS interface {
 	// It is the inverse of PrepareUpload: restores previous metadata and reverts the optimistic
 	// size propagation. The caller (coordinator) is responsible for unmarking the processing flag
 	// and deleting the upload session files. Drivers that performed no work in PrepareUpload may return nil.
-	// nodeExisted indicates whether the target node had a prior version; drivers that have nothing
-	// to undo for new nodes may no-op when nodeExisted is false.
+	// nodeExisted indicates whether the target node had a prior version. When it is false the
+	// upload itself created the node, and the driver must remove it outright rather than move it
+	// to the trash: the file never became visible, so it must not be recoverable.
 	RollbackUpload(ctx context.Context, ref *provider.Reference, sessionID string, nodeExisted bool, sizeDiff int64) error
 
 	// Revisions

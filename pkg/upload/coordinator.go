@@ -64,6 +64,7 @@ type coordinator struct {
 	store        SessionStore
 	chunkHandler *chunking.ChunkHandler
 	pub          events.Publisher
+	async        bool
 }
 
 // NewCoordinator constructs a coordinator backed by the given storage driver
@@ -75,8 +76,12 @@ type coordinator struct {
 //
 // pub receives the UploadReady event that tells the rest of the system a file is
 // available; pass nil to disable publishing.
-func NewCoordinator(fs storage.FS, store SessionStore, chunkFolder string, pub events.Publisher) *coordinator {
-	c := &coordinator{fs: fs, store: store, pub: pub}
+//
+// async makes finished uploads wait for postprocessing (virus scanning) before
+// their bytes are committed. It requires pub: without a publisher there is
+// nothing to start postprocessing, so the upload would never complete.
+func NewCoordinator(fs storage.FS, store SessionStore, chunkFolder string, pub events.Publisher, async bool) *coordinator {
+	c := &coordinator{fs: fs, store: store, pub: pub, async: async && pub != nil}
 	if chunkFolder != "" {
 		c.chunkHandler = chunking.NewChunkHandler(chunkFolder)
 	}
@@ -432,11 +437,18 @@ func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff
 }
 
 // finishUpload lands a fully-received upload: create the node (new files), verify
-// checksums, then commit the staged bytes. Zero-length uploads always finish here
-// synchronously; the async postprocessing path is not ported yet.
+// checksums, write the node metadata, then commit the staged bytes.
+//
+// With async uploads enabled the commit is deferred: the bytes stay staged and a
+// BytesReceived event hands the upload to postprocessing (virus scanning), which
+// reports back with PostprocessingFinished and only then does the blob get
+// written. Zero-length uploads always finish inline — there is nothing to scan,
+// and no BytesReceived consumer would ever complete them.
 //
 // Returns the committed resource as the driver reported it, so PUT callers can
-// answer with the new etag/mtime/id without recomputing them.
+// answer with the new etag/mtime/id without recomputing them. On the async path
+// nothing is committed yet, so the resource is empty rather than nil: callers
+// read fields off it directly (e.g. simple.go sets an ETag header from it).
 func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provider.ResourceInfo, error) {
 	if err := c.touchAndMark(ctx, session); err != nil {
 		return nil, err
@@ -453,7 +465,61 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provi
 	metrics.UploadProcessing.Inc()
 	metrics.UploadSessionsBytesReceived.Inc()
 
+	if err := c.prepare(ctx, session); err != nil {
+		return nil, err
+	}
+
+	if c.async && session.Size() > 0 {
+		if err := c.publishBytesReceived(ctx, session); err != nil {
+			c.rollbackPrepared(ctx, session, session.SizeDiff())
+			return nil, err
+		}
+		// The node is left flagged as processing and the staged bytes are kept:
+		// the postprocessing consumer needs both to finish the upload later.
+		return &provider.ResourceInfo{Id: &provider.ResourceId{
+			StorageId: session.ProviderID(),
+			SpaceId:   session.SpaceID(),
+			OpaqueId:  session.NodeID(),
+		}}, nil
+	}
+
 	return c.finishSync(ctx, session)
+}
+
+// publishBytesReceived hands the staged upload to postprocessing. The event
+// carries a signed URL the postprocessing service downloads the bytes from, so
+// it can scan them before they are committed.
+func (c *coordinator) publishBytesReceived(ctx context.Context, session Session) error {
+	url, err := session.URL(ctx)
+	if err != nil {
+		return err
+	}
+
+	executant := session.Executant()
+	var impersonating *user.User
+	if u, ok := ctxpkg.ContextGetUser(ctx); ok && utils.ExistsInOpaque(u.GetOpaque(), "impersonating-user") {
+		impersonating = &user.User{}
+		if err := utils.ReadJSONFromOpaque(u.GetOpaque(), "impersonating-user", impersonating); err != nil {
+			return err
+		}
+	}
+
+	return events.Publish(ctx, c.pub, events.BytesReceived{
+		UploadID:   session.ID(),
+		URL:        url,
+		SpaceOwner: session.SpaceOwner(),
+		ExecutingUser: &user.User{
+			Id: &executant,
+		},
+		ResourceID: &provider.ResourceId{
+			StorageId: session.ProviderID(),
+			SpaceId:   session.SpaceID(),
+			OpaqueId:  session.NodeID(),
+		},
+		Filename:          session.Filename(),
+		Filesize:          uint64(session.Size()),
+		ImpersonatingUser: impersonating,
+	})
 }
 
 // touchAndMark creates the node for new files (via the public TouchFile, since
@@ -502,13 +568,13 @@ func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
 // the metadata (checksums, size, mtime, preconditions, a new version), then
 // CommitUpload writes the blob the metadata points at. Both must be given the
 // same session id, because the driver uses it as the blob id to pair them up.
-func (c *coordinator) finishSync(ctx context.Context, session Session) (*provider.ResourceInfo, error) {
+func (c *coordinator) prepare(ctx context.Context, session Session) error {
 	ref := session.Reference()
 
 	info, err := uploadInfo(session)
 	if err != nil {
 		c.rollback(ctx, session)
-		return nil, err
+		return err
 	}
 	// A failed PrepareUpload has already undone its own writes, so the plain
 	// rollback is what we want here: asking the driver to roll back again would
@@ -516,12 +582,25 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) (*provide
 	prepared, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), info)
 	if err != nil {
 		c.rollback(ctx, session)
-		return nil, err
+		return err
 	}
+
+	// Persisted, not just held: on the async path the commit happens in another
+	// process, which can only learn the size to revert by reading it back.
+	session.SetSizeDiff(prepared.SizeDiff)
+	if err := session.Persist(ctx); err != nil {
+		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
+		return err
+	}
+	return nil
+}
+
+func (c *coordinator) finishSync(ctx context.Context, session Session) (*provider.ResourceInfo, error) {
+	ref := session.Reference()
 
 	f, err := os.Open(session.BinPath())
 	if err != nil {
-		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
+		c.rollbackPrepared(ctx, session, session.SizeDiff())
 		return nil, err
 	}
 	// CommitUpload does not own the body; we opened it, so we close it.
@@ -531,7 +610,7 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) (*provide
 	})
 	f.Close()
 	if err != nil {
-		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
+		c.rollbackPrepared(ctx, session, session.SizeDiff())
 		return nil, err
 	}
 
@@ -601,18 +680,24 @@ func (c *coordinator) publishUploadReady(ctx context.Context, session Session, r
 		ExecutingUser: &user.User{
 			Id: &executant,
 		},
-		FileRef: &provider.Reference{
-			ResourceId: &provider.ResourceId{
-				StorageId: session.ProviderID(),
-				SpaceId:   session.SpaceID(),
-				OpaqueId:  session.SpaceID(),
-			},
-			Path: utils.MakeRelativePath(filepath.Join(session.Dir(), session.Filename())),
-		},
+		FileRef:    c.uploadRef(session),
 		ResourceID: ri.GetId(),
 		Timestamp:  utils.TSNow(),
 	}); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("failed to publish UploadReady event")
+	}
+}
+
+// uploadRef builds the space-relative reference upload events carry. The id
+// addresses the space root, with the file identified by the path within it.
+func (c *coordinator) uploadRef(session Session) *provider.Reference {
+	return &provider.Reference{
+		ResourceId: &provider.ResourceId{
+			StorageId: session.ProviderID(),
+			SpaceId:   session.SpaceID(),
+			OpaqueId:  session.SpaceID(),
+		},
+		Path: utils.MakeRelativePath(filepath.Join(session.Dir(), session.Filename())),
 	}
 }
 
@@ -627,16 +712,27 @@ func (c *coordinator) rollback(ctx context.Context, session Session) {
 	}
 }
 
-// rollbackPrepared undoes a failed finish. It additionally asks the driver to
-// revert what PrepareUpload wrote: the previous revision and the optimistic size
-// propagation. sizeDiff is 0 when PrepareUpload never ran or itself failed, in
-// which case the driver has nothing to undo.
+// rollbackPrepared undoes a finish that failed after PrepareUpload succeeded: it
+// asks the driver to revert what PrepareUpload wrote, then unmarks processing and
+// drops the session files.
+//
+// Node removal is the driver's job, not ours. RollbackUpload restores the
+// previous revision, or removes the node entirely when this upload created it —
+// permission-free, which the public Delete is not, and without leaving a
+// never-visible file recoverable in the trash.
+//
+// Only call this once PrepareUpload has returned successfully. A failed
+// PrepareUpload already undoes its own writes, so rolling back again would
+// revert the node past the state this upload started from.
 func (c *coordinator) rollbackPrepared(ctx context.Context, session Session, sizeDiff int64) {
 	ref := session.Reference()
 	if err := c.fs.RollbackUpload(ctx, &ref, session.ID(), session.NodeExists(), sizeDiff); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
 	}
-	c.rollback(ctx, session)
+	if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
+		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+	}
+	session.Cleanup(true, true)
 }
 
 // verifyAndStoreChecksums computes checksums over the staged binary, validates any
