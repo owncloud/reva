@@ -89,7 +89,9 @@ func TestFileStoreNew_StorageTypeIsFileStore(t *testing.T) {
 
 	info, err := s.GetInfo(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "FileStore", info.Storage["Type"])
+	// Deliberately OcisStore's value: sessions written by either store must stay
+	// readable across a rolling deploy.
+	assert.Equal(t, "OCISStore", info.Storage["Type"])
 }
 
 func TestFileStoreNew_MetaDataIsNotNil(t *testing.T) {
@@ -122,7 +124,7 @@ func TestFileStoreGet_HappyPath(t *testing.T) {
 	assert.Equal(t, s.ID(), got.ID())
 	info, err := got.GetInfo(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "FileStore", info.Storage["Type"])
+	assert.Equal(t, "OCISStore", info.Storage["Type"])
 }
 
 func TestFileStoreGet_OffsetFromBinSize(t *testing.T) {

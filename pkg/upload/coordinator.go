@@ -495,29 +495,93 @@ func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
 	return session.Persist(ctx)
 }
 
-// finishSync commits the staged bytes inline, then unmarks processing and cleans up.
+// finishSync writes the node metadata, commits the staged bytes, then unmarks
+// processing and cleans up.
+//
+// The driver seam is split in two: PrepareUpload takes the node lock and writes
+// the metadata (checksums, size, mtime, preconditions, a new version), then
+// CommitUpload writes the blob the metadata points at. Both must be given the
+// same session id, because the driver uses it as the blob id to pair them up.
 func (c *coordinator) finishSync(ctx context.Context, session Session) (*provider.ResourceInfo, error) {
 	ref := session.Reference()
+
+	info, err := uploadInfo(session)
+	if err != nil {
+		c.rollback(ctx, session)
+		return nil, err
+	}
+	// A failed PrepareUpload has already undone its own writes, so the plain
+	// rollback is what we want here: asking the driver to roll back again would
+	// revert the node past the point this upload started.
+	prepared, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), info)
+	if err != nil {
+		c.rollback(ctx, session)
+		return nil, err
+	}
+
 	f, err := os.Open(session.BinPath())
 	if err != nil {
-		c.rollback(ctx, session)
+		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
 		return nil, err
 	}
-	ri, err := c.fs.CommitUpload(ctx, &ref, storage.UploadSource{
-		Body:      f,
-		Length:    session.Size(),
-		Metadata:  session.Metadata(),
-		Checksums: session.Checksums(),
+	// CommitUpload does not own the body; we opened it, so we close it.
+	err = c.fs.CommitUpload(ctx, &ref, session.ID(), storage.UploadSource{
+		Body:   f,
+		Length: session.Size(),
 	})
+	f.Close()
 	if err != nil {
-		c.rollback(ctx, session)
+		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
 		return nil, err
 	}
-	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
+
+	if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
+		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+	}
 	session.Cleanup(true, true)
 	metrics.UploadSessionsFinalized.Inc()
+
+	// The driver owns the resulting etag and mtime, so read them back rather than
+	// assembling a ResourceInfo from what we sent. GetMD is permission-gated and
+	// the executant may not be allowed to stat what they just uploaded (a
+	// write-only share), so a failure here must not fail the committed upload.
+	ri, err := c.fs.GetMD(ctx, &ref, nil, nil)
+	if err != nil {
+		appctx.GetLogger(ctx).Debug().Err(err).Str("uploadid", session.ID()).Msg("could not stat committed upload")
+		ri = &provider.ResourceInfo{Id: ref.GetResourceId(), Size: uint64(session.Size())}
+	}
+
 	c.publishUploadReady(ctx, session, ri)
 	return ri, nil
+}
+
+// uploadInfo collects what the driver needs to write node metadata. The
+// precondition headers are recorded at initiate time and re-checked here,
+// because the resource may have changed while the bytes were being uploaded.
+func uploadInfo(session Session) (storage.UploadInfo, error) {
+	md := session.Metadata()
+	info := storage.UploadInfo{
+		NodeExisted: session.NodeExists(),
+		Size:        session.Size(),
+		Checksums:   session.Checksums(),
+		IfMatch:     md["if-match"],
+		IfNoneMatch: md["if-none-match"],
+	}
+	if v := md["mtime"]; v != "" {
+		mtime, err := utils.MTimeToTime(v)
+		if err != nil {
+			return info, errtypes.BadRequest("coordinator: invalid mtime: " + v)
+		}
+		info.MTime = mtime
+	}
+	if v := md["if-unmodified-since"]; v != "" {
+		ius, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			return info, errtypes.BadRequest("coordinator: invalid if-unmodified-since: " + v)
+		}
+		info.IfUnmodifiedSince = ius
+	}
+	return info, nil
 }
 
 // publishUploadReady announces that the file is available. Consumers such as the
@@ -561,6 +625,18 @@ func (c *coordinator) rollback(ctx context.Context, session Session) {
 	if !session.NodeExists() {
 		_, _ = c.fs.Delete(ctx, &ref)
 	}
+}
+
+// rollbackPrepared undoes a failed finish. It additionally asks the driver to
+// revert what PrepareUpload wrote: the previous revision and the optimistic size
+// propagation. sizeDiff is 0 when PrepareUpload never ran or itself failed, in
+// which case the driver has nothing to undo.
+func (c *coordinator) rollbackPrepared(ctx context.Context, session Session, sizeDiff int64) {
+	ref := session.Reference()
+	if err := c.fs.RollbackUpload(ctx, &ref, session.ID(), session.NodeExists(), sizeDiff); err != nil {
+		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
+	}
+	c.rollback(ctx, session)
 }
 
 // verifyAndStoreChecksums computes checksums over the staged binary, validates any

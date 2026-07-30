@@ -242,14 +242,16 @@ func (s *FileSession) Checksums() storage.UploadChecksums {
 	}
 }
 
-// Metadata returns the upload metadata map passed to CommitUpload.
+// Metadata returns the upload metadata the coordinator passes to the driver.
 func (s *FileSession) Metadata() map[string]string {
 	return map[string]string{
-		"providerID":   s.info.MetaData["providerID"],
-		"mtime":        s.info.MetaData["mtime"],
-		"nodeExists":   s.info.Storage["NodeExists"],
-		"versionsPath": s.info.MetaData["versionsPath"],
-		"sessionID":    s.info.ID,
+		"providerID":          s.info.MetaData["providerID"],
+		"mtime":               s.info.MetaData["mtime"],
+		"nodeExists":          s.info.Storage["NodeExists"],
+		"sessionID":           s.info.ID,
+		"if-match":            s.info.MetaData["if-match"],
+		"if-none-match":       s.info.MetaData["if-none-match"],
+		"if-unmodified-since": s.info.MetaData["if-unmodified-since"],
 	}
 }
 

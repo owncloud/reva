@@ -191,14 +191,19 @@ func TestMetadata(t *testing.T) {
 	sess.SetMetadata("providerID", "p1")
 	sess.SetMetadata("mtime", "12345.0")
 	sess.SetStorageValue("NodeExists", "true")
-	sess.SetMetadata("versionsPath", "/v/path")
+	sess.SetMetadata("if-match", "etag-1")
+	sess.SetMetadata("if-none-match", "*")
+	sess.SetMetadata("if-unmodified-since", "2026-07-30T10:00:00Z")
 
 	m := sess.Metadata()
 	assert.Equal(t, "p1", m["providerID"])
 	assert.Equal(t, "12345.0", m["mtime"])
 	assert.Equal(t, "true", m["nodeExists"])
-	assert.Equal(t, "/v/path", m["versionsPath"])
 	assert.Equal(t, sess.ID(), m["sessionID"])
+	// The driver re-checks these at PrepareUpload, so they must survive the session.
+	assert.Equal(t, "etag-1", m["if-match"])
+	assert.Equal(t, "*", m["if-none-match"])
+	assert.Equal(t, "2026-07-30T10:00:00Z", m["if-unmodified-since"])
 }
 
 // Persist + Get round-trip
