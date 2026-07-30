@@ -38,11 +38,19 @@ type fakeConn struct {
 
 	passwordModifyFunc   func(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error)
 	modifyWithResultFunc func(*ldap.ModifyRequest) (*ldap.ModifyResult, error)
+	addFunc              func(*ldap.AddRequest) error
 }
 
 func (f *fakeConn) Close() error {
 	f.closed = true
 	return nil
+}
+
+func (f *fakeConn) Add(req *ldap.AddRequest) error {
+	if f.addFunc == nil {
+		return errors.New("fakeConn: addFunc not set")
+	}
+	return f.addFunc(req)
 }
 
 func (f *fakeConn) PasswordModify(req *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
@@ -125,7 +133,7 @@ func TestConnPoolDoRetriesOnceOnNetworkError(t *testing.T) {
 	p, dialCount := newTestPool(2, time.Second)
 
 	var calls int
-	err := p.do(func(conn ldap.Client) error {
+	err := p.do(true, func(conn ldap.Client) error {
 		calls++
 		if calls == 1 {
 			return ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
@@ -148,7 +156,7 @@ func TestConnPoolDoGivesUpAfterMaxRetries(t *testing.T) {
 
 	networkErr := ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
 	var calls int
-	err := p.do(func(conn ldap.Client) error {
+	err := p.do(true, func(conn ldap.Client) error {
 		calls++
 		return networkErr
 	})
@@ -165,7 +173,7 @@ func TestConnPoolDoDoesNotRetryNonNetworkError(t *testing.T) {
 
 	nonNetworkErr := errors.New("ldap: invalid credentials")
 	var calls int
-	err := p.do(func(conn ldap.Client) error {
+	err := p.do(true, func(conn ldap.Client) error {
 		calls++
 		return nonNetworkErr
 	})
@@ -177,6 +185,42 @@ func TestConnPoolDoDoesNotRetryNonNetworkError(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(dialCount); got != 1 {
 		t.Fatalf("expected exactly 1 dial (connection reused, no eviction), got %d", got)
+	}
+}
+
+// TestFinding6_PoolAddNotRetriedOnErrorNetwork — Finding 6 (pool write double-apply).
+//
+// ConnPool.do formerly retried ANY op on ErrorNetwork, with no read/write split.
+// A write (Add/Modify/Del) that fails with ErrorNetwork after the request packet
+// was already transmitted was therefore re-applied on the retry — the same
+// double-apply hazard as Finding 2 in ConnWithReconnect. The fix threads a
+// retryOnNetworkErr flag through do(): writes pass false and are surfaced after a
+// single attempt. This test asserts the fixed behavior: Add is invoked exactly
+// once and the ErrorNetwork is returned to the caller.
+//
+// Note: the pool is currently unreachable from ocis (no pool_enabled config
+// surface), so this is defense-in-depth / spec alignment, not a live bug path.
+func TestFinding6_PoolAddNotRetriedOnErrorNetwork(t *testing.T) {
+	p, dialCount := newTestPool(2, time.Second)
+
+	var calls int32
+	p.dial = func(Config) (ldap.Client, error) {
+		atomic.AddInt32(dialCount, 1)
+		return &fakeConn{
+			addFunc: func(*ldap.AddRequest) error {
+				atomic.AddInt32(&calls, 1)
+				return ldap.NewError(ldap.ErrorNetwork, errors.New("connection reset during response read"))
+			},
+		}, nil
+	}
+
+	err := p.Add(ldap.NewAddRequest("uid=test,dc=example,dc=org", nil))
+	if err == nil || !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
+		t.Fatalf("expected the network error to be surfaced, got %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("Finding 6 fix: pool must not retry writes on ErrorNetwork (double-apply). "+
+			"expected 1 call, got %d.", got)
 	}
 }
 
@@ -279,7 +323,11 @@ func TestConnPoolModifyWithResult(t *testing.T) {
 	}
 }
 
-func TestConnPoolPasswordModifyRetriesOnceOnNetworkError(t *testing.T) {
+// TestConnPoolPasswordModifyNotRetriedOnNetworkError — PasswordModify is a write.
+// After the Finding 6 fix, pool writes are not retried on ErrorNetwork (go-ldap
+// transmits the request before the response read fails, so a retry would
+// double-apply). The error is surfaced to the caller after a single attempt.
+func TestConnPoolPasswordModifyNotRetriedOnNetworkError(t *testing.T) {
 	p, dialCount := newTestPool(2, time.Second)
 
 	var calls int
@@ -288,31 +336,24 @@ func TestConnPoolPasswordModifyRetriesOnceOnNetworkError(t *testing.T) {
 		return &fakeConn{
 			passwordModifyFunc: func(req *ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error) {
 				calls++
-				if calls == 1 {
-					return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
-				}
-				return &ldap.PasswordModifyResult{GeneratedPassword: "generated"}, nil
+				return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
 			},
 		}, nil
 	}
 
 	req := ldap.NewPasswordModifyRequest("uid=test", "old", "new")
-	res, err := p.PasswordModify(req)
-	if err != nil {
-		t.Fatalf("expected PasswordModify to succeed after one retry, got %v", err)
+	_, err := p.PasswordModify(req)
+	if err == nil || !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
+		t.Fatalf("expected the network error to be surfaced, got %v", err)
 	}
-	if res.GeneratedPassword != "generated" {
-		t.Fatalf("expected the result to be forwarded from the retried connection, got %q", res.GeneratedPassword)
-	}
-	if calls != 2 {
-		t.Fatalf("expected passwordModifyFunc to be called twice (initial + 1 retry), got %d", calls)
-	}
-	if got := atomic.LoadInt32(dialCount); got != 2 {
-		t.Fatalf("expected a redial for the retry attempt, got %d dials", got)
+	if calls != 1 {
+		t.Fatalf("expected passwordModifyFunc to be called once (writes are not retried), got %d", calls)
 	}
 }
 
-func TestConnPoolModifyWithResultRetriesOnceOnNetworkError(t *testing.T) {
+// TestConnPoolModifyWithResultNotRetriedOnNetworkError — ModifyWithResult is a
+// write; same no-retry-on-ErrorNetwork contract as PasswordModify above.
+func TestConnPoolModifyWithResultNotRetriedOnNetworkError(t *testing.T) {
 	p, dialCount := newTestPool(2, time.Second)
 
 	var calls int
@@ -321,24 +362,18 @@ func TestConnPoolModifyWithResultRetriesOnceOnNetworkError(t *testing.T) {
 		return &fakeConn{
 			modifyWithResultFunc: func(req *ldap.ModifyRequest) (*ldap.ModifyResult, error) {
 				calls++
-				if calls == 1 {
-					return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
-				}
-				return &ldap.ModifyResult{}, nil
+				return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("boom"))
 			},
 		}, nil
 	}
 
 	req := ldap.NewModifyRequest("uid=test", nil)
 	_, err := p.ModifyWithResult(req)
-	if err != nil {
-		t.Fatalf("expected ModifyWithResult to succeed after one retry, got %v", err)
+	if err == nil || !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
+		t.Fatalf("expected the network error to be surfaced, got %v", err)
 	}
-	if calls != 2 {
-		t.Fatalf("expected modifyWithResultFunc to be called twice (initial + 1 retry), got %d", calls)
-	}
-	if got := atomic.LoadInt32(dialCount); got != 2 {
-		t.Fatalf("expected a redial for the retry attempt, got %d dials", got)
+	if calls != 1 {
+		t.Fatalf("expected modifyWithResultFunc to be called once (writes are not retried), got %d", calls)
 	}
 }
 
