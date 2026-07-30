@@ -162,6 +162,10 @@ func TestPreSendNetworkErrClassification(t *testing.T) {
 		{"non-network ldap code", ldap.NewError(ldap.LDAPResultBusy, errors.New("ldap: connection closed")), false},
 		{"non-ldap error", errors.New("ldap: connection closed"), false},
 		{"nil", nil, false},
+		// A failed conn.Write: a plain error with no result code, raised before the packet reached
+		// the server. This is the race window where an op beats the reader to noticing a reap.
+		{"send failed (broken pipe)", errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe"), true},
+		{"send failed (connection reset)", errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: connection reset by peer"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -198,6 +202,58 @@ func TestWriteRetriesPreSendNetworkError(t *testing.T) {
 
 	assert.Greater(t, atomic.LoadInt32(&calls), int32(1),
 		"write must retry a pre-send ErrorNetwork")
+}
+
+// TestWriteRetriesSendFailedError: a write that fails because conn.Write failed is retried. This is
+// the race window a reaped idle connection hits when the write beats the reader goroutine to
+// noticing the drop: IsClosing() is still false, so the packet reaches the write loop and conn.Write
+// fails with EPIPE/ECONNRESET. go-ldap registers the message context only after a successful write,
+// so the request provably never reached the server and retrying cannot double-apply.
+//
+// The error is a plain fmt.Errorf with no result code (ldapErrCode maps it to LDAPResultOther), so a
+// code-keyed policy would never match it.
+func TestWriteRetriesSendFailedError(t *testing.T) {
+	sendFailed := errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe")
+
+	// Guard the premise: this really is not an *ldap.Error and really does map to a code neither
+	// policy's switch matches. If go-ldap ever wraps it, this test's rationale needs revisiting.
+	var lerr *ldap.Error
+	require.False(t, errors.As(sendFailed, &lerr), "expected a plain error, not *ldap.Error")
+	require.Equal(t, uint16(ldap.LDAPResultOther), ldapErrCode(sendFailed), "expected no usable result code")
+
+	var calls int32
+	p := NewWritePolicy(1, 0, 0)
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(c.write, func(_ *ldap.Conn) error {
+		atomic.AddInt32(&calls, 1)
+		return sendFailed
+	})
+
+	assert.Greater(t, atomic.LoadInt32(&calls), int32(1),
+		"write must retry a failed conn.Write — the request never reached the server")
+}
+
+// TestReadRetriesSendFailedError: the read policy retries a failed conn.Write too, and reconnects
+// rather than reusing the dead connection.
+func TestReadRetriesSendFailedError(t *testing.T) {
+	sendFailed := errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe")
+
+	p := NewReadPolicy(1, 0, 0)
+	require.True(t, p.isRetryable(sendFailed), "read must retry a failed conn.Write")
+	require.True(t, p.needsReconnect(sendFailed), "a failed conn.Write needs a fresh connection")
+
+	var calls int32
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(c.read, func(_ *ldap.Conn) error {
+		atomic.AddInt32(&calls, 1)
+		return sendFailed
+	})
+
+	assert.Greater(t, atomic.LoadInt32(&calls), int32(1), "read must retry a failed conn.Write")
 }
 
 // TestWriteDoesNotRetryPostSendNetworkError: a write op that fails with a post-send ErrorNetwork

@@ -19,6 +19,7 @@
 package ldap
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -477,6 +478,59 @@ func TestConnPoolWriteDoesNotRetryPostSendNetworkError(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("expected Add not to be retried on a post-send ErrorNetwork, got %d calls", got)
+	}
+}
+
+// TestConnPoolWriteRetriesSendFailedError: a pooled write that fails because conn.Write failed is
+// retried on a fresh connection. The error is a plain error with no result code, so before
+// isSendFailedErr the write policy could not match it and the op was surfaced after one attempt.
+func TestConnPoolWriteRetriesSendFailedError(t *testing.T) {
+	var dialCount int32
+	p := NewLDAPPool(Config{PoolSize: 5, PoolCheckoutTimeout: time.Second}, nil)
+	var calls int32
+	p.dial = func(Config) (ldap.Client, error) {
+		atomic.AddInt32(&dialCount, 1)
+		return &fakeConn{
+			addFunc: func(*ldap.AddRequest) error {
+				if atomic.AddInt32(&calls, 1) == 1 {
+					return errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe")
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	if err := p.Add(ldap.NewAddRequest("uid=test,dc=example,dc=org", nil)); err != nil {
+		t.Fatalf("expected Add to succeed after retry, got %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("expected Add to be retried once (failed conn.Write), got %d calls", got)
+	}
+	if got := atomic.LoadInt32(&dialCount); got != 2 {
+		t.Fatalf("expected a redial for the retry, got %d dials", got)
+	}
+}
+
+// TestConnPoolReleaseEvictsOnSendFailedError: a connection whose conn.Write failed is closed and
+// discarded, not returned to the idle pool. The error carries no result code, so an
+// IsErrorWithCode(ErrorNetwork) check alone would recycle a dead connection and fail the next
+// checkout that picked it up.
+func TestConnPoolReleaseEvictsOnSendFailedError(t *testing.T) {
+	p, _ := newTestPool(2, time.Second)
+
+	conn := &fakeConn{}
+	if err := p.sem.Acquire(context.Background(), 1); err != nil {
+		t.Fatalf("failed to reserve a pool slot: %v", err)
+	}
+	p.release(conn, errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe"))
+
+	if !conn.closed {
+		t.Fatal("expected the connection to be closed and discarded after a failed conn.Write")
+	}
+	select {
+	case c := <-p.idle:
+		t.Fatalf("expected no connection returned to the idle pool, got %v", c)
+	default:
 	}
 }
 
