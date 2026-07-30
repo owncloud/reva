@@ -105,6 +105,10 @@ var _ = Describe("Async uploads via the coordinator", func() {
 		startAsync bool
 		mountID    string
 
+		// uploadedInfo is what the last coord.Upload reported. PUT handlers turn it
+		// into response headers, so it is part of the contract, not a by-product.
+		uploadedInfo *provider.ResourceInfo
+
 		// initiateAndUpload runs a full upload through the coordinator and returns
 		// the session id, without asserting anything about what it published.
 		initiateAndUpload = func(content []byte) string {
@@ -112,7 +116,7 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(ids["simple"]).ToNot(BeEmpty())
 
-			_, err = coord.Upload(ctx, storage.UploadRequest{
+			uploadedInfo, err = coord.Upload(ctx, storage.UploadRequest{
 				Ref:    &provider.Reference{Path: "/" + ids["simple"]},
 				Body:   io.NopCloser(bytes.NewReader(content)),
 				Length: int64(len(content)),
@@ -404,6 +408,26 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			exists, _, size := fileStatus()
 			Expect(exists).To(BeTrue())
 			Expect(size).To(Equal(len(secondContent)))
+		})
+	})
+
+	// PUT goes through coord.Upload and writes the returned etag/mtime/id straight
+	// into response headers. The desktop client stores the etag to detect later
+	// changes, so an empty one makes it re-download the file it just sent.
+	When("a PUT-style upload reports its result", func() {
+		It("carries an etag, mtime and id while still processing", func() {
+			Expect(uploadedInfo).ToNot(BeNil())
+			Expect(uploadedInfo.GetEtag()).ToNot(BeEmpty(), "PUT sets an ETag header from this")
+			Expect(uploadedInfo.GetMtime()).ToNot(BeNil(), "PUT sets Last-Modified from this")
+			Expect(uploadedInfo.GetId().GetOpaqueId()).ToNot(BeEmpty(), "PUT sets the file id header from this")
+		})
+
+		It("carries an etag for a new version too", func() {
+			succeedPostprocessing(uploadID)
+
+			upload(secondContent)
+			Expect(uploadedInfo.GetEtag()).ToNot(BeEmpty())
+			Expect(uploadedInfo.GetId().GetOpaqueId()).ToNot(BeEmpty())
 		})
 	})
 

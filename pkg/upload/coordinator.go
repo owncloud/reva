@@ -376,10 +376,10 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 // Upload writes the entire body of a non-resumable (PUT) upload and finishes it.
 // req.Ref.Path carries the session id, as minted by InitiateUpload.
 //
-// This is the driver-agnostic port of decomposedfs.Upload (upload.go:51). It is
-// not yet wired up: the simple and spaces data transfer managers still call
-// driver.Upload, because only decomposedfs and ocm implement CommitUpload and
-// routing the others here would break their PUT path.
+// This is the driver-agnostic port of decomposedfs.Upload (upload.go:51), and
+// the simple and spaces data transfer managers now route PUT through it, so PUT
+// and TUS share one finish path. Only the drivers that implement CommitUpload
+// are supported here; the rest are being retired with OCISDEV-901.
 func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
 	// The datatx handler passes the request path straight through, and it arrives
 	// rooted ("/<id>"), while session ids are stored unrooted.
@@ -482,11 +482,11 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provi
 		}
 		// The node is left flagged as processing and the staged bytes are kept:
 		// the postprocessing consumer needs both to finish the upload later.
-		return &provider.ResourceInfo{Id: &provider.ResourceId{
-			StorageId: session.ProviderID(),
-			SpaceId:   session.SpaceID(),
-			OpaqueId:  session.NodeID(),
-		}}, nil
+		//
+		// PUT callers turn this into response headers (an etag and mtime the
+		// desktop client stores to detect later changes), so report the node as
+		// PrepareUpload left it rather than an id on its own.
+		return c.uploadedResourceInfo(ctx, session), nil
 	}
 
 	return c.finishSync(ctx, session)
@@ -626,18 +626,37 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) (*provide
 	session.Cleanup(true, true)
 	metrics.UploadSessionsFinalized.Inc()
 
-	// The driver owns the resulting etag and mtime, so read them back rather than
-	// assembling a ResourceInfo from what we sent. GetMD is permission-gated and
-	// the executant may not be allowed to stat what they just uploaded (a
-	// write-only share), so a failure here must not fail the committed upload.
-	ri, err := c.fs.GetMD(ctx, &ref, nil, nil)
-	if err != nil {
-		appctx.GetLogger(ctx).Debug().Err(err).Str("uploadid", session.ID()).Msg("could not stat committed upload")
-		ri = &provider.ResourceInfo{Id: ref.GetResourceId(), Size: uint64(session.Size())}
-	}
-
+	ri := c.uploadedResourceInfo(ctx, session)
 	c.publishUploadReady(ctx, session, ri)
 	return ri, nil
+}
+
+// uploadedResourceInfo describes the uploaded resource for the caller, which
+// turns it into PUT response headers.
+//
+// The driver owns the resulting etag and mtime, so read them back rather than
+// assembling them from what we sent. GetMD is permission-gated and the executant
+// may not be allowed to stat what they just uploaded (a write-only share), so a
+// failure here must not fail the upload; fall back to what the session knows.
+//
+// TODO(OCISDEV-900): the fallback carries no etag. main's driver.Upload computed
+// one unconditionally from the node id and mtime, so an Uploader on a write-only
+// share used to get an ETag header and now does not. Computing it here would mean
+// importing decomposedfs's node package into the driver-agnostic coordinator;
+// doing it properly means returning the etag through the seam.
+func (c *coordinator) uploadedResourceInfo(ctx context.Context, session Session) *provider.ResourceInfo {
+	ref := session.Reference()
+	ri, err := c.fs.GetMD(ctx, &ref, nil, nil)
+	if err == nil {
+		return ri
+	}
+	appctx.GetLogger(ctx).Debug().Err(err).Str("uploadid", session.ID()).Msg("could not stat uploaded resource")
+
+	fallback := &provider.ResourceInfo{Id: ref.GetResourceId(), Size: uint64(session.Size())}
+	if mtime, mErr := utils.MTimeToTime(session.Metadata()["mtime"]); mErr == nil {
+		fallback.Mtime = utils.TimeToTS(mtime)
+	}
+	return fallback
 }
 
 // uploadInfo collects what the driver needs to write node metadata. The
