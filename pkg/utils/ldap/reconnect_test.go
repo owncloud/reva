@@ -87,31 +87,39 @@ func TestAddUsesWritePolicy(t *testing.T) {
 	assert.Empty(t, slept)
 }
 
-// TestReadWritePolicyRetryableCodes: Busy/Unavailable/Timeout are retried by read
-// but not write.
+// TestReadWritePolicyRetryableCodes: the read policy retries every transient/network code
+// regardless of message; the write policy retries only a pre-send ErrorNetwork (see
+// isPreSendNetworkErr) and nothing else, since any post-send error may have applied the write.
+//
+// Cases carry a constructed error (code + message) rather than a bare code because write
+// retryability depends on the ErrorNetwork message, not just the result code.
 func TestReadWritePolicyRetryableCodes(t *testing.T) {
+	// preSend / postSend are representative ErrorNetwork messages go-ldap emits before and after
+	// the request is transmitted.
+	const preSend = "ldap: connection closed"
+	const postSend = "ldap: response channel closed"
+
 	cases := []struct {
 		name      string
-		code      uint16
+		err       error
 		policy    func() RetryPolicy
 		wantRetry bool
 	}{
-		// Tier 1 — reconnect codes
-		{"read retries ErrorNetwork", ldap.ErrorNetwork, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write does not retry ErrorNetwork", ldap.ErrorNetwork, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
-		{"read retries ServerDown", ldap.LDAPResultServerDown, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write retries ServerDown", ldap.LDAPResultServerDown, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, true},
-		{"read retries ConnectError", ldap.LDAPResultConnectError, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write retries ConnectError", ldap.LDAPResultConnectError, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, true},
-		{"read retries Timeout", ldap.LDAPResultTimeout, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write does not retry Timeout", ldap.LDAPResultTimeout, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
-		{"read retries LocalError", ldap.LDAPResultLocalError, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write does not retry LocalError", ldap.LDAPResultLocalError, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
-		// Tier 2 — backoff-only codes
-		{"read retries Busy", ldap.LDAPResultBusy, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write does not retry Busy", ldap.LDAPResultBusy, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
-		{"read retries Unavailable", ldap.LDAPResultUnavailable, func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
-		{"write does not retry Unavailable", ldap.LDAPResultUnavailable, func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
+		// ErrorNetwork — read retries any message; write retries only the pre-send one.
+		{"read retries pre-send ErrorNetwork", ldap.NewError(ldap.ErrorNetwork, errors.New(preSend)), func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
+		{"read retries post-send ErrorNetwork", ldap.NewError(ldap.ErrorNetwork, errors.New(postSend)), func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
+		{"write retries pre-send ErrorNetwork", ldap.NewError(ldap.ErrorNetwork, errors.New(preSend)), func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, true},
+		{"write does not retry post-send ErrorNetwork", ldap.NewError(ldap.ErrorNetwork, errors.New(postSend)), func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
+		// Tier 1 — reconnect codes: read retries, write never (not connection-establishment failures).
+		{"read retries Timeout", ldap.NewError(ldap.LDAPResultTimeout, errors.New("timeout")), func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
+		{"write does not retry Timeout", ldap.NewError(ldap.LDAPResultTimeout, errors.New("timeout")), func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
+		{"read retries LocalError", ldap.NewError(ldap.LDAPResultLocalError, errors.New("local")), func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
+		{"write does not retry LocalError", ldap.NewError(ldap.LDAPResultLocalError, errors.New("local")), func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
+		// Tier 2 — backoff-only codes: read retries, write never.
+		{"read retries Busy", ldap.NewError(ldap.LDAPResultBusy, errors.New("busy")), func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
+		{"write does not retry Busy", ldap.NewError(ldap.LDAPResultBusy, errors.New("busy")), func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
+		{"read retries Unavailable", ldap.NewError(ldap.LDAPResultUnavailable, errors.New("unavailable")), func() RetryPolicy { return NewReadPolicy(1, 0, 0) }, true},
+		{"write does not retry Unavailable", ldap.NewError(ldap.LDAPResultUnavailable, errors.New("unavailable")), func() RetryPolicy { return NewWritePolicy(1, 0, 0) }, false},
 	}
 
 	for _, tc := range cases {
@@ -124,7 +132,7 @@ func TestReadWritePolicyRetryableCodes(t *testing.T) {
 
 			_ = c.RetryOp(p, func(_ *ldap.Conn) error {
 				atomic.AddInt32(&calls, 1)
-				return ldap.NewError(tc.code, errors.New("injected"))
+				return tc.err
 			})
 
 			if tc.wantRetry {
@@ -132,6 +140,144 @@ func TestReadWritePolicyRetryableCodes(t *testing.T) {
 			} else {
 				assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "expected no retry")
 			}
+		})
+	}
+}
+
+// TestPreSendNetworkErrClassification pins isPreSendNetworkErr: only ErrorNetwork with a known
+// pre-send message is safe to retry for a write; every post-send message, non-network code, and
+// non-ldap error must classify as not-pre-send (fail-closed).
+func TestPreSendNetworkErrClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"pre-send connection closed", ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed")), true},
+		{"pre-send could not send", ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: could not send message for unknown reason")), true},
+		{"post-send response channel closed", ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: response channel closed")), false},
+		{"post-send could not retrieve response", ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: could not retrieve response")), false},
+		{"post-send packet not received", ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: packet not received")), false},
+		{"post-send connection timed out", ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection timed out")), false},
+		{"non-network ldap code", ldap.NewError(ldap.LDAPResultBusy, errors.New("ldap: connection closed")), false},
+		{"non-ldap error", errors.New("ldap: connection closed"), false},
+		{"nil", nil, false},
+		// A failed conn.Write: a plain error with no result code, raised before the packet reached
+		// the server. This is the race window where an op beats the reader to noticing a reap.
+		{"send failed (broken pipe)", errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe"), true},
+		{"send failed (connection reset)", errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: connection reset by peer"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isPreSendNetworkErr(tc.err))
+		})
+	}
+}
+
+// TestWritePolicyMatchesEmittableCode guards against the dead-code regression this fix addresses:
+// the write policy must retry at least one error go-ldap actually emits. go-ldap raises all
+// connection failures as ErrorNetwork(200) and never emits ServerDown(81)/ConnectError(91), so a
+// code-based {81,91} allowlist (the pre-fix behaviour) would match nothing and never retry.
+func TestWritePolicyMatchesEmittableCode(t *testing.T) {
+	p := NewWritePolicy(1, 0, 0)
+	// The exact error go-ldap returns from sendMessageWithFlags when a reaped idle connection is
+	// reused for a write — the case the write policy must recover from.
+	preSend := ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed"))
+	require.True(t, p.isRetryable(preSend),
+		"write policy must retry at least one error go-ldap actually emits (pre-send ErrorNetwork)")
+}
+
+// TestWriteRetriesPreSendNetworkError: a write op that fails with a pre-send ErrorNetwork is
+// retried (the connection was stale before the request was sent, so no double-apply risk).
+func TestWriteRetriesPreSendNetworkError(t *testing.T) {
+	var calls int32
+	p := NewWritePolicy(1, 0, 0)
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(c.write, func(_ *ldap.Conn) error {
+		atomic.AddInt32(&calls, 1)
+		return ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed"))
+	})
+
+	assert.Greater(t, atomic.LoadInt32(&calls), int32(1),
+		"write must retry a pre-send ErrorNetwork")
+}
+
+// TestWriteRetriesSendFailedError: a write that fails because conn.Write failed is retried. This is
+// the race window a reaped idle connection hits when the write beats the reader goroutine to
+// noticing the drop: IsClosing() is still false, so the packet reaches the write loop and conn.Write
+// fails with EPIPE/ECONNRESET. go-ldap registers the message context only after a successful write,
+// so the request provably never reached the server and retrying cannot double-apply.
+//
+// The error is a plain fmt.Errorf with no result code (ldapErrCode maps it to LDAPResultOther), so a
+// code-keyed policy would never match it.
+func TestWriteRetriesSendFailedError(t *testing.T) {
+	sendFailed := errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe")
+
+	// Guard the premise: this really is not an *ldap.Error and really does map to a code neither
+	// policy's switch matches. If go-ldap ever wraps it, this test's rationale needs revisiting.
+	var lerr *ldap.Error
+	require.False(t, errors.As(sendFailed, &lerr), "expected a plain error, not *ldap.Error")
+	require.Equal(t, uint16(ldap.LDAPResultOther), ldapErrCode(sendFailed), "expected no usable result code")
+
+	var calls int32
+	p := NewWritePolicy(1, 0, 0)
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(c.write, func(_ *ldap.Conn) error {
+		atomic.AddInt32(&calls, 1)
+		return sendFailed
+	})
+
+	assert.Greater(t, atomic.LoadInt32(&calls), int32(1),
+		"write must retry a failed conn.Write — the request never reached the server")
+}
+
+// TestReadRetriesSendFailedError: the read policy retries a failed conn.Write too, and reconnects
+// rather than reusing the dead connection.
+func TestReadRetriesSendFailedError(t *testing.T) {
+	sendFailed := errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe")
+
+	p := NewReadPolicy(1, 0, 0)
+	require.True(t, p.isRetryable(sendFailed), "read must retry a failed conn.Write")
+	require.True(t, p.needsReconnect(sendFailed), "a failed conn.Write needs a fresh connection")
+
+	var calls int32
+	var slept []time.Duration
+	c := newTestConn(t, p, p, nopSleep(&slept))
+
+	_ = c.RetryOp(c.read, func(_ *ldap.Conn) error {
+		atomic.AddInt32(&calls, 1)
+		return sendFailed
+	})
+
+	assert.Greater(t, atomic.LoadInt32(&calls), int32(1), "read must retry a failed conn.Write")
+}
+
+// TestWriteDoesNotRetryPostSendNetworkError: a write op that fails with a post-send ErrorNetwork
+// must not be retried — the mutation may already have been applied.
+func TestWriteDoesNotRetryPostSendNetworkError(t *testing.T) {
+	postSendMsgs := []string{
+		"ldap: response channel closed",
+		"ldap: could not retrieve response",
+		"ldap: packet not received",
+	}
+	for _, msg := range postSendMsgs {
+		t.Run(msg, func(t *testing.T) {
+			var calls int32
+			p := NewWritePolicy(1, 0, 0)
+			var slept []time.Duration
+			c := newTestConn(t, p, p, nopSleep(&slept))
+
+			_ = c.RetryOp(c.write, func(_ *ldap.Conn) error {
+				atomic.AddInt32(&calls, 1)
+				return ldap.NewError(ldap.ErrorNetwork, errors.New(msg))
+			})
+
+			assert.Equal(t, int32(1), atomic.LoadInt32(&calls),
+				"write must not retry a post-send ErrorNetwork")
 		})
 	}
 }
