@@ -237,6 +237,13 @@ func New(o *options.Options, aspects aspects.Aspects, log *zerolog.Logger) (stor
 		o.DisableVersioning = true
 	}
 
+	// Callers may disable versioning through either the options or the aspects: the
+	// posix driver builds its own aspects and only sets it there. Fold it into the
+	// options so code reading o.DisableVersioning sees it too.
+	if aspects.DisableVersioning {
+		o.DisableVersioning = true
+	}
+
 	fs := &Decomposedfs{
 		tp:              aspects.Tree,
 		lu:              aspects.Lookup,

@@ -3,6 +3,9 @@ address = "{{grpc_address}}"
 
 [grpc.services.storageprovider]
 driver = "nextcloud"
+# The nextcloud driver has no local root to stage upload sessions under, so the
+# upload directory has to be given explicitly or the service refuses to start.
+upload_directory = "{{root}}/uploads"
 
 [grpc.services.storageprovider.drivers.nextcloud]
 endpoint = "http://localhost:8080/apps/sciencemesh/"
