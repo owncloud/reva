@@ -7,4 +7,4 @@ backend via `pool_enabled` (plus `pool_size` and `pool_checkout_timeout`) on
 the auth, user and group LDAP managers, so concurrent requests no longer
 serialize on a single socket.
 
-https://github.com/owncloud/reva/pull/658
+https://github.com/owncloud/reva/pull/681

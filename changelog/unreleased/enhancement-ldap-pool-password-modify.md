@@ -6,4 +6,4 @@ are now implemented (with the same retry-on-network-error behaviour as the
 other operations), so callers that rely on the LDAP Password Modify Extended
 Operation or on `ModifyWithResult` no longer break when using either client.
 
-https://github.com/owncloud/reva/pull/665
+https://github.com/owncloud/reva/pull/681

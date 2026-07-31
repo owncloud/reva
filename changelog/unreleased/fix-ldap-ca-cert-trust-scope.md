@@ -9,4 +9,4 @@ silently fall back to an unrestricted trust store instead of failing
 initialization. Use `x509.NewCertPool()` (pinned CA only) and fail
 `tlsConfigFromLDAPConn` when the PEM contains no valid certificates.
 
-https://github.com/owncloud/reva/pull/658
+https://github.com/owncloud/reva/pull/681

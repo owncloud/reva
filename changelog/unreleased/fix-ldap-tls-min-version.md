@@ -6,4 +6,4 @@ to negotiate down to whatever the Go runtime's default minimum TLS version is. S
 `MinVersion: tls.VersionTLS12` on both the insecure and CA-cert paths to match the floor the
 callers previously enforced individually.
 
-https://github.com/owncloud/reva/pull/658
+https://github.com/owncloud/reva/pull/681
