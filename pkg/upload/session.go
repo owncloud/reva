@@ -71,6 +71,8 @@ type Session interface {
 	SetChecksums(sha1, md5, adler32 []byte)
 	SizeDiff() int64
 	SetSizeDiff(d int64)
+	VersionCreated() bool
+	SetVersionCreated(v bool)
 	Metadata() map[string]string
 	Persist(ctx context.Context) error
 	Cleanup(cleanBin, cleanInfo bool)
@@ -270,6 +272,18 @@ func (s *FileSession) SizeDiff() int64 {
 // value cannot be held in memory between the two.
 func (s *FileSession) SetSizeDiff(d int64) {
 	s.info.MetaData["sizeDiff"] = strconv.FormatInt(d, 10)
+}
+
+// VersionCreated reports whether this upload superseded existing content, which
+// UploadReady consumers use to tell an overwrite from a new file.
+func (s *FileSession) VersionCreated() bool {
+	return s.info.MetaData["versionCreated"] == "true"
+}
+
+// SetVersionCreated records what PrepareUpload reported. Persisted for the same
+// reason as the size diff: on the async path the commit runs in another process.
+func (s *FileSession) SetVersionCreated(v bool) {
+	s.info.MetaData["versionCreated"] = strconv.FormatBool(v)
 }
 
 // SetScanData stores AV scan results on the session.

@@ -231,6 +231,7 @@ func (c *coordinator) publishUploadFailed(ctx context.Context, session Session, 
 			OpaqueId:  session.NodeID(),
 		},
 		Timestamp:         utils.TSNow(),
+		IsVersion:         session.VersionCreated(),
 		ImpersonatingUser: ev.ImpersonatingUser,
 	}); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("failed to publish UploadReady event")

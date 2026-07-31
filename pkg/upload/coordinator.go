@@ -502,13 +502,6 @@ func (c *coordinator) publishBytesReceived(ctx context.Context, session Session)
 	}
 
 	executant := session.Executant()
-	var impersonating *user.User
-	if u, ok := ctxpkg.ContextGetUser(ctx); ok && utils.ExistsInOpaque(u.GetOpaque(), "impersonating-user") {
-		impersonating = &user.User{}
-		if err := utils.ReadJSONFromOpaque(u.GetOpaque(), "impersonating-user", impersonating); err != nil {
-			return err
-		}
-	}
 
 	return events.Publish(ctx, c.pub, events.BytesReceived{
 		UploadID:   session.ID(),
@@ -524,8 +517,25 @@ func (c *coordinator) publishBytesReceived(ctx context.Context, session Session)
 		},
 		Filename:          session.Filename(),
 		Filesize:          uint64(session.Size()),
-		ImpersonatingUser: impersonating,
+		ImpersonatingUser: impersonatingUser(ctx),
 	})
+}
+
+// impersonatingUser returns the user being acted for, when the request runs on a
+// borrowed identity: public link and OCM tokens authenticate as the share owner
+// and record the real actor in the user's opaque. Upload events carry it so the
+// activity feed can attribute the upload to whoever actually performed it.
+func impersonatingUser(ctx context.Context) *user.User {
+	u, ok := ctxpkg.ContextGetUser(ctx)
+	if !ok || !utils.ExistsInOpaque(u.GetOpaque(), "impersonating-user") {
+		return nil
+	}
+	impersonating := &user.User{}
+	if err := utils.ReadJSONFromOpaque(u.GetOpaque(), "impersonating-user", impersonating); err != nil {
+		appctx.GetLogger(ctx).Error().Err(err).Msg("could not read impersonating user")
+		return nil
+	}
+	return impersonating
 }
 
 // touchAndMark creates the node for new files (via the public TouchFile, since
@@ -592,8 +602,9 @@ func (c *coordinator) prepare(ctx context.Context, session Session) error {
 	}
 
 	// Persisted, not just held: on the async path the commit happens in another
-	// process, which can only learn the size to revert by reading it back.
+	// process, which can only learn these by reading them back.
 	session.SetSizeDiff(prepared.SizeDiff)
+	session.SetVersionCreated(prepared.VersionCreated)
 	if err := session.Persist(ctx); err != nil {
 		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
 		return err
@@ -609,10 +620,18 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) (*provide
 		c.rollbackPrepared(ctx, session, session.SizeDiff())
 		return nil, err
 	}
+	// The scan verdict rides along with the bytes so the driver records it in the
+	// same operation that commits them: a committed blob then always carries the
+	// verdict it was cleared under, with no window where one exists without the
+	// other. It is empty on the inline path, which never scans.
+	scanResult, scanDate := session.ScanData()
+
 	// CommitUpload does not own the body; we opened it, so we close it.
 	err = c.fs.CommitUpload(ctx, &ref, session.ID(), storage.UploadSource{
-		Body:   f,
-		Length: session.Size(),
+		Body:       f,
+		Length:     session.Size(),
+		ScanResult: scanResult,
+		ScanDate:   scanDate,
 	})
 	f.Close()
 	if err != nil {
@@ -705,9 +724,11 @@ func (c *coordinator) publishUploadReady(ctx context.Context, session Session, r
 		ExecutingUser: &user.User{
 			Id: &executant,
 		},
-		FileRef:    c.uploadRef(session),
-		ResourceID: ri.GetId(),
-		Timestamp:  utils.TSNow(),
+		FileRef:           c.uploadRef(session),
+		ResourceID:        ri.GetId(),
+		Timestamp:         utils.TSNow(),
+		IsVersion:         session.VersionCreated(),
+		ImpersonatingUser: impersonatingUser(ctx),
 	}); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("failed to publish UploadReady event")
 	}

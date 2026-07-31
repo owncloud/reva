@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
@@ -65,6 +66,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// parallelVerdict is one postprocessing result in an ordering table: which of the
+// two staged uploads it is for, and whether the scan passed.
+type parallelVerdict struct {
+	second bool
+	ok     bool
+}
 
 var _ = Describe("Async uploads via the coordinator", func() {
 	var (
@@ -139,10 +147,14 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			return id
 		}
 
+		// uploadReady is what the last succeedPostprocessing announced.
+		uploadReady events.UploadReady
+
 		succeedPostprocessing = func(id string) {
 			con <- events.PostprocessingFinished{UploadID: id, Outcome: events.PPOutcomeContinue}
 			ev, ok := (<-pub).(events.UploadReady)
 			Expect(ok).To(BeTrue())
+			uploadReady = ev
 			Expect(ev.Failed).To(BeFalse())
 			Expect(ev.ResourceID).ToNot(BeNil())
 			Expect(ev.ResourceID.OpaqueId).ToNot(BeEmpty())
@@ -339,6 +351,16 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			secondUploadID = upload(secondContent)
 		})
 
+		// The activity feed reads IsVersion to say "updated" rather than "created",
+		// so an overwrite reported as a new file is logged as the wrong action.
+		It("announces the overwrite as a version", func() {
+			Expect(uploadReady.IsVersion).To(BeFalse(), "the first upload created the file")
+
+			succeedPostprocessing(secondUploadID)
+
+			Expect(uploadReady.IsVersion).To(BeTrue(), "the second upload overwrote it")
+		})
+
 		It("succeeds eventually, creating a new version", func() {
 			succeedPostprocessing(secondUploadID)
 
@@ -382,32 +404,73 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			Expect(status).To(BeEmpty())
 		})
 
-		It("ends with the content of the last upload to finish", func() {
+		// Scans run concurrently, so the two verdicts can come back in either order.
+		// What the file ends up containing must depend on which uploads succeeded,
+		// never on which verdict happened to arrive first. Each entry runs the same
+		// two uploads and varies only the arrival order and the outcomes.
+		//
+		// revisions is -1 where the resulting revision count is a known gap rather
+		// than a defined result: a deleted upload leaves its revision behind.
+		DescribeTable("converges on the same state whichever verdict arrives first",
+			func(verdicts []parallelVerdict, expected []byte, revisions int) {
+				for _, v := range verdicts {
+					id := uploadID
+					if v.second {
+						id = secondUploadID
+					}
+					if v.ok {
+						succeedPostprocessing(id)
+					} else {
+						failPostprocessing(id, events.PPOutcomeDelete)
+					}
+				}
+
+				exists, _, size := fileStatus()
+				Expect(exists).To(BeTrue())
+				Expect(size).To(Equal(len(expected)))
+				Expect(parentSize()).To(Equal(len(expected)))
+				if revisions >= 0 {
+					Expect(revisionCount()).To(Equal(revisions))
+				}
+			},
+			// Revision counts start from 1, not 0: the setup above already committed a
+			// version before staging these two uploads.
+			Entry("both succeed, first verdict first",
+				[]parallelVerdict{{ok: true}, {second: true, ok: true}}, secondContent, 2),
+			Entry("both succeed, second verdict first",
+				[]parallelVerdict{{second: true, ok: true}, {ok: true}}, secondContent, 2),
+			Entry("second is deleted after the first succeeded",
+				[]parallelVerdict{{ok: true}, {second: true}}, firstContent, 1),
+			Entry("second is deleted before the first succeeded",
+				[]parallelVerdict{{second: true}, {ok: true}}, firstContent, 1),
+			Entry("first is deleted before the second succeeded",
+				[]parallelVerdict{{}, {second: true, ok: true}}, secondContent, -1),
+			Entry("first is deleted after the second succeeded",
+				[]parallelVerdict{{second: true, ok: true}, {}}, secondContent, -1),
+		)
+	})
+
+	// The scan verdict has to end up on the resource, not only on the upload
+	// session: the session is deleted when the upload finishes, while the resource
+	// is what every later stat reads. Clients surface it as a scantime.
+	When("the antivirus step reports a result", func() {
+		It("records the scan on the committed resource", func() {
+			scanned := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+			con <- events.PostprocessingStepFinished{
+				UploadID:     uploadID,
+				FinishedStep: events.PPStepAntivirus,
+				Result: events.VirusscanResult{
+					Description: "",
+					Scandate:    scanned,
+				},
+			}
+
 			succeedPostprocessing(uploadID)
-			succeedPostprocessing(secondUploadID)
 
-			_, _, size := fileStatus()
-			Expect(size).To(Equal(len(secondContent)))
-			Expect(parentSize()).To(Equal(len(secondContent)))
-		})
-
-		It("keeps the first upload when the second is deleted", func() {
-			succeedPostprocessing(uploadID)
-			failPostprocessing(secondUploadID, events.PPOutcomeDelete)
-
-			exists, _, size := fileStatus()
-			Expect(exists).To(BeTrue(), "the first upload must survive the second being deleted")
-			Expect(size).To(Equal(len(firstContent)))
-			Expect(parentSize()).To(Equal(len(firstContent)))
-		})
-
-		It("keeps the second upload when the first is deleted", func() {
-			failPostprocessing(uploadID, events.PPOutcomeDelete)
-			succeedPostprocessing(secondUploadID)
-
-			exists, _, size := fileStatus()
-			Expect(exists).To(BeTrue())
-			Expect(size).To(Equal(len(secondContent)))
+			ri, err := fs.GetMD(ctx, ref, nil, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(utils.ReadPlainFromOpaque(ri.Opaque, "scantime")).To(Equal(scanned.Format(time.RFC3339Nano)),
+				"a clean scan must still be recorded, and only the node keeps it after the session is gone")
 		})
 	})
 
@@ -452,6 +515,25 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			Expect(status).To(BeEmpty(), "the upload must not be left in processing")
 			Expect(size).To(Equal(len(firstContent)))
 			Expect(stagedBytesExist(id)).To(BeFalse())
+		})
+
+		// Public link and OCM uploads authenticate as the share owner and carry the
+		// real actor in the user's opaque. The activity feed attributes the upload to
+		// them, so dropping it credits the owner for someone else's upload.
+		It("reports the impersonated user it was uploaded on behalf of", func() {
+			impersonated := &userpb.User{
+				Id:       &userpb.UserId{OpaqueId: "public-link-actor", Idp: "idp"},
+				Username: "actor",
+			}
+			owner := &userpb.User{Id: user.Id, Username: user.Username}
+			owner.Opaque = utils.AppendJSONToOpaque(nil, "impersonating-user", impersonated)
+			ctx = ruser.ContextSetUser(ctx, owner)
+
+			initiateAndUpload(firstContent)
+
+			ev, ok := (<-pub).(events.UploadReady)
+			Expect(ok).To(BeTrue())
+			Expect(ev.ImpersonatingUser.GetId().GetOpaqueId()).To(Equal("public-link-actor"))
 		})
 	})
 
