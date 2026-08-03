@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
@@ -91,7 +92,8 @@ var _ = Describe("Async uploads via the coordinator", func() {
 				OpaqueId: "u-s-e-r-id",
 				Type:     userpb.UserType_USER_TYPE_PRIMARY,
 			},
-			Username: "username",
+			Username:    "username",
+			DisplayName: "Display Name",
 		}
 
 		firstContent  = []byte("0123456789")
@@ -117,10 +119,16 @@ var _ = Describe("Async uploads via the coordinator", func() {
 		// into response headers, so it is part of the contract, not a by-product.
 		uploadedInfo *provider.ResourceInfo
 
+		// providerID stands in for the storageprovider's mount id, which reaches the
+		// coordinator as initiate metadata and must come back out on the file id.
+		providerID = "storage-users-mount"
+
 		// initiateAndUpload runs a full upload through the coordinator and returns
 		// the session id, without asserting anything about what it published.
 		initiateAndUpload = func(content []byte) string {
-			ids, err := coord.InitiateUpload(ctx, ref, int64(len(content)), map[string]string{})
+			ids, err := coord.InitiateUpload(ctx, ref, int64(len(content)), map[string]string{
+				"providerID": providerID,
+			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(ids["simple"]).ToNot(BeEmpty())
 
@@ -134,6 +142,9 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			return ids["simple"]
 		}
 
+		// bytesReceived is what the last upload handed to postprocessing.
+		bytesReceived events.BytesReceived
+
 		// upload stages an upload and leaves it awaiting postprocessing. Only valid
 		// on the async path: inline uploads publish UploadReady, not BytesReceived.
 		upload = func(content []byte) string {
@@ -143,6 +154,7 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			Expect(ok).To(BeTrue(), "expected BytesReceived: the upload must not commit before postprocessing")
 			Expect(ev.UploadID).To(Equal(id))
 			Expect(ev.URL).ToNot(BeEmpty(), "postprocessing needs a URL to fetch the staged bytes from")
+			bytesReceived = ev
 
 			return id
 		}
@@ -491,6 +503,40 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			upload(secondContent)
 			Expect(uploadedInfo.GetEtag()).ToNot(BeEmpty())
 			Expect(uploadedInfo.GetId().GetOpaqueId()).ToNot(BeEmpty())
+		})
+
+		// Consumers read the display name straight off the event rather than looking
+		// it up: ocis activitylog takes its `u != nil` branch and skips the gateway
+		// fallback, so an id-only user renders an activity with a blank actor.
+		It("names the executing user on both upload events", func() {
+			Expect(bytesReceived.ExecutingUser.GetUsername()).To(Equal(user.GetUsername()))
+			Expect(bytesReceived.ExecutingUser.GetDisplayName()).To(Equal(user.GetDisplayName()),
+				"BytesReceived must carry the display name, not just the id")
+			Expect(bytesReceived.ExecutingUser.GetId().GetOpaqueId()).To(Equal(user.GetId().GetOpaqueId()))
+
+			succeedPostprocessing(uploadID)
+
+			Expect(uploadReady.ExecutingUser.GetDisplayName()).To(Equal(user.GetDisplayName()),
+				"UploadReady must carry it too — this is the one activitylog consumes")
+			Expect(uploadReady.ExecutingUser.GetUsername()).To(Equal(user.GetUsername()))
+		})
+
+		// Drivers leave StorageId empty and the storageprovider normally stamps it,
+		// but this path answers from the dataprovider. Without the mount id the
+		// formatted id loses a segment, and clients that feed it back in — graph
+		// item lookups, app-open URLs — no longer resolve it.
+		It("reports a fully qualified file id", func() {
+			Expect(uploadedInfo.GetId().GetStorageId()).To(Equal(providerID),
+				"the mount id must survive the round trip through the session")
+
+			formatted := storagespace.FormatResourceID(uploadedInfo.GetId())
+			Expect(strings.Count(formatted, "$")).To(Equal(1), "id must be storageid$spaceid!opaqueid: "+formatted)
+			Expect(strings.Count(formatted, "!")).To(Equal(1), "id must be storageid$spaceid!opaqueid: "+formatted)
+
+			parsed, err := storagespace.ParseID(formatted)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(parsed.GetStorageId()).To(Equal(providerID))
+			Expect(parsed.GetOpaqueId()).To(Equal(uploadedInfo.GetId().GetOpaqueId()))
 		})
 	})
 

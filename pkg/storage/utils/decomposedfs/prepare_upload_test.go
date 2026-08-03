@@ -234,6 +234,29 @@ var _ = Describe("PrepareUpload", func() {
 			_, ok := err.(errtypes.IsInsufficientStorage)
 			Expect(ok).To(BeTrue(), "expected errtypes.InsufficientStorage, got %T: %v", err, err)
 		})
+
+		// The coordinator's up-front check fails open whenever the executant cannot
+		// read the quota — an Uploader or Editor on someone else's share — and relies
+		// on this one instead. Skipping new files would let those uploads past both
+		// gates and answer 201 where the space is already full.
+		It("returns an error for a new file too, not just an overwrite", func() {
+			var gotOverwrite bool
+			var gotOldSize uint64
+			original := node.CheckQuota
+			node.CheckQuota = func(_ context.Context, _ *node.Node, overwrite bool, oldSize, _ uint64) (bool, error) {
+				gotOverwrite, gotOldSize = overwrite, oldSize
+				return false, errtypes.InsufficientStorage("quota exceeded")
+			}
+			defer func() { node.CheckQuota = original }()
+
+			info := storage.UploadInfo{NodeExisted: false, Size: 20}
+			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-new", info)
+			Expect(err).To(HaveOccurred(), "a new file must be quota checked")
+			_, ok := err.(errtypes.IsInsufficientStorage)
+			Expect(ok).To(BeTrue(), "expected errtypes.InsufficientStorage, got %T: %v", err, err)
+			Expect(gotOverwrite).To(BeFalse(), "a new file is not an overwrite")
+			Expect(gotOldSize).To(BeZero(), "there is no previous blob to discount")
+		})
 	})
 
 	Context("quota exceeded on a new file", func() {
