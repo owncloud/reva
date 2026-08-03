@@ -545,6 +545,31 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			startAsync = false
 		})
 
+		// A rejected upload must not leave the node it created behind. Removal has to
+		// go through the driver, not the permission-gated public Delete: the executant
+		// of a write-only share has no Delete permission on the file they just
+		// created, so an empty file would survive every rejected upload. The mock
+		// permissions here grant no Delete either, which is what reproduces it.
+		It("removes the node it created when the upload is rejected", func() {
+			ids, err := coord.InitiateUpload(ctx, ref, int64(len(firstContent)), map[string]string{
+				"providerID": providerID,
+				"checksum":   "md5 00000000000000000000000000000000",
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = coord.Upload(ctx, storage.UploadRequest{
+				Ref:    &provider.Reference{Path: "/" + ids["simple"]},
+				Body:   io.NopCloser(bytes.NewReader(firstContent)),
+				Length: int64(len(firstContent)),
+			}, nil)
+			Expect(err).To(HaveOccurred(), "a checksum mismatch must be rejected")
+
+			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
+			exists, _, _ := fileStatus()
+			Expect(exists).To(BeFalse(), "the rejected upload must not leave a node behind")
+			Expect(stagedBytesExist(ids["simple"])).To(BeFalse(), "staged bytes should be cleaned up")
+		})
+
 		// The guarantee that keeps the two switches from drifting apart: with no
 		// consumer running, nothing would ever arrive to finish a deferred upload, so
 		// the coordinator must commit inline instead of staging and waiting forever.
