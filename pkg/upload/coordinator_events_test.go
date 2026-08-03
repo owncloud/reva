@@ -120,7 +120,7 @@ func TestHandlePostprocessingFinished_Abort(t *testing.T) {
 		assert.True(t, ev.Failed)
 	})
 
-	t.Run("overwrite: MarkProcessing(false), no Delete", func(t *testing.T) {
+	t.Run("overwrite: RollbackUpload, MarkProcessing(false), no Delete", func(t *testing.T) {
 		root := t.TempDir()
 		pub := &mockPublisher{}
 		coord, mockFs, store := newTestCoordinatorWithStore(t, root, true, pub)
@@ -131,6 +131,7 @@ func TestHandlePostprocessingFinished_Abort(t *testing.T) {
 		mockFs.On("GetMD", mock.Anything, &ref, []string{}, []string{}).Return(&provider.ResourceInfo{
 			Id: &provider.ResourceId{OpaqueId: "n1", SpaceId: "sp1"},
 		}, nil)
+		mockFs.On("RollbackUpload", mock.Anything, &ref, session.ID(), true, int64(0)).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 
 		coord.(*coordinator).handlePostprocessingFinished(ctx, events.PostprocessingFinished{
@@ -171,7 +172,7 @@ func TestHandlePostprocessingFinished_Delete(t *testing.T) {
 		assert.NoFileExists(t, session.BinPath())
 	})
 
-	t.Run("overwrite: session cleaned, MarkProcessing(false), no Delete", func(t *testing.T) {
+	t.Run("overwrite: RollbackUpload, session cleaned, MarkProcessing(false), no Delete", func(t *testing.T) {
 		root := t.TempDir()
 		pub := &mockPublisher{}
 		coord, mockFs, store := newTestCoordinatorWithStore(t, root, true, pub)
@@ -182,6 +183,7 @@ func TestHandlePostprocessingFinished_Delete(t *testing.T) {
 		mockFs.On("GetMD", mock.Anything, &ref, []string{}, []string{}).Return(&provider.ResourceInfo{
 			Id: &provider.ResourceId{OpaqueId: "n1", SpaceId: "sp1"},
 		}, nil)
+		mockFs.On("RollbackUpload", mock.Anything, &ref, session.ID(), true, int64(0)).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 
 		coord.(*coordinator).handlePostprocessingFinished(ctx, events.PostprocessingFinished{
@@ -329,13 +331,14 @@ func TestHandleCleanUpload(t *testing.T) {
 		assert.FileExists(t, session.BinPath())
 	})
 
-	t.Run("KeepUpload=false, overwrite: Cleanup, MarkProcessing(false), no Delete", func(t *testing.T) {
+	t.Run("KeepUpload=false, overwrite: RollbackUpload, Cleanup, MarkProcessing(false), no Delete", func(t *testing.T) {
 		root := t.TempDir()
 		pub := &mockPublisher{}
 		coord, mockFs, store := newTestCoordinatorWithStore(t, root, true, pub)
 		session := newPopulatedSession(t, store, "/dir", "f.txt", "n1", "sp1", true)
 
 		ref := session.Reference()
+		mockFs.On("RollbackUpload", mock.Anything, &ref, session.ID(), true, int64(0)).Return(nil)
 		mockFs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 
 		coord.(*coordinator).handleCleanUpload(context.Background(), events.CleanUpload{

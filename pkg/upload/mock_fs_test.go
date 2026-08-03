@@ -75,6 +75,11 @@ func (m *mockFS) PrepareUpload(ctx context.Context, ref *provider.Reference, ses
 	return res, args.Error(1)
 }
 
+func (m *mockFS) RollbackUpload(ctx context.Context, ref *provider.Reference, sessionID string, nodeExisted bool, sizeDiff int64) error {
+	args := m.Called(ctx, ref, sessionID, nodeExisted, sizeDiff)
+	return args.Error(0)
+}
+
 func (m *mockFS) Delete(ctx context.Context, ref *provider.Reference) (*storage.DeleteResult, error) {
 	args := m.Called(ctx, ref)
 	dr, _ := args.Get(0).(*storage.DeleteResult)

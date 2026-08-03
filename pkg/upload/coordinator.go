@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,12 +83,20 @@ func rewriteChunkedRef(ref *provider.Reference) (*provider.Reference, string, er
 
 // rollback unmarks processing, cleans up session files, and deletes the placeholder
 // node if it was created by this upload (NodeExists=false at initiation).
-func (c *coordinator) rollback(ctx context.Context, session Session) {
+// isPrepared must be true when PrepareUpload already succeeded, so its side-effects
+// (version file, xattr changes, propagated size) are reverted before cleanup.
+func (c *coordinator) rollback(ctx context.Context, session Session, isPrepared bool) {
 	ref := session.Reference()
-	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
+	if isPrepared {
+		if rbErr := c.fs.RollbackUpload(ctx, &ref, session.ID(), session.NodeExists(), session.SizeDiff()); rbErr != nil {
+			c.log.Error().Err(rbErr).Msg("could not rollback upload")
+		}
+	}
 	session.Cleanup(true, true)
 	if !session.NodeExists() {
 		_, _ = c.fs.Delete(ctx, &ref)
+	} else {
+		_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
 	}
 }
 
@@ -97,15 +106,14 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) error {
 	ref := session.Reference()
 	f, err := os.Open(session.BinPath())
 	if err != nil {
-		c.rollback(ctx, session)
+		c.rollback(ctx, session, true)
 		return err
 	}
 	if err := c.fs.CommitUpload(ctx, &ref, session.ID(), storage.UploadSource{
 		Body:   f,
 		Length: session.Size(),
 	}); err != nil {
-		// TODO: call driver.RollbackUpload to undo PrepareUpload side-effects (not yet implemented)
-		c.rollback(ctx, session)
+		c.rollback(ctx, session, true)
 		return err
 	}
 	_ = c.fs.MarkProcessing(ctx, &ref, false, session.ID())
@@ -118,7 +126,7 @@ func (c *coordinator) finishSync(ctx context.Context, session Session) error {
 func (c *coordinator) triggerPostprocessing(ctx context.Context, session Session) error {
 	s, err := session.URL(ctx)
 	if err != nil {
-		c.rollback(ctx, session)
+		c.rollback(ctx, session, true)
 		return err
 	}
 	executingUser, _ := ctxpkg.ContextGetUser(ctx)
@@ -136,7 +144,7 @@ func (c *coordinator) triggerPostprocessing(ctx context.Context, session Session
 		Filesize:          uint64(session.Size()),
 		ImpersonatingUser: impersonatingUser(ctx),
 	}); err != nil {
-		c.rollback(ctx, session)
+		c.rollback(ctx, session, true)
 		return err
 	}
 	return nil
@@ -149,11 +157,11 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) error {
 		return err
 	}
 	if err := verifyAndStoreChecksums(ctx, session); err != nil {
-		c.rollback(ctx, session)
+		c.rollback(ctx, session, false)
 		return err
 	}
 	if err := session.Persist(ctx); err != nil {
-		c.rollback(ctx, session)
+		c.rollback(ctx, session, false)
 		return err
 	}
 
@@ -161,12 +169,18 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) error {
 	metrics.UploadSessionsBytesReceived.Inc()
 
 	ref := session.Reference()
-	if _, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), storage.UploadInfo{
+	result, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), storage.UploadInfo{
 		NodeExisted: session.NodeExists(),
 		Size:        session.Size(),
 		Checksums:   session.Checksums(),
-	}); err != nil {
-		c.rollback(ctx, session)
+	})
+	if err != nil {
+		c.rollback(ctx, session, false)
+		return err
+	}
+	session.SetMetadata("sizeDiff", strconv.FormatInt(result.SizeDiff, 10))
+	if err := session.Persist(ctx); err != nil {
+		c.rollback(ctx, session, true)
 		return err
 	}
 

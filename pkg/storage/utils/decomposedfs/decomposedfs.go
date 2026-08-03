@@ -64,7 +64,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/templates"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/store"
-	pkgupload "github.com/owncloud/reva/v2/pkg/upload"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 

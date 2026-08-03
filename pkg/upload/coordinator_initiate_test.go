@@ -247,8 +247,8 @@ func TestInitiateUpload_ZeroLength(t *testing.T) {
 		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, true, mock.AnythingOfType("string")).Return(nil)
 		mockFs.On("PrepareUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&storage.PrepareUploadResult{}, nil)
 		mockFs.On("CommitUpload", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("commit failed"))
-		// rollback: MarkProcessing(false), Delete (ref is session.Reference(), ResourceId-based)
-		mockFs.On("MarkProcessing", mock.Anything, mock.Anything, false, mock.AnythingOfType("string")).Return(nil)
+		// rollback: RollbackUpload, Delete (new file, no MarkProcessing)
+		mockFs.On("RollbackUpload", mock.Anything, mock.Anything, mock.AnythingOfType("string"), false, int64(0)).Return(nil)
 		mockFs.On("Delete", mock.Anything, mock.Anything).Return((*storage.DeleteResult)(nil), nil)
 
 		_, err := coord.InitiateUpload(ctx, r, 0, nil)

@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +85,7 @@ type Session interface {
 	Dir() string
 	URL(ctx context.Context) (string, error)
 	SetScanData(result string, date time.Time)
+	SizeDiff() int64
 	Checksums() storage.UploadChecksums
 	SetChecksums(sha1, md5, adler32 []byte)
 	Metadata() map[string]string
@@ -197,6 +199,12 @@ func (s *FileSession) NodeParentID() string {
 // NodeExists returns whether the target node existed when the upload was initiated.
 func (s *FileSession) NodeExists() bool {
 	return s.info.Storage["NodeExists"] == "true"
+}
+
+// SizeDiff returns the size difference calculated by PrepareUpload.
+func (s *FileSession) SizeDiff() int64 {
+	v, _ := strconv.ParseInt(s.info.MetaData["sizeDiff"], 10, 64)
+	return v
 }
 
 // Dir returns the directory portion of the upload path.

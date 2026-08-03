@@ -129,7 +129,7 @@ func (c *coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 		fallthrough
 	case events.PPOutcomeAbort:
 		failed = true
-		revertNodeMetadata = !session.NodeExists()
+		revertNodeMetadata = true
 		keepUpload = true
 		metrics.UploadSessionsAborted.Inc()
 	case events.PPOutcomeContinue:
@@ -147,7 +147,6 @@ func (c *coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 				Length: session.Size(),
 			})
 			if commitErr != nil {
-				// TODO: call driver.RollbackUpload to undo PrepareUpload side-effects (not yet implemented)
 				log.Error().Err(commitErr).Msg("could not commit upload")
 				failed = true
 				keepUpload = true
@@ -158,7 +157,7 @@ func (c *coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 		}
 	case events.PPOutcomeDelete:
 		failed = true
-		revertNodeMetadata = !session.NodeExists()
+		revertNodeMetadata = true
 		metrics.UploadSessionsDeleted.Inc()
 	}
 
@@ -172,9 +171,15 @@ func (c *coordinator) handlePostprocessingFinished(ctx context.Context, ev event
 			log.Error().Err(err).Msg("could not unmark processing after postprocessing finished")
 		}
 		if revertNodeMetadata {
-			if _, delErr := c.fs.Delete(ctx, &nodeRef); delErr != nil {
-				if _, ok := delErr.(errtypes.NotFound); !ok {
-					log.Error().Err(delErr).Msg("could not delete placeholder node on abort")
+			if session.NodeExists() {
+				if rbErr := c.fs.RollbackUpload(ctx, &nodeRef, session.ID(), true, session.SizeDiff()); rbErr != nil {
+					log.Error().Err(rbErr).Msg("could not rollback upload")
+				}
+			} else {
+				if _, delErr := c.fs.Delete(ctx, &nodeRef); delErr != nil {
+					if _, ok := delErr.(errtypes.NotFound); !ok {
+						log.Error().Err(delErr).Msg("could not delete placeholder node on abort")
+					}
 				}
 			}
 		}
@@ -254,6 +259,12 @@ func (c *coordinator) handleCleanUpload(ctx context.Context, ev events.CleanUplo
 		return
 	}
 	ctx = session.Context(ctx)
+	if !ev.KeepUpload && session.NodeExists() {
+		nodeRef := session.Reference()
+		if rbErr := c.fs.RollbackUpload(ctx, &nodeRef, session.ID(), true, session.SizeDiff()); rbErr != nil {
+			log.Error().Err(rbErr).Msg("could not rollback upload during CleanUpload")
+		}
+	}
 	session.Cleanup(!ev.KeepUpload, !ev.KeepUpload)
 	nodeRef := session.Reference()
 	if err := c.fs.MarkProcessing(ctx, &nodeRef, false, session.ID()); err != nil {

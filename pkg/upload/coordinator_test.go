@@ -71,16 +71,15 @@ func TestNewCoordinator(t *testing.T) {
 // TestRollback verifies rollback behaviour: unmarks processing, removes session
 // files, and (for new files) deletes the placeholder node.
 func TestRollback(t *testing.T) {
-	t.Run("new file: unmarks processing, cleans files, deletes node", func(t *testing.T) {
+	t.Run("new file: cleans files, deletes node, no MarkProcessing", func(t *testing.T) {
 		root := t.TempDir()
 		coord, fs, store := newTestCoordinatorWithStore(t, root, false, nil)
 		session := newPopulatedSession(t, store, "/dir", "file.txt", "node1", "space1", false)
 
 		ref := session.Reference()
-		fs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 		fs.On("Delete", mock.Anything, &ref).Return((*storage.DeleteResult)(nil), nil)
 
-		coord.(*coordinator).rollback(context.Background(), session)
+		coord.(*coordinator).rollback(context.Background(), session, false)
 
 		fs.AssertExpectations(t)
 		assert.NoFileExists(t, session.BinPath())
@@ -96,7 +95,7 @@ func TestRollback(t *testing.T) {
 		ref := session.Reference()
 		fs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
 
-		coord.(*coordinator).rollback(context.Background(), session)
+		coord.(*coordinator).rollback(context.Background(), session, false)
 
 		fs.AssertExpectations(t)
 		// Delete must NOT have been called — if it were, mock would record it as unexpected.
@@ -136,7 +135,7 @@ func TestFinishSync(t *testing.T) {
 		require.NoError(t, os.Remove(session.BinPath()))
 
 		ref := session.Reference()
-		fs.On("MarkProcessing", mock.Anything, &ref, false, session.ID()).Return(nil)
+		fs.On("RollbackUpload", mock.Anything, &ref, session.ID(), false, int64(0)).Return(nil)
 		fs.On("Delete", mock.Anything, &ref).Return((*storage.DeleteResult)(nil), nil)
 
 		err := coord.(*coordinator).finishSync(context.Background(), session)
@@ -154,8 +153,8 @@ func TestFinishSync(t *testing.T) {
 
 		ref := loaded.Reference()
 		fs.On("CommitUpload", mock.Anything, &ref, mock.Anything, mock.Anything).Return(errors.New("commit error"))
-		// rollback calls MarkProcessing(false) and Delete (new file)
-		fs.On("MarkProcessing", mock.Anything, &ref, false, loaded.ID()).Return(nil)
+		// rollback: RollbackUpload, Delete (new file, no MarkProcessing)
+		fs.On("RollbackUpload", mock.Anything, &ref, loaded.ID(), false, int64(0)).Return(nil)
 		fs.On("Delete", mock.Anything, &ref).Return((*storage.DeleteResult)(nil), nil)
 
 		err = coord.(*coordinator).finishSync(context.Background(), loaded)
