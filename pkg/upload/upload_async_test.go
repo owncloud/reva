@@ -570,6 +570,41 @@ var _ = Describe("Async uploads via the coordinator", func() {
 			Expect(stagedBytesExist(ids["simple"])).To(BeFalse(), "staged bytes should be cleaned up")
 		})
 
+		// The other half of the rule above: removal is only correct for a node this
+		// upload created. A rejected overwrite must leave the file it failed to
+		// replace exactly as it was — it never wrote anything to undo, so rolling
+		// the node back would destroy content belonging to the previous upload.
+		It("keeps the existing file when an overwrite is rejected", func() {
+			// No consumer runs here, so this commits inline and publishes UploadReady
+			// straight away. Drain it: the channel is unbuffered.
+			initiateAndUpload(firstContent)
+			_, ok := (<-pub).(events.UploadReady)
+			Expect(ok).To(BeTrue())
+
+			exists, _, size := fileStatus()
+			Expect(exists).To(BeTrue())
+			Expect(size).To(Equal(len(firstContent)))
+
+			ids, err := coord.InitiateUpload(ctx, ref, int64(len(secondContent)), map[string]string{
+				"providerID": providerID,
+				"checksum":   "md5 00000000000000000000000000000000",
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = coord.Upload(ctx, storage.UploadRequest{
+				Ref:    &provider.Reference{Path: "/" + ids["simple"]},
+				Body:   io.NopCloser(bytes.NewReader(secondContent)),
+				Length: int64(len(secondContent)),
+			}, nil)
+			Expect(err).To(HaveOccurred(), "a checksum mismatch must be rejected")
+
+			exists, status, size := fileStatus()
+			Expect(exists).To(BeTrue(), "a rejected overwrite must not delete the file it targeted")
+			Expect(size).To(Equal(len(firstContent)), "the original content must survive untouched")
+			Expect(status).ToNot(Equal("processing"), "the node must not be left flagged processing")
+			Expect(stagedBytesExist(ids["simple"])).To(BeFalse(), "staged bytes should be cleaned up")
+		})
+
 		// The guarantee that keeps the two switches from drifting apart: with no
 		// consumer running, nothing would ever arrive to finish a deferred upload, so
 		// the coordinator must commit inline instead of staging and waiting forever.
