@@ -19,9 +19,8 @@ func nopSleep(durations *[]time.Duration) func(time.Duration) {
 	}
 }
 
-// newTestConn returns a ConnWithReconnect backed by a fake connection manager
-// that always returns a placeholder *ldap.Conn (never dials). Sufficient for
-// policy-predicate tests that inject errors directly into retryOp closures.
+// newTestConn returns a ConnWithReconnect backed by a fake that never dials, for policy-predicate
+// tests that inject errors directly into RetryOp closures.
 func newTestConn(t *testing.T, read, write RetryPolicy, sleepFn func(time.Duration)) *ConnWithReconnect {
 	t.Helper()
 	nop := zerolog.Nop()
@@ -69,12 +68,8 @@ func TestAddUsesWritePolicy(t *testing.T) {
 	assert.Empty(t, slept)
 }
 
-// TestReadWritePolicyRetryableCodes: the read policy retries every transient/network code
-// regardless of message; the write policy retries only a pre-send ErrorNetwork (see
-// isPreSendNetworkErr) and nothing else, since any post-send error may have applied the write.
-//
-// Cases carry a constructed error (code + message) rather than a bare code because write
-// retryability depends on the ErrorNetwork message, not just the result code.
+// TestReadWritePolicyRetryableCodes asserts reads retry every transient/network code while writes
+// retry only a pre-send ErrorNetwork; cases carry code + message since write retryability keys on both.
 func TestReadWritePolicyRetryableCodes(t *testing.T) {
 	// preSend / postSend are representative ErrorNetwork messages go-ldap emits before and after
 	// the request is transmitted.
@@ -127,8 +122,7 @@ func TestReadWritePolicyRetryableCodes(t *testing.T) {
 }
 
 // TestPreSendNetworkErrClassification pins isPreSendNetworkErr: only ErrorNetwork with a known
-// pre-send message is safe to retry for a write; every post-send message, non-network code, and
-// non-ldap error must classify as not-pre-send (fail-closed).
+// pre-send message classifies as pre-send; everything else is not-pre-send (fail-closed).
 func TestPreSendNetworkErrClassification(t *testing.T) {
 	cases := []struct {
 		name string
@@ -156,10 +150,8 @@ func TestPreSendNetworkErrClassification(t *testing.T) {
 	}
 }
 
-// TestWritePolicyMatchesEmittableCode guards against the dead-code regression this fix addresses:
-// the write policy must retry at least one error go-ldap actually emits. go-ldap raises all
-// connection failures as ErrorNetwork(200) and never emits ServerDown(81)/ConnectError(91), so a
-// code-based {81,91} allowlist (the pre-fix behaviour) would match nothing and never retry.
+// TestWritePolicyMatchesEmittableCode guards against dead code: the write policy must retry at least
+// one error go-ldap actually emits (a {81,91} code allowlist would match nothing, since it emits 200).
 func TestWritePolicyMatchesEmittableCode(t *testing.T) {
 	p := NewWritePolicy(1, 0, 0)
 	// The exact error go-ldap returns from sendMessageWithFlags when a reaped idle connection is
@@ -186,14 +178,8 @@ func TestWriteRetriesPreSendNetworkError(t *testing.T) {
 		"write must retry a pre-send ErrorNetwork")
 }
 
-// TestWriteRetriesSendFailedError: a write that fails because conn.Write failed is retried. This is
-// the race window a reaped idle connection hits when the write beats the reader goroutine to
-// noticing the drop: IsClosing() is still false, so the packet reaches the write loop and conn.Write
-// fails with EPIPE/ECONNRESET. go-ldap registers the message context only after a successful write,
-// so the request provably never reached the server and retrying cannot double-apply.
-//
-// The error is a plain fmt.Errorf with no result code (ldapErrCode maps it to LDAPResultOther), so a
-// code-keyed policy would never match it.
+// TestWriteRetriesSendFailedError asserts a write failing with a codeless failed conn.Write is
+// retried: it is registered only after a successful write, so it never reached the server.
 func TestWriteRetriesSendFailedError(t *testing.T) {
 	sendFailed := errors.New("unable to send request: write tcp 127.0.0.1:1->127.0.0.1:2: write: broken pipe")
 
@@ -400,9 +386,8 @@ func TestRetryOpExhaustionPreservesErrorCode(t *testing.T) {
 		"exhaustion must preserve the last real error code")
 }
 
-// TestWritePolicyOpaqueErrorNotRetried: a non-*ldap.Error from a write op maps to a
-// non-retryable code and must not be retried (guards against defaulting opaque
-// errors to the retryable ErrorNetwork).
+// TestWritePolicyOpaqueErrorNotRetried asserts a non-*ldap.Error from a write is not retried
+// (guards against defaulting opaque errors to the retryable ErrorNetwork).
 func TestWritePolicyOpaqueErrorNotRetried(t *testing.T) {
 	var calls int32
 	p := NewWritePolicy(1, 0, 0)
@@ -418,10 +403,8 @@ func TestWritePolicyOpaqueErrorNotRetried(t *testing.T) {
 		"opaque non-*ldap.Error must not be retried on a write op")
 }
 
-// TestRetryPolicyBackoffGrowsWhenMaxDelayZero: with MaxDelay unset the backoff must
-// still grow beyond BaseDelay (falling back to the library default cap), not
-// oscillate at BaseDelay. With 8 retries at BaseDelay=10ms, the max sleep must
-// exceed 2×BaseDelay.
+// TestRetryPolicyBackoffGrowsWhenMaxDelayZero asserts that with MaxDelay unset the backoff still
+// grows beyond BaseDelay (falling back to the library default cap) rather than oscillating at it.
 func TestRetryPolicyBackoffGrowsWhenMaxDelayZero(t *testing.T) {
 	const maxRetries = 8
 	const baseDelay = 10 * time.Millisecond

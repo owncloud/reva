@@ -29,10 +29,8 @@ import (
 	"github.com/go-ldap/ldap/v3"
 )
 
-// fakeConn is a minimal ldap.Client double used to test pool bookkeeping without a real LDAP
-// server. It embeds a nil ldap.Client so it satisfies the interface; only Close is overridden by
-// default (the only method the pool itself calls on connections it manages), with
-// passwordModifyFunc/modifyWithResultFunc as optional overrides for tests exercising those methods.
+// fakeConn is a minimal ldap.Client double for pool bookkeeping tests. It embeds a nil ldap.Client
+// to satisfy the interface; Close and the *Func fields override the methods tests exercise.
 type fakeConn struct {
 	ldap.Client
 	closed bool
@@ -191,15 +189,8 @@ func TestConnPoolDoDoesNotRetryNonNetworkError(t *testing.T) {
 	}
 }
 
-// TestFinding6_PoolAddNotRetriedOnErrorNetwork — Finding 6 (pool write double-apply).
-//
-// ConnPool.do formerly retried ANY op on ErrorNetwork, with no read/write split.
-// A write (Add/Modify/Del) that fails with ErrorNetwork after the request packet
-// was already transmitted was therefore re-applied on the retry — the same
-// double-apply hazard as in ConnWithReconnect. do() now takes the write RetryPolicy
-// for writes, whose isRetryable matches only pre-send network errors; a post-send
-// message like the one below is surfaced after a single attempt. This test asserts
-// Add is invoked exactly once and the ErrorNetwork is returned to the caller.
+// TestFinding6_PoolAddNotRetriedOnErrorNetwork asserts a pool write that fails with a post-send
+// ErrorNetwork is attempted exactly once and surfaced, not retried (double-apply hazard).
 func TestFinding6_PoolAddNotRetriedOnErrorNetwork(t *testing.T) {
 	p, dialCount := newTestPool(2, time.Second)
 
@@ -323,10 +314,8 @@ func TestConnPoolModifyWithResult(t *testing.T) {
 	}
 }
 
-// TestConnPoolPasswordModifyNotRetriedOnNetworkError — PasswordModify is a write.
-// After the Finding 6 fix, pool writes are not retried on ErrorNetwork (go-ldap
-// transmits the request before the response read fails, so a retry would
-// double-apply). The error is surfaced to the caller after a single attempt.
+// TestConnPoolPasswordModifyNotRetriedOnNetworkError asserts PasswordModify (a write) is not retried
+// on a post-send ErrorNetwork, but surfaced after a single attempt.
 func TestConnPoolPasswordModifyNotRetriedOnNetworkError(t *testing.T) {
 	p, dialCount := newTestPool(2, time.Second)
 
@@ -481,9 +470,8 @@ func TestConnPoolWriteDoesNotRetryPostSendNetworkError(t *testing.T) {
 	}
 }
 
-// TestConnPoolWriteRetriesSendFailedError: a pooled write that fails because conn.Write failed is
-// retried on a fresh connection. The error is a plain error with no result code, so before
-// isSendFailedErr the write policy could not match it and the op was surfaced after one attempt.
+// TestConnPoolWriteRetriesSendFailedError asserts a pooled write failing with a codeless failed
+// conn.Write is retried on a fresh connection (matched by isSendFailedErr, not by result code).
 func TestConnPoolWriteRetriesSendFailedError(t *testing.T) {
 	var dialCount int32
 	p := NewLDAPPool(Config{PoolSize: 5, PoolCheckoutTimeout: time.Second}, nil)
@@ -511,10 +499,8 @@ func TestConnPoolWriteRetriesSendFailedError(t *testing.T) {
 	}
 }
 
-// TestConnPoolReleaseEvictsOnSendFailedError: a connection whose conn.Write failed is closed and
-// discarded, not returned to the idle pool. The error carries no result code, so an
-// IsErrorWithCode(ErrorNetwork) check alone would recycle a dead connection and fail the next
-// checkout that picked it up.
+// TestConnPoolReleaseEvictsOnSendFailedError asserts a connection whose conn.Write failed is closed
+// and discarded, not returned to the idle pool (the codeless error needs isSendFailedErr to evict).
 func TestConnPoolReleaseEvictsOnSendFailedError(t *testing.T) {
 	p, _ := newTestPool(2, time.Second)
 
