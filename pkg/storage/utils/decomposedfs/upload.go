@@ -491,11 +491,11 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 			}
 		}
 		if info.NodeExisted && oldAttrs != nil {
+			if err := fs.lu.TimeManager().OverrideMtime(ctx, n, &oldAttrs, oldMtime); err != nil {
+				appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not restore node mtime during rollback")
+			}
 			if err := n.SetXattrsWithContext(ctx, oldAttrs, false); err != nil {
 				appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not restore node xattrs during rollback")
-			}
-			if err := fs.lu.TimeManager().SetMTime(ctx, n, &oldMtime); err != nil {
-				appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not restore node mtime during rollback")
 			}
 		}
 	}()
@@ -633,7 +633,7 @@ func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Refere
 		return fmt.Errorf("RollbackUpload: node lookup failed: %w", err)
 	}
 	if !n.Exists {
-		return nil // new node; coordinator calls Delete separately
+		return nil // nothing was written yet
 	}
 	n.SpaceRoot, err = node.ReadNode(ctx, fs.lu, n.SpaceID, n.SpaceID, false, nil, false)
 	if err != nil {
@@ -652,13 +652,17 @@ func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Refere
 		if err := n.RevertCurrentRevision(ctx, false); err != nil {
 			return err
 		}
-		if sizeDiff != 0 {
-			if err := fs.tp.Propagate(ctx, n, -sizeDiff); err != nil {
-				appctx.GetLogger(ctx).Error().Err(err).Msg("RollbackUpload: could not revert propagate")
-			}
+	} else {
+		if err := n.Purge(ctx); err != nil {
+			return fmt.Errorf("RollbackUpload: could not purge node: %w", err)
 		}
 	}
 
+	if sizeDiff != 0 {
+		if err := fs.tp.Propagate(ctx, n, -sizeDiff); err != nil {
+			appctx.GetLogger(ctx).Error().Err(err).Msg("RollbackUpload: could not revert propagate")
+		}
+	}
 	return nil
 }
 
