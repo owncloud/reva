@@ -5,8 +5,10 @@ InitiateFileUpload, but the OCS permissions derived from it did not include
 write. Clients pick the actions they offer from the resulting WebDAV
 permissions string, which therefore lacked "NV" (rename) and "W" (overwrite),
 so sharees could neither rename files nor change their contents inside a shared
-folder even though the storage layer accepted both. Move now implies write. The
-role still grants neither delete nor version history.
+folder even though the storage layer accepted both. Move now implies write for
+grants that do not carry delete, which leaves the OCS permissions of the
+deletable roles unchanged. The role still grants neither delete nor version
+history.
 
 https://github.com/owncloud/reva/pull/689
 https://github.com/owncloud/ocis/issues/11977

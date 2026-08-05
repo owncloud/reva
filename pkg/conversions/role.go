@@ -604,12 +604,14 @@ func RoleFromResourcePermissions(rp *provider.ResourcePermissions, islink bool) 
 		rp.InitiateFileDownload {
 		r.ocsPermissions |= PermissionRead
 	}
-	// Move implies write: a grantee that may rename a resource may also replace
-	// its contents. Without it the editor-lite role would come back read-only
-	// here, and clients would hide rename and overwrite even though the storage
-	// layer accepts both.
+	// Move implies write for the non-deletable roles: a grantee that may rename a
+	// resource may also replace its contents. Without it the editor-lite role
+	// would come back read-only here, and clients would hide rename and overwrite
+	// even though the storage layer accepts both. Deletable grants are excluded
+	// because the persisted ACE format cannot tell "w" (upload) apart from Move,
+	// so every legacy delete+create+read grant would read back as writable too.
 	if rp.InitiateFileUpload &&
-		(rp.RestoreRecycleItem || (rp.Delete && !rp.ListRecycle) || rp.Move) {
+		(rp.RestoreRecycleItem || (rp.Delete && !rp.ListRecycle) || (rp.Move && !rp.Delete)) {
 		r.ocsPermissions |= PermissionWrite
 	}
 	if rp.Stat &&

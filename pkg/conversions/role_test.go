@@ -200,3 +200,27 @@ func TestRoleFromResourcePermissions_UploaderStaysCreateOnly(t *testing.T) {
 	assert.NotContains(t, got.WebDAVPermissions(false, false, false, false), "W",
 		"uploader must not be writable")
 }
+
+// TestRoleFromResourcePermissions_DeletableGrantsKeepTheirOCSPermissions pins the
+// legacy OCS permission values that survive a round trip through the persisted
+// ACE format. That format has a single "w" flag covering both InitiateFileUpload
+// and Move, so a stored grant always reads back with Move set once it is
+// writable at all. Letting Move alone imply PermissionWrite therefore reported
+// every delete+create+read grant as delete+create+read+write, which is what
+// ocs:share-permissions exposes to clients.
+func TestRoleFromResourcePermissions_DeletableGrantsKeepTheirOCSPermissions(t *testing.T) {
+	for _, p := range []Permissions{
+		PermissionRead | PermissionCreate | PermissionDelete,
+		PermissionRead | PermissionCreate | PermissionDelete | PermissionShare,
+	} {
+		// A grant with Move set, as it reads back from storage.
+		rp := RoleFromOCSPermissions(p, nil).CS3ResourcePermissions()
+		rp.Move = true
+
+		got := RoleFromResourcePermissions(rp, false)
+		assert.Equal(t, p, got.ocsPermissions,
+			"a stored grant with OCS permissions %d must not gain write", p)
+		assert.False(t, got.ocsPermissions.Contain(PermissionWrite),
+			"a stored grant with OCS permissions %d must not gain write", p)
+	}
+}
