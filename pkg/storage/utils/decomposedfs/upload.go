@@ -413,6 +413,14 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		return errors.Wrap(err, "Decomposedfs: failed to write blob")
 	}
 
+	// on the node, not the session: the session is deleted when the upload finishes
+	if !source.ScanDate.IsZero() {
+		if err := n.SetScanData(ctx, source.ScanResult, source.ScanDate); err != nil {
+			appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not set scan results")
+		}
+		metrics.UploadSessionsScanned.Inc()
+	}
+
 	now := time.Now()
 	if p, err := n.Parent(ctx); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not read parent for etag propagation")
@@ -491,6 +499,8 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 			}
 		}
 		if info.NodeExisted && oldAttrs != nil {
+			// mtime goes in the same batch: we still hold the metadata lock and
+			// SetMTime would deadlock trying to retake it
 			if err := fs.lu.TimeManager().OverrideMtime(ctx, n, &oldAttrs, oldMtime); err != nil {
 				appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not restore node mtime during rollback")
 			}
@@ -500,15 +510,27 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 		}
 	}()
 
+	var (
+		old         *node.Node
+		overwrite   bool
+		oldBlobsize int64
+	)
 	if info.NodeExisted {
-		old, err := node.ReadNode(ctx, fs.lu, n.SpaceID, n.ID, false, nil, false)
+		old, err = node.ReadNode(ctx, fs.lu, n.SpaceID, n.ID, false, nil, false)
 		if err != nil {
 			return nil, errors.Wrap(err, "PrepareUpload: failed to read existing node")
 		}
-		if _, err := node.CheckQuota(ctx, n.SpaceRoot, old.BlobID != "", uint64(old.Blobsize), uint64(info.Size)); err != nil {
-			return nil, err
-		}
+		overwrite = old.BlobID != ""
+		oldBlobsize = old.Blobsize
+	}
 
+	// also for new files: the coordinator's check fails open without GetQuota
+	// permission, and CheckQuota guards disk space too
+	if _, err := node.CheckQuota(ctx, n.SpaceRoot, overwrite, uint64(oldBlobsize), uint64(info.Size)); err != nil {
+		return nil, err
+	}
+
+	if info.NodeExisted {
 		oldMtime, err = old.GetMTime(ctx)
 		if err != nil {
 			return nil, err
@@ -653,6 +675,8 @@ func (fs *Decomposedfs) RollbackUpload(ctx context.Context, ref *provider.Refere
 			return err
 		}
 	} else {
+		// the upload created this node, so undo it. Purge, not trash: the file never
+		// became visible, and Purge needs no Delete permission
 		if err := n.Purge(ctx); err != nil {
 			return fmt.Errorf("RollbackUpload: could not purge node: %w", err)
 		}
