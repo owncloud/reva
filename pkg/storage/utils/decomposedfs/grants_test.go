@@ -132,7 +132,7 @@ var _ = Describe("Grants", func() {
 				Expect(err).ToNot(HaveOccurred())
 				attr, err := n.XattrString(env.Ctx, prefixes.GrantUserAcePrefix+grant.Grantee.GetUserId().OpaqueId)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(attr).To(Equal(fmt.Sprintf("\x00t=A:f=:p=trwd:c=%s:e=0\n", o.GetOpaqueId()))) // NOTE: this tests ace package
+				Expect(attr).To(Equal(fmt.Sprintf("\x00t=A:f=:p=trwmd:c=%s:e=0\n", o.GetOpaqueId()))) // NOTE: this tests ace package
 			})
 
 			It("creates a storage space per created grant", func() {
