@@ -152,10 +152,6 @@ def prepare_configs(storage):
             content = src.read_text()
             for old, new in replacements.items():
                 content = content.replace(old, new)
-            # Route zerolog to stdout at warn level so we can capture it per-process.
-            # Default (stderr/console) mixes with Jaeger noise and is not file-captured.
-            if "[log]" not in content:
-                content += "\n[log]\noutput = \"stdout\"\nlevel = \"warn\"\n"
             dst.write_text(content)
 
     return config_dir
@@ -219,27 +215,21 @@ SERVICE_STARTERS = {
 }
 
 
-REVAD_LOG_DIR = REPO_ROOT / "tmp" / "revad-logs"
-
-
 def start_revad_services(config_dir, storage):
-    """Start all revad processes, return list of Popen objects."""
-    REVAD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    """Start all revad processes, return list of Popen objects.
+
+    revad inherits the runner's stdout/stderr, so all of its output (startup lines,
+    request logs, panics) flows straight to the GitHub Actions step console.
+    """
     procs = []
-    log_files = []
     for config_name in REVAD_CONFIGS[storage]:
         config_path = config_dir / config_name
-        log_path = REVAD_LOG_DIR / f"{config_name}.log"
-        log_file = open(log_path, "w")
-        log_files.append(log_file)
         p = subprocess.Popen(
             [str(REVAD_BIN), "-c", str(config_path)],
             cwd=str(config_dir),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
         )
         procs.append(p)
-    return procs, log_files
+    return procs
 
 
 def clone_test_repos():
@@ -321,7 +311,6 @@ def main():
     args = parser.parse_args()
 
     procs = []
-    log_files = []
     docker_containers = []
 
     def cleanup(*_):
@@ -335,11 +324,6 @@ def main():
                 p.wait(timeout=5)
             except Exception:
                 p.kill()
-        for f in log_files:
-            try:
-                f.close()
-            except Exception:
-                pass
         for name in docker_containers:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
@@ -362,12 +346,11 @@ def main():
 
         # Start revad services
         print(f"Starting revad services ({args.storage})...")
-        procs, log_files = start_revad_services(config_dir, args.storage)
-        print(f"Revad logs: {REVAD_LOG_DIR}")
+        procs = start_revad_services(config_dir, args.storage)
 
         # Wait for frontend and gateway to be ready
-        wait_for_port(FRONTEND_PORT, timeout=60, label="frontend")
-        wait_for_port(GATEWAY_PORT, timeout=60, label="gateway")
+        wait_for_port(FRONTEND_PORT, timeout=120, label="frontend")
+        wait_for_port(GATEWAY_PORT, timeout=120, label="gateway")
 
         # Clone test repos
         clone_test_repos()

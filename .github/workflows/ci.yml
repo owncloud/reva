@@ -105,9 +105,7 @@ jobs:
         if: failure()
         with:
           name: acceptance-ocis-part-${{ matrix.part }}
-          path: |
-            tmp/testrunner/tests/acceptance/output/
-            tmp/revad-logs/
+          path: tmp/testrunner/tests/acceptance/output/
 
   # TODO: acceptance-tests-s3ng skipped — blocked on Ceph networking — follow-up PR
 
@@ -132,9 +130,7 @@ jobs:
         if: failure()
         with:
           name: acceptance-posixfs-part-${{ matrix.part }}
-          path: |
-            tmp/testrunner/tests/acceptance/output/
-            tmp/revad-logs/
+          path: tmp/testrunner/tests/acceptance/output/
 
   ci-ok:
     if: always()
