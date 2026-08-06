@@ -418,7 +418,6 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 		if err := n.SetScanData(ctx, source.ScanResult, source.ScanDate); err != nil {
 			appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not set scan results")
 		}
-		metrics.UploadSessionsScanned.Inc()
 	}
 
 	now := time.Now()
