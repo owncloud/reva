@@ -152,6 +152,10 @@ def prepare_configs(storage):
             content = src.read_text()
             for old, new in replacements.items():
                 content = content.replace(old, new)
+            # Route zerolog to stdout at warn level so we can capture it per-process.
+            # Default (stderr/console) mixes with Jaeger noise and is not file-captured.
+            if "[log]" not in content:
+                content += "\n[log]\noutput = \"stdout\"\nlevel = \"warn\"\n"
             dst.write_text(content)
 
     return config_dir
@@ -232,7 +236,7 @@ def start_revad_services(config_dir, storage):
             [str(REVAD_BIN), "-c", str(config_path)],
             cwd=str(config_dir),
             stdout=log_file,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.DEVNULL,
         )
         procs.append(p)
     return procs, log_files
