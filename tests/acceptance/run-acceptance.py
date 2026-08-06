@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DRONE_CONFIG_DIR = REPO_ROOT / "tests" / "oc-integration-tests" / "drone"
 DRONE_ENV_FILE = REPO_ROOT / ".drone.env"
 REVAD_BIN = REPO_ROOT / "cmd" / "revad" / "revad"
+REVAD_LOG_DIR = REPO_ROOT / "tmp" / "revad-logs"
 
 FRONTEND_PORT = 20080
 GATEWAY_PORT = 19000
@@ -135,6 +136,7 @@ def prepare_configs(storage):
     config_dir = Path(tempfile.mkdtemp(prefix="reva-ci-config-"))
     data_dir = REPO_ROOT / "tmp" / "reva" / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
+    REVAD_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     # Hostname/path replacements: drone container DNS -> localhost
     replacements = {
@@ -152,9 +154,35 @@ def prepare_configs(storage):
             content = src.read_text()
             for old, new in replacements.items():
                 content = content.replace(old, new)
+            # Tell revad to write its own logs to a per-service file at debug level.
+            # getWriter() treats any non-stdout/stderr string as a file path and
+            # opens it with O_APPEND|O_CREATE. Two configs ship a commented-out
+            # [log] block; drop it first so our section is the only one.
+            content = _strip_log_section(content)
+            log_path = REVAD_LOG_DIR / f"{name}.log"
+            content += (
+                f'\n[log]\noutput = "{log_path}"\nmode = "json"\nlevel = "debug"\n'
+            )
             dst.write_text(content)
 
     return config_dir
+
+
+def _strip_log_section(content):
+    """Remove a top-level [log] section and its keys from a TOML string."""
+    out, in_log = [], False
+    for line in content.splitlines():
+        s = line.strip()
+        if s.startswith("[log]"):
+            in_log = True
+            continue
+        if in_log:
+            if s.startswith("[") and not s.startswith("[log."):
+                in_log = False  # next section ends the [log] block
+            else:
+                continue  # skip [log] keys/comments/blanks
+        out.append(line)
+    return "\n".join(out)
 
 
 def start_ldap():
@@ -218,8 +246,10 @@ SERVICE_STARTERS = {
 def start_revad_services(config_dir, storage):
     """Start all revad processes, return list of Popen objects.
 
-    revad inherits the runner's stdout/stderr, so all of its output (startup lines,
-    request logs, panics) flows straight to the GitHub Actions step console.
+    revad writes its structured logs to per-service files under REVAD_LOG_DIR (set
+    via [log] in prepare_configs). We deliberately do NOT redirect the subprocess's
+    stdout/stderr, so anything revad prints outside the logger (panics, early startup
+    errors) still reaches the console — and Behat's own output is never touched.
     """
     procs = []
     for config_name in REVAD_CONFIGS[storage]:
@@ -313,6 +343,21 @@ def main():
     procs = []
     docker_containers = []
 
+    def report_log_sizes():
+        # Print each revad log file's byte count to the (durable) console, so even
+        # if artifact upload misbehaves we can tell "empty" from "not uploaded".
+        # Wrapped so a failure here can never interrupt container teardown below.
+        try:
+            if not REVAD_LOG_DIR.exists():
+                print("revad log dir does not exist")
+                return
+            print("--- revad log file sizes ---")
+            for f in sorted(REVAD_LOG_DIR.iterdir()):
+                print(f"  {f.name}: {f.stat().st_size} bytes")
+            print("--- end revad log file sizes ---")
+        except Exception as e:
+            print(f"report_log_sizes failed (non-fatal): {e}")
+
     def cleanup(*_):
         for p in procs:
             try:
@@ -324,6 +369,7 @@ def main():
                 p.wait(timeout=5)
             except Exception:
                 p.kill()
+        report_log_sizes()
         for name in docker_containers:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
