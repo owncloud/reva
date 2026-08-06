@@ -236,7 +236,7 @@ def start_revad_services(config_dir, storage):
             [str(REVAD_BIN), "-c", str(config_path)],
             cwd=str(config_dir),
             stdout=log_file,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
         )
         procs.append(p)
     return procs, log_files
