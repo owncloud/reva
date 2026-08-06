@@ -215,17 +215,27 @@ SERVICE_STARTERS = {
 }
 
 
+REVAD_LOG_DIR = REPO_ROOT / "tmp" / "revad-logs"
+
+
 def start_revad_services(config_dir, storage):
     """Start all revad processes, return list of Popen objects."""
+    REVAD_LOG_DIR.mkdir(parents=True, exist_ok=True)
     procs = []
+    log_files = []
     for config_name in REVAD_CONFIGS[storage]:
         config_path = config_dir / config_name
+        log_path = REVAD_LOG_DIR / f"{config_name}.log"
+        log_file = open(log_path, "w")
+        log_files.append(log_file)
         p = subprocess.Popen(
             [str(REVAD_BIN), "-c", str(config_path)],
             cwd=str(config_dir),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
         procs.append(p)
-    return procs
+    return procs, log_files
 
 
 def clone_test_repos():
@@ -307,6 +317,7 @@ def main():
     args = parser.parse_args()
 
     procs = []
+    log_files = []
     docker_containers = []
 
     def cleanup(*_):
@@ -320,6 +331,11 @@ def main():
                 p.wait(timeout=5)
             except Exception:
                 p.kill()
+        for f in log_files:
+            try:
+                f.close()
+            except Exception:
+                pass
         for name in docker_containers:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
@@ -342,7 +358,8 @@ def main():
 
         # Start revad services
         print(f"Starting revad services ({args.storage})...")
-        procs = start_revad_services(config_dir, args.storage)
+        procs, log_files = start_revad_services(config_dir, args.storage)
+        print(f"Revad logs: {REVAD_LOG_DIR}")
 
         # Wait for frontend and gateway to be ready
         wait_for_port(FRONTEND_PORT, timeout=60, label="frontend")
