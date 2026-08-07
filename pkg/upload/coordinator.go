@@ -153,10 +153,16 @@ func (c *coordinator) triggerPostprocessing(ctx context.Context, session Session
 // finishUpload is called after all bytes are received (TUS FinishUpload and simple PUT).
 // It creates the node, validates checksums, then either commits inline or triggers postprocessing.
 func (c *coordinator) finishUpload(ctx context.Context, session Session) error {
+	// TODO(OCISDEV-900): temporary step markers to pin down which coordinator step
+	// races the posix inotify assimilate worker in CI. Remove before merge.
+	c.log.Warn().Str("session", session.ID()).Str("filename", session.Filename()).Msg("OCISDEV-900: finishUpload: touchAndMark start")
 	if err := c.touchAndMark(ctx, session); err != nil {
+		c.log.Warn().Err(err).Str("session", session.ID()).Msg("OCISDEV-900: finishUpload: touchAndMark failed")
 		return err
 	}
+	c.log.Warn().Str("session", session.ID()).Str("nodeid", session.NodeID()).Msg("OCISDEV-900: finishUpload: touchAndMark done, verifyAndStoreChecksums start")
 	if err := verifyAndStoreChecksums(ctx, session); err != nil {
+		c.log.Warn().Err(err).Str("session", session.ID()).Msg("OCISDEV-900: finishUpload: verifyAndStoreChecksums failed")
 		c.rollback(ctx, session, false)
 		return err
 	}
@@ -169,15 +175,18 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) error {
 	metrics.UploadSessionsBytesReceived.Inc()
 
 	ref := session.Reference()
+	c.log.Warn().Str("session", session.ID()).Str("nodeid", session.NodeID()).Msg("OCISDEV-900: finishUpload: PrepareUpload start")
 	result, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), storage.UploadInfo{
 		NodeExisted: session.NodeExists(),
 		Size:        session.Size(),
 		Checksums:   session.Checksums(),
 	})
 	if err != nil {
+		c.log.Warn().Err(err).Str("session", session.ID()).Msg("OCISDEV-900: finishUpload: PrepareUpload failed")
 		c.rollback(ctx, session, false)
 		return err
 	}
+	c.log.Warn().Str("session", session.ID()).Str("nodeid", session.NodeID()).Msg("OCISDEV-900: finishUpload: PrepareUpload done")
 	session.SetMetadata("sizeDiff", strconv.FormatInt(result.SizeDiff, 10))
 	if err := session.Persist(ctx); err != nil {
 		c.rollback(ctx, session, true)
@@ -237,14 +246,18 @@ func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
 			},
 			Path: session.Filename(),
 		}
+		// TODO(OCISDEV-900): temporary step markers. Remove before merge.
+		c.log.Warn().Str("session", session.ID()).Str("filename", session.Filename()).Msg("OCISDEV-900: touchAndMark: TouchFile start")
 		result, err := c.fs.TouchFile(ctx, pathRef, false, session.Metadata()["mtime"])
 		if err != nil {
+			c.log.Warn().Err(err).Str("session", session.ID()).Msg("OCISDEV-900: touchAndMark: TouchFile failed")
 			session.Cleanup(true, true)
 			if _, ok := err.(errtypes.IsNotFound); ok {
 				return errtypes.PreconditionFailed(err.Error())
 			}
 			return err
 		}
+		c.log.Warn().Str("session", session.ID()).Str("nodeid", result.ResourceID.GetOpaqueId()).Msg("OCISDEV-900: touchAndMark: TouchFile done")
 		session.SetStorageValue("NodeId", result.ResourceID.GetOpaqueId())
 		session.SetStorageValue("SpaceRoot", result.SpaceID)
 		if result.SpaceOwner != nil {
@@ -254,13 +267,16 @@ func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
 		}
 	}
 	nodeRef := session.Reference()
+	c.log.Warn().Str("session", session.ID()).Str("nodeid", session.NodeID()).Msg("OCISDEV-900: touchAndMark: MarkProcessing start")
 	if err := c.fs.MarkProcessing(ctx, &nodeRef, true, session.ID()); err != nil {
+		c.log.Warn().Err(err).Str("session", session.ID()).Msg("OCISDEV-900: touchAndMark: MarkProcessing failed")
 		session.Cleanup(true, true)
 		if !session.NodeExists() {
 			_, _ = c.fs.Delete(ctx, &nodeRef)
 		}
 		return err
 	}
+	c.log.Warn().Str("session", session.ID()).Str("nodeid", session.NodeID()).Msg("OCISDEV-900: touchAndMark: MarkProcessing done")
 	return session.Persist(ctx)
 }
 

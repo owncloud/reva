@@ -92,10 +92,16 @@ func (d *ScanDebouncer) Debounce(item scanItem) {
 	path := item.Path
 	force := item.ForceRescan
 	recurse := item.Recurse
+	action := item.Action
 	if i, ok := d.pending.Load(item.Path); ok {
 		queueItem := i.(*queueItem)
 		force = force || queueItem.item.ForceRescan
 		recurse = recurse || queueItem.item.Recurse
+		// an update coalesced with a create means bytes landed after creation:
+		// treat the combined event as an update so assimilate still rescans.
+		if queueItem.item.Action == ActionUpdate {
+			action = ActionUpdate
+		}
 		queueItem.timer.Stop()
 	}
 
@@ -120,6 +126,7 @@ func (d *ScanDebouncer) Debounce(item scanItem) {
 				Path:        path,
 				ForceRescan: force,
 				Recurse:     recurse,
+				Action:      action,
 			})
 		}),
 	})
@@ -174,15 +181,19 @@ func (t *Tree) Scan(path string, action EventAction, isDir bool) error {
 				t.scanDebouncer.Debounce(scanItem{
 					Path:        path,
 					ForceRescan: false,
+					Action:      ActionCreate,
 				})
 			}
 			if err := t.setDirty(filepath.Dir(path), true); err != nil {
 				return err
 			}
+			// parent-dir rescan: existing structure, not a fresh create — mark as
+			// update so the create-id skip in assimilate does not drop it.
 			t.scanDebouncer.Debounce(scanItem{
 				Path:        filepath.Dir(path),
 				ForceRescan: true,
 				Recurse:     true,
+				Action:      ActionUpdate,
 			})
 		} else {
 			// 2. New directory
@@ -194,6 +205,7 @@ func (t *Tree) Scan(path string, action EventAction, isDir bool) error {
 				Path:        path,
 				ForceRescan: true,
 				Recurse:     true,
+				Action:      ActionCreate,
 			})
 		}
 
@@ -205,6 +217,7 @@ func (t *Tree) Scan(path string, action EventAction, isDir bool) error {
 			t.scanDebouncer.Debounce(scanItem{
 				Path:        path,
 				ForceRescan: true,
+				Action:      ActionUpdate,
 			})
 		}
 
@@ -218,6 +231,7 @@ func (t *Tree) Scan(path string, action EventAction, isDir bool) error {
 			Path:        path,
 			ForceRescan: isDir,
 			Recurse:     isDir,
+			Action:      ActionMove,
 		})
 
 	case ActionMoveFrom:
@@ -245,6 +259,7 @@ func (t *Tree) Scan(path string, action EventAction, isDir bool) error {
 			Path:        filepath.Dir(path),
 			ForceRescan: true,
 			Recurse:     true,
+			Action:      ActionUpdate,
 		})
 	}
 
@@ -368,6 +383,31 @@ func (t *Tree) assimilate(item scanItem) error {
 	defer func() {
 		_ = unlock()
 	}()
+
+	// Skip files that oCIS is actively writing rather than files that appeared on
+	// disk from outside. The upload coordinator creates the node (TouchFile writes
+	// the id xattr under lock), then MarkProcessing sets the processing status, then
+	// PrepareUpload/CommitUpload write the remaining metadata. Assimilating during
+	// this window races the coordinator's own writes (torn xattr reads -> listxattr
+	// ERANGE) and would persist stale, empty-file checksums.
+	//
+	// Two signals mark an oCIS-owned file, checked under the assimilation lock:
+	//   - processing status set  -> upload in flight (covers the CommitUpload/update leg)
+	//   - a CREATE event for a file that already carries an id -> the coordinator's
+	//     TouchFile produced this file; there is nothing external to assimilate.
+	// Externally created/modified files carry neither at this point, so they are
+	// still assimilated normally.
+	// TODO(OCISDEV-900): verbose logging to characterise the race in CI.
+	if status, serr := t.lookup.MetadataBackend().Get(context.Background(), item.Path, prefixes.StatusPrefix); serr == nil && strings.HasPrefix(string(status), node.ProcessingStatus) {
+		t.log.Warn().Str("path", item.Path).Str("status", string(status)).Msg("OCISDEV-900: skipping assimilation, node is processing (owned by upload coordinator)")
+		return nil
+	}
+	if item.Action == ActionCreate {
+		if existingID, serr := t.lookup.MetadataBackend().Get(context.Background(), item.Path, prefixes.IDAttr); serr == nil && len(existingID) > 0 {
+			t.log.Warn().Str("path", item.Path).Str("id", string(existingID)).Msg("OCISDEV-900: skipping assimilation of CREATE, file already has an id (created by upload coordinator)")
+			return nil
+		}
+	}
 
 	user := &userv1beta1.UserId{
 		Idp:      string(spaceAttrs[prefixes.OwnerIDPAttr]),

@@ -75,6 +75,9 @@ type scanItem struct {
 	Path        string
 	ForceRescan bool
 	Recurse     bool
+	// Action carries the originating fs event so assimilate can distinguish a
+	// fresh create from an update. Defaults to ActionCreate (zero value).
+	Action EventAction
 }
 
 // Tree manages a hierarchical tree
