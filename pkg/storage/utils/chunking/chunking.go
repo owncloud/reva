@@ -204,8 +204,7 @@ func (c *ChunkHandler) saveChunk(path string, r io.ReadCloser) (bool, string, er
 // Assemble saves an intermediate chunk and, once all chunks have arrived,
 // assembles them into a single temp file. Returns (reader, size, true, nil)
 // when the transfer is complete. Returns (nil, 0, false, nil) when more
-// chunks are still expected (partial transfer)
-// the returned reader removes the temp file on Close
+// chunks are still expected (partial transfer — caller should return PartialContent).
 func (c *ChunkHandler) Assemble(chunkName string, body io.ReadCloser) (io.ReadCloser, int64, bool, error) {
 	origPath, assembledPath, err := c.WriteChunk(chunkName, body)
 	if err != nil {

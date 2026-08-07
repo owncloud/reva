@@ -319,7 +319,7 @@ func (s *svc) handleTusPost(ctx context.Context, w http.ResponseWriter, r *http.
 				sReq.Ref.Path = uReq.Ref.GetPath()
 				sReq.Ref.ResourceId = nil
 			} else {
-				if resid, err := storagespace.ParseID(httpRes.Header.Get(net.HeaderOCFileID)); err == nil {
+				if resid, err := storagespace.ParseID(httpRes.Header.Get(net.HeaderOCFileID)); err == nil && resid.OpaqueId != "" {
 					sReq.Ref = &provider.Reference{
 						ResourceId: &resid,
 					}
