@@ -28,12 +28,12 @@ permissions 6 (create + write) instead of 4 (create), and reports the WebDAV
 permissions "SNVW" on a shared file and "SNVCK" on a shared folder instead of
 "S" and "SCK".
 
-This fix does not include a migration of stored grants. Shares created with
-that role before the update keep their old grant on disk, which carries no "m"
-flag, so for them Move stays unset and the WebDAV permissions string stays
+This fix DOES NOT include a migration of stored grants. Shares created with
+that role before this update keep their old grant on disk, which carries no "m"
+flag. For them, Move stays unset and the WebDAV permissions string stays
 unchanged, while the share record itself has always kept Move and therefore
 already reports the new OCS permissions. Only shares created with that role
-after the update get the new permission set. Re-creating an affected share, or
+AFTER THE UPDATE get the new permission set. Re-creating an affected share, or
 updating its role, re-writes the grant and picks up the fix.
 
 https://github.com/owncloud/reva/pull/689
