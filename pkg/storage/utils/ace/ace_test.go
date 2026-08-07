@@ -249,5 +249,50 @@ var _ = Describe("ACE", func() {
 			Expect(newGrant.Permissions.GetQuota).To(BeTrue())
 			Expect(newGrant.Permissions.Delete).To(BeFalse())
 		})
+
+		// Move used to share the "w" flag with InitiateFileUpload, so it could only
+		// be recovered by guessing it from "w" plus download plus delete. Grants that
+		// may rename but not delete, like the editor-lite role, therefore lost Move
+		// on the way to disk: the storage layer refused the rename and propfind
+		// reported the grant as a create-only uploader.
+		It("converts m", func() {
+			userGrant.Permissions.Move = true
+			newGrant := ace.FromGrant(userGrant).Grant()
+			userGrant.Permissions.Move = false
+			Expect(newGrant.Permissions.Move).To(BeTrue())
+			Expect(newGrant.Permissions.Delete).To(BeFalse())
+		})
+
+		// Move has to survive the trip through the persisted form for a grant that
+		// may rename but not delete, which is what the editor-lite role is.
+		It("keeps move for a grant that cannot delete", func() {
+			userGrant.Permissions.Stat = true
+			userGrant.Permissions.GetPath = true
+			userGrant.Permissions.ListContainer = true
+			userGrant.Permissions.InitiateFileDownload = true
+			userGrant.Permissions.InitiateFileUpload = true
+			userGrant.Permissions.Move = true
+			a := ace.FromGrant(userGrant)
+			principal, v := a.Marshal()
+			userGrant.Permissions.Stat = false
+			userGrant.Permissions.GetPath = false
+			userGrant.Permissions.ListContainer = false
+			userGrant.Permissions.InitiateFileDownload = false
+			userGrant.Permissions.InitiateFileUpload = false
+			userGrant.Permissions.Move = false
+
+			unmarshalled, err := ace.Unmarshal(principal, v)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(unmarshalled.Grant().Permissions.Move).To(BeTrue())
+			Expect(unmarshalled.Grant().Permissions.Delete).To(BeFalse())
+		})
+
+		// Grants persisted before the dedicated move flag existed have no "m", so
+		// Move still has to be inferred from write+read+delete for them.
+		It("still infers move for grants stored without m", func() {
+			legacy, err := ace.Unmarshal("u:foo", append([]byte{0}, []byte("t=A:f=:p=txrwduUq:c=baz:e=0")...))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(legacy.Grant().Permissions.Move).To(BeTrue())
+		})
 	})
 })
