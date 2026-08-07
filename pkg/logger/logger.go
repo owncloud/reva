@@ -130,6 +130,11 @@ func fromConfig(conf *LogConf) (*zerolog.Logger, error) {
 		conf.Level = zerolog.DebugLevel.String()
 	}
 
+	// Set the global level to the minimum so only the per-logger level matters.
+	// oCIS does this in ocis-pkg/log when it embeds reva; the standalone revad
+	// binary otherwise inherits a global level that suppresses all output.
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+
 	var opts []Option
 	opts = append(opts, WithLevel(conf.Level))
 
