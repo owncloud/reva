@@ -267,7 +267,7 @@ var _ = Describe("FileSession", func() {
 		})
 
 		It("removes the binary only", func() {
-			staged.Cleanup(true, false)
+			staged.Cleanup(ctx, true, false)
 			_, err := os.Stat(staged.binPath())
 			Expect(os.IsNotExist(err)).To(BeTrue(), "bin should be removed")
 			_, err = os.Stat(staged.infoPath())
@@ -275,7 +275,7 @@ var _ = Describe("FileSession", func() {
 		})
 
 		It("removes the info only", func() {
-			staged.Cleanup(false, true)
+			staged.Cleanup(ctx, false, true)
 			_, err := os.Stat(staged.binPath())
 			Expect(err).ToNot(HaveOccurred(), "bin should survive")
 			_, err = os.Stat(staged.infoPath())
@@ -283,7 +283,7 @@ var _ = Describe("FileSession", func() {
 		})
 
 		It("removes both", func() {
-			staged.Cleanup(true, true)
+			staged.Cleanup(ctx, true, true)
 			_, err := os.Stat(staged.binPath())
 			Expect(os.IsNotExist(err)).To(BeTrue(), "bin should be removed")
 			_, err = os.Stat(staged.infoPath())
@@ -291,7 +291,7 @@ var _ = Describe("FileSession", func() {
 		})
 
 		It("removes nothing when both flags are false", func() {
-			staged.Cleanup(false, false)
+			staged.Cleanup(ctx, false, false)
 			_, err := os.Stat(staged.binPath())
 			Expect(err).ToNot(HaveOccurred(), "bin should survive")
 			_, err = os.Stat(staged.infoPath())
@@ -300,7 +300,7 @@ var _ = Describe("FileSession", func() {
 
 		It("tolerates files that are already gone", func() {
 			fresh := fs.New(ctx).(*FileSession)
-			Expect(func() { fresh.Cleanup(true, true) }).ToNot(Panic())
+			Expect(func() { fresh.Cleanup(ctx, true, true) }).ToNot(Panic())
 		})
 	})
 

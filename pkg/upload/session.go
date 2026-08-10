@@ -76,7 +76,7 @@ type Session interface {
 	SetVersionCreated(v bool)
 	Metadata() map[string]string
 	Persist(ctx context.Context) error
-	Cleanup(cleanBin, cleanInfo bool)
+	Cleanup(ctx context.Context, cleanBin, cleanInfo bool)
 	Context(ctx context.Context) context.Context
 
 	// Typed setters used by Coordinator.InitiateUpload to populate a new session
@@ -114,7 +114,7 @@ func (s *FileSession) WriteChunk(ctx context.Context, offset int64, src io.Reade
 
 // Purge removes all on-disk state for this session.
 func (s *FileSession) Purge(ctx context.Context) {
-	s.Cleanup(true, true)
+	s.Cleanup(ctx, true, true)
 }
 
 // ScanData returns the AV scan result and scan date stored on the session.
@@ -358,16 +358,15 @@ func (s *FileSession) Persist(ctx context.Context) error {
 
 // Cleanup removes the staged binary and/or info file.
 // Node deletion and processing flag changes are the coordinator's responsibility.
-func (s *FileSession) Cleanup(cleanBin, cleanInfo bool) {
-	log := s.store.log
+func (s *FileSession) Cleanup(ctx context.Context, cleanBin, cleanInfo bool) {
 	if cleanBin {
 		if err := os.Remove(s.binPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Error().Str("path", s.binPath()).Err(err).Msg("filestore: removing staged binary failed")
+			appctx.GetLogger(ctx).Error().Str("path", s.binPath()).Err(err).Msg("filestore: removing staged binary failed")
 		}
 	}
 	if cleanInfo {
 		if err := os.Remove(s.infoPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Error().Str("path", s.infoPath()).Err(err).Msg("filestore: removing session info failed")
+			appctx.GetLogger(ctx).Error().Str("path", s.infoPath()).Err(err).Msg("filestore: removing session info failed")
 		}
 	}
 }
