@@ -47,7 +47,7 @@ var RegisteredEvents = []events.Unmarshaller{
 	events.CleanUpload{},
 }
 
-// StartPostprocessing subscribes to postprocessing results and switches the
+// RunPostprocessingConsumer subscribes to postprocessing results and switches the
 // coordinator over to async uploads: from here on finished uploads stage their
 // bytes and wait for a scan verdict instead of committing inline.
 //
@@ -62,7 +62,7 @@ var RegisteredEvents = []events.Unmarshaller{
 // numConsumers goroutines share the subscription. Call once, before serving
 // requests. Fails without a publisher: nothing would hand uploads to
 // postprocessing, so every one of them would wait for a verdict that never comes.
-func (c *coordinator) StartPostprocessing(stream events.Consumer, group, mountID string, numConsumers int) error {
+func (c *coordinator) RunPostprocessingConsumer(stream events.Consumer, group, mountID string, numConsumers int) error {
 	if c.pub == nil {
 		return errors.New("coordinator: async uploads need an event publisher")
 	}
@@ -163,9 +163,8 @@ func (c *coordinator) onPostprocessingFinished(ctx context.Context, ev events.Po
 
 	switch ev.Outcome {
 	case events.PPOutcomeContinue:
-		if _, err := c.finishSync(ctx, session); err != nil {
-			// finishSync has already rolled back and cleaned up.
-			log.Error().Err(err).Str("uploadid", ev.UploadID).Msg("could not commit upload after postprocessing")
+		if err := c.finishAsync(ctx, session); err != nil {
+			log.Error().Err(err).Str("uploadid", ev.UploadID).Msg("could not commit upload after postprocessing. Upload preserved for restart.")
 			c.publishUploadFailed(ctx, session, ev)
 		}
 		return

@@ -14,6 +14,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
+
+	"github.com/owncloud/reva/v2/pkg/appctx"
 )
 
 // TokenOptions carries the JWT-signing configuration needed to produce transfer
@@ -240,7 +242,7 @@ func (fs *FileStore) List(ctx context.Context) ([]Session, error) {
 		id := strings.TrimSuffix(filepath.Base(path), ".info")
 		session, err := fs.Get(ctx, id)
 		if err != nil {
-			fs.log.Error().Str("path", path).Err(err).Msg("filestore: could not load session")
+			appctx.GetLogger(ctx).Error().Str("path", path).Err(err).Msg("filestore: could not load session")
 			continue
 		}
 		sessions = append(sessions, session)

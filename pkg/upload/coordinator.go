@@ -56,9 +56,9 @@ type Coordinator interface {
 	// Upload writes the whole body of a non-resumable (PUT) upload into the
 	// session named by req.Ref.Path and finishes it.
 	Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error)
-	// StartPostprocessing subscribes to postprocessing results and enables async
+	// RunPostprocessingConsumer subscribes to postprocessing results and enables async
 	// uploads. Call once, before serving requests.
-	StartPostprocessing(stream events.Consumer, group, mountID string, numConsumers int) error
+	RunPostprocessingConsumer(stream events.Consumer, group, mountID string, numConsumers int) error
 }
 
 // coordinator is the concrete implementation of Coordinator.
@@ -67,8 +67,8 @@ type coordinator struct {
 	store        SessionStore
 	chunkHandler *chunking.ChunkHandler
 	pub          events.Publisher
-	// async and mountID are set by StartPostprocessing and read by the upload
-	// path, which runs on request goroutines. StartPostprocessing is called once
+	// async and mountID are set by RunPostprocessingConsumer and read by the upload
+	// path, which runs on request goroutines. RunPostprocessingConsumer is called once
 	// during service construction, before any request is served.
 	async   bool
 	mountID string
@@ -84,7 +84,7 @@ type coordinator struct {
 // pub receives the UploadReady event that tells the rest of the system a file is
 // available; pass nil to disable publishing.
 //
-// Uploads commit inline until StartPostprocessing is called: deferring the commit
+// Uploads commit inline until RunPostprocessingConsumer is called: deferring the commit
 // is only safe once something is listening for the result.
 func NewCoordinator(fs storage.FS, store SessionStore, chunkFolder string, pub events.Publisher) *coordinator {
 	c := &coordinator{fs: fs, store: store, pub: pub}
@@ -566,7 +566,9 @@ func (c *coordinator) touchAndMark(ctx context.Context, session Session) error {
 	if err := c.fs.MarkProcessing(ctx, &nodeRef, true, session.ID()); err != nil {
 		session.Cleanup(true, true)
 		if !session.NodeExists() {
-			_, _ = c.fs.Delete(ctx, &nodeRef)
+			if _, err := c.fs.Delete(ctx, &nodeRef); err != nil {
+				appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not delete node on rollback")
+			}
 		}
 		return err
 	}
@@ -605,6 +607,38 @@ func (c *coordinator) prepare(ctx context.Context, session Session) error {
 		c.rollbackPrepared(ctx, session, prepared.SizeDiff)
 		return err
 	}
+	return nil
+}
+
+// finishAsync commits a staged upload that has passed postprocessing.
+// On failure nothing is reverted, leaving the upload restartable.
+func (c *coordinator) finishAsync(ctx context.Context, session Session) error {
+	ref := session.Reference()
+
+	f, err := os.Open(session.BinPath())
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	scanResult, scanDate := session.ScanData()
+
+	if err := c.fs.CommitUpload(ctx, &ref, session.ID(), storage.UploadSource{
+		Body:       f,
+		Length:     session.Size(),
+		ScanResult: scanResult,
+		ScanDate:   scanDate,
+	}); err != nil {
+		return err
+	}
+
+	if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
+		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+	}
+	session.Cleanup(true, true)
+	metrics.UploadSessionsFinalized.Inc()
+
+	ri := c.uploadedResourceInfo(ctx, session)
+	c.publishUploadReady(ctx, session, ri)
 	return nil
 }
 
@@ -760,15 +794,15 @@ func (c *coordinator) uploadRef(session Session) *provider.Reference {
 // file. The size diff is zero because nothing was propagated yet.
 func (c *coordinator) rollback(ctx context.Context, session Session) {
 	ref := session.Reference()
-	if !session.NodeExists() {
-		// Before unmarking: RollbackUpload keys off the processing id to confirm the
-		// node is still this upload's, so unmarking first makes it a no-op.
-		if err := c.fs.RollbackUpload(ctx, &ref, session.ID(), false, 0); err != nil {
-			appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
+	if ref.GetResourceId().GetOpaqueId() != "" {
+		if !session.NodeExists() {
+			if err := c.fs.RollbackUpload(ctx, &ref, session.ID(), false, 0); err != nil {
+				appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
+			}
 		}
-	}
-	if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
-		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+		if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil && !errtypes.IsNotFound(err) {
+			appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+		}
 	}
 	session.Cleanup(true, true)
 }

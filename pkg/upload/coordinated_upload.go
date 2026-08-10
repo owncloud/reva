@@ -94,21 +94,10 @@ func (u *coordinatedUpload) FinishUpload(ctx context.Context) error {
 	}
 }
 
-// Terminate discards an upload: it drops the staged files and, when this upload
-// created the node, removes it again so a cancelled upload leaves nothing behind.
+// Terminate discards an upload: it drops the staged files and reverts any node
+// changes made before the upload completed.
 func (u *coordinatedUpload) Terminate(ctx context.Context) error {
-	u.session.Cleanup(true, true)
-
-	// Terminate can run before the node was created, leaving nothing to undo.
-	ref := u.session.Reference()
-	if ref.GetResourceId().GetOpaqueId() == "" {
-		return nil
-	}
-
-	_ = u.coord.fs.MarkProcessing(ctx, &ref, false, u.session.ID())
-	if !u.session.NodeExists() {
-		_, _ = u.coord.fs.Delete(ctx, &ref)
-	}
+	u.coord.rollback(ctx, u.session)
 	return nil
 }
 
