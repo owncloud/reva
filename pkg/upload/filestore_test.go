@@ -18,22 +18,22 @@ func nopLog() *zerolog.Logger {
 
 var _ = Describe("FileStore", func() {
 	var (
-		ctx  context.Context
-		root string
-		fs   *FileStore
+		ctx       context.Context
+		uploadDir string
+		fs        *FileStore
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		root = GinkgoT().TempDir()
-		fs = NewFileStore(root, TokenOptions{}, nopLog())
+		uploadDir = filepath.Join(GinkgoT().TempDir(), "uploads")
+		fs = NewFileStore(uploadDir, TokenOptions{}, nopLog())
 	})
 
 	Describe("Setup", func() {
-		It("creates the uploads directory", func() {
+		It("creates the upload directory", func() {
 			Expect(fs.Setup()).To(Succeed())
 
-			info, err := os.Stat(filepath.Join(root, "uploads"))
+			info, err := os.Stat(uploadDir)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(info.IsDir()).To(BeTrue())
 		})
@@ -185,20 +185,34 @@ var _ = Describe("FileStoreFromDriverConf", func() {
 		Expect(FileStoreFromDriverConf(nil, nopLog())).To(BeNil())
 	})
 
-	It("reads the root key", func() {
+	// root is a storage root, so uploads are staged in a subdirectory of it. This
+	// is the layout OcisStore uses (decomposedfs.go:258 joins o.Root itself).
+	It("stages uploads below the root key", func() {
 		root := GinkgoT().TempDir()
 		fs := FileStoreFromDriverConf(map[string]interface{}{"root": root}, nopLog())
 
 		Expect(fs).ToNot(BeNil())
-		Expect(fs.root).To(Equal(root))
+		Expect(fs.uploadDir).To(Equal(filepath.Join(root, "uploads")))
 	})
 
-	It("reads the upload_directory key", func() {
+	// storage_root is the ocm driver's spelling of root, same layout
+	// (ocm/storage/received/upload.go:212).
+	It("stages uploads below the storage_root key", func() {
+		root := GinkgoT().TempDir()
+		fs := FileStoreFromDriverConf(map[string]interface{}{"storage_root": root}, nopLog())
+
+		Expect(fs).ToNot(BeNil())
+		Expect(fs.uploadDir).To(Equal(filepath.Join(root, "uploads")))
+	})
+
+	// upload_directory already names the upload directory, the way decomposedfs
+	// reads it (options.go:172, posix tree.go:168), so it must not be joined again.
+	It("takes upload_directory as the upload directory itself", func() {
 		dir := GinkgoT().TempDir()
 		fs := FileStoreFromDriverConf(map[string]interface{}{"upload_directory": dir}, nopLog())
 
 		Expect(fs).ToNot(BeNil())
-		Expect(fs.root).To(Equal(dir))
+		Expect(fs.uploadDir).To(Equal(dir))
 	})
 
 	It("prefers upload_directory over root", func() {
@@ -210,7 +224,7 @@ var _ = Describe("FileStoreFromDriverConf", func() {
 		}, nopLog())
 
 		Expect(fs).ToNot(BeNil())
-		Expect(fs.root).To(Equal(uploadDir))
+		Expect(fs.uploadDir).To(Equal(uploadDir))
 	})
 
 	It("returns nil when no root key is present", func() {
@@ -219,12 +233,14 @@ var _ = Describe("FileStoreFromDriverConf", func() {
 })
 
 var _ = Describe("NewFileStoreFromConfig", func() {
+	// The service-level value already names the upload directory, so it is used
+	// verbatim rather than joined.
 	It("uses the service-level upload dir when set", func() {
 		uploadDir := GinkgoT().TempDir()
 		fs := NewFileStoreFromConfig(uploadDir, map[string]interface{}{"root": "/ignored"}, nopLog())
 
 		Expect(fs).ToNot(BeNil())
-		Expect(fs.root).To(Equal(uploadDir))
+		Expect(fs.uploadDir).To(Equal(uploadDir))
 	})
 
 	It("falls back to the driver config", func() {
@@ -232,7 +248,7 @@ var _ = Describe("NewFileStoreFromConfig", func() {
 		fs := NewFileStoreFromConfig("", map[string]interface{}{"root": root}, nopLog())
 
 		Expect(fs).ToNot(BeNil())
-		Expect(fs.root).To(Equal(root))
+		Expect(fs.uploadDir).To(Equal(filepath.Join(root, "uploads")))
 	})
 
 	It("returns nil when neither source resolves", func() {
@@ -252,7 +268,7 @@ var _ = Describe("NewFileStoreFromConfig", func() {
 		}, nopLog())
 
 		Expect(fs).ToNot(BeNil())
-		Expect(fs.root).To(Equal(uploadDir))
+		Expect(fs.uploadDir).To(Equal(uploadDir))
 		Expect(fs.opts.TransferSharedSecret).To(Equal("s3cret"))
 		Expect(fs.opts.DownloadEndpoint).To(Equal("https://dl.example.com/data/"))
 	})

@@ -416,11 +416,11 @@ func (s *FileSession) InitiatorID() string {
 }
 
 func (s *FileSession) binPath() string {
-	return filepath.Join(s.store.root, "uploads", s.info.ID)
+	return filepath.Join(s.store.uploadDir, s.info.ID)
 }
 
 func (s *FileSession) infoPath() string {
-	return fileSessionPath(s.store.root, s.info.ID)
+	return fileSessionPath(s.store.uploadDir, s.info.ID)
 }
 
 // ExecutantUser returns the full identity of the user who initiated the upload.
@@ -446,8 +446,8 @@ func (s *FileSession) ExecutantUser() *userpb.User {
 }
 
 // fileSessionPath returns the path to the .info file for the given session ID.
-func fileSessionPath(root, id string) string {
-	return filepath.Join(root, "uploads", id+".info")
+func fileSessionPath(uploadDir, id string) string {
+	return filepath.Join(uploadDir, id+".info")
 }
 
 // calculateChecksums computes sha1, md5, and adler32 in a single pass over path.

@@ -35,7 +35,7 @@ type SessionStore interface {
 }
 
 // FileStore is a filesystem-backed SessionStore. Sessions are stored as a pair
-// of files under <root>/uploads/:
+// of files in the upload directory:
 //
 //   - <id>.info  — JSON-encoded tusd.FileInfo
 //   - <id>       — staged binary bytes
@@ -43,13 +43,13 @@ type SessionStore interface {
 // This is the same on-disk format used by OcisStore so existing sessions
 // survive a rolling deploy that switches to FileStore.
 type FileStore struct {
-	root string
-	opts TokenOptions
-	log  *zerolog.Logger
+	uploadDir string
+	opts      TokenOptions
+	log       *zerolog.Logger
 }
 
 // FileStoreFromDriverConf builds a FileStore from a reva driver config map.
-// Returns nil if the config carries no root path (driver does not support
+// Returns nil if the config carries no upload path (driver does not support
 // coordinated uploads). Each service that mounts the same driver calls this
 // independently.
 func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
@@ -58,7 +58,7 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 	}
 
 	// storage_root is the ocm driver's spelling of root; it stages uploads under
-	// the same <root>/uploads/ layout FileStore uses.
+	// the same <root>/uploads/ layout the decomposedfs family uses.
 	type driverRootConf struct {
 		Root            string `mapstructure:"root"`
 		UploadDirectory string `mapstructure:"upload_directory"`
@@ -67,10 +67,14 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 	var rc driverRootConf
 	_ = mapstructure.Decode(driverConf, &rc)
 
-	root := rc.UploadDirectory
-	if root == "" {
-		root = rc.Root
+	// upload_directory already names the upload directory itself, the way
+	// decomposedfs reads it (options.go:172, posix tree.go:168). The other two are
+	// storage roots that stage uploads in a subdirectory, so only they get joined.
+	if rc.UploadDirectory != "" {
+		return newFileStoreWithTokens(rc.UploadDirectory, driverConf, log)
 	}
+
+	root := rc.Root
 	if root == "" {
 		root = rc.StorageRoot
 	}
@@ -78,13 +82,13 @@ func FileStoreFromDriverConf(driverConf map[string]interface{}, log *zerolog.Log
 		return nil
 	}
 
-	return newFileStoreWithTokens(root, driverConf, log)
+	return newFileStoreWithTokens(filepath.Join(root, "uploads"), driverConf, log)
 }
 
-// NewFileStoreFromConfig builds a FileStore using uploadDir when set, falling
-// back to root/upload_directory from the active driver config. This allows
-// drivers that have no local root (e.g. KW) to still get a coordinator by
-// setting upload_directory at the service level rather than inside the driver.
+// NewFileStoreFromConfig builds a FileStore staging uploads in uploadDir when
+// set, falling back to the active driver config. This allows drivers that have
+// no local root (e.g. KW) to still get a coordinator by setting
+// upload_directory at the service level rather than inside the driver.
 // Returns nil only when neither source resolves to a non-empty path.
 func NewFileStoreFromConfig(uploadDir string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
 	if uploadDir != "" {
@@ -146,7 +150,7 @@ func AsyncConfFromDriverConf(driverConf map[string]interface{}) AsyncConf {
 	}
 }
 
-func newFileStoreWithTokens(root string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
+func newFileStoreWithTokens(uploadDir string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
 	type tokenConf struct {
 		DownloadEndpoint     string `mapstructure:"download_endpoint"`
 		DataGatewayEndpoint  string `mapstructure:"datagateway_endpoint"`
@@ -157,7 +161,7 @@ func newFileStoreWithTokens(root string, driverConf map[string]interface{}, log 
 	if tokens, ok := driverConf["tokens"]; ok {
 		_ = mapstructure.Decode(tokens, &tc)
 	}
-	return NewFileStore(root, TokenOptions{
+	return NewFileStore(uploadDir, TokenOptions{
 		DownloadEndpoint:     tc.DownloadEndpoint,
 		DataGatewayEndpoint:  tc.DataGatewayEndpoint,
 		TransferSharedSecret: tc.TransferSharedSecret,
@@ -165,21 +169,21 @@ func newFileStoreWithTokens(root string, driverConf map[string]interface{}, log 
 	}, log)
 }
 
-// NewFileStore creates a FileStore rooted at root.
-// root must be on a shared filesystem when multiple pods handle the same space.
-func NewFileStore(root string, opts TokenOptions, log *zerolog.Logger) *FileStore {
-	return &FileStore{root: root, opts: opts, log: log}
+// NewFileStore creates a FileStore staging uploads in uploadDir.
+// uploadDir must be on a shared filesystem when multiple pods handle the same space.
+func NewFileStore(uploadDir string, opts TokenOptions, log *zerolog.Logger) *FileStore {
+	return &FileStore{uploadDir: uploadDir, opts: opts, log: log}
 }
 
-// Root returns the base directory of this FileStore.
-func (fs *FileStore) Root() string {
-	return fs.root
+// UploadDir returns the directory this FileStore stages uploads in.
+func (fs *FileStore) UploadDir() string {
+	return fs.uploadDir
 }
 
-// Setup creates the uploads directory eagerly so permission problems are caught
+// Setup creates the upload directory eagerly so permission problems are caught
 // at startup rather than on the first upload.
 func (fs *FileStore) Setup() error {
-	return os.MkdirAll(filepath.Join(fs.root, "uploads"), 0700)
+	return os.MkdirAll(fs.uploadDir, 0700)
 }
 
 // New allocates a fresh session with a new UUID.
@@ -198,7 +202,7 @@ func (fs *FileStore) New(_ context.Context) Session {
 
 // Get loads the session with the given id from disk.
 func (fs *FileStore) Get(ctx context.Context, id string) (Session, error) {
-	infoPath := fileSessionPath(fs.root, id)
+	infoPath := fileSessionPath(fs.uploadDir, id)
 
 	data, err := os.ReadFile(infoPath)
 	if err != nil {
@@ -230,9 +234,9 @@ func (fs *FileStore) Get(ctx context.Context, id string) (Session, error) {
 	return session, nil
 }
 
-// List returns all sessions found under <root>/uploads/*.info.
+// List returns all sessions found in the upload directory.
 func (fs *FileStore) List(ctx context.Context) ([]Session, error) {
-	infoFiles, err := filepath.Glob(filepath.Join(fs.root, "uploads", "*.info"))
+	infoFiles, err := filepath.Glob(filepath.Join(fs.uploadDir, "*.info"))
 	if err != nil {
 		return nil, err
 	}
