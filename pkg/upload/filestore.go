@@ -96,56 +96,6 @@ func NewFileStoreFromConfig(uploadDir string, driverConf map[string]interface{},
 	return FileStoreFromDriverConf(driverConf, log)
 }
 
-// AsyncConf is how a service asks for async uploads: whether they are enabled,
-// and the consumer subscription to use if they are.
-type AsyncConf struct {
-	Enabled       bool
-	ConsumerGroup string
-	NumConsumers  int
-	// MountID is the storage id this provider answers for, used to drop
-	// postprocessing events belonging to other storages.
-	MountID string
-}
-
-// AsyncConfFromDriverConf reads the postprocessing settings off the driver config
-// map the services already hand us.
-//
-// The keys are decomposedfs's (options.go: `asyncfileuploads`, `events`). Reading
-// the driver's own keys rather than introducing service-level ones keeps a single
-// source of truth: if the coordinator and the driver disagreed, uploads would
-// either commit twice or never get scanned.
-//
-// The consumer group matters most. It is what makes retiring the driver's
-// consumer a move rather than an addition: two consumers in one group take turns
-// stealing each other's events, two in different groups both act and commit the
-// same upload twice.
-func AsyncConfFromDriverConf(driverConf map[string]interface{}) AsyncConf {
-	if driverConf == nil {
-		return AsyncConf{}
-	}
-	var ac struct {
-		AsyncFileUploads bool   `mapstructure:"asyncfileuploads"`
-		MountID          string `mapstructure:"mount_id"`
-		Events           struct {
-			NumConsumers  int    `mapstructure:"numconsumers"`
-			ConsumerGroup string `mapstructure:"consumer_group"`
-		} `mapstructure:"events"`
-	}
-	_ = mapstructure.Decode(driverConf, &ac)
-	group := ac.Events.ConsumerGroup
-	if group == "" {
-		// decomposedfs's default (options.go:177). The coordinator takes over the
-		// driver's subscription, so it must land in the same group.
-		group = "dcfs"
-	}
-	return AsyncConf{
-		Enabled:       ac.AsyncFileUploads,
-		ConsumerGroup: group,
-		NumConsumers:  ac.Events.NumConsumers,
-		MountID:       ac.MountID,
-	}
-}
-
 func newFileStoreWithTokens(root string, driverConf map[string]interface{}, log *zerolog.Logger) *FileStore {
 	type tokenConf struct {
 		DownloadEndpoint     string `mapstructure:"download_endpoint"`

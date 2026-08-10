@@ -58,7 +58,7 @@ type Coordinator interface {
 	Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error)
 	// RunPostprocessingConsumer subscribes to postprocessing results and enables async
 	// uploads. Call once, before serving requests.
-	RunPostprocessingConsumer(stream events.Consumer, group, mountID string, numConsumers int) error
+	RunPostprocessingConsumer(stream events.Consumer, conf AsyncConf) error
 }
 
 // coordinator is the concrete implementation of Coordinator.
@@ -800,8 +800,10 @@ func (c *coordinator) rollback(ctx context.Context, session Session) {
 				appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
 			}
 		}
-		if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil && !errtypes.IsNotFound(err) {
-			appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+		if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
+			if _, ok := err.(errtypes.IsNotFound); !ok {
+				appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
+			}
 		}
 	}
 	session.Cleanup(true, true)

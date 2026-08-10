@@ -299,7 +299,7 @@ var _ = Describe("Async uploads via the coordinator", func() {
 		// Starting the consumer is what switches the coordinator to async uploads;
 		// the two are inseparable by design, so there is no separate flag to set.
 		if startAsync {
-			Expect(coord.RunPostprocessingConsumer(evstream, "coordinator-test", mountID, 1)).To(Succeed())
+			Expect(coord.RunPostprocessingConsumer(evstream, pkgupload.AsyncConf{ConsumerGroup: "coordinator-test", MountID: mountID, NumConsumers: 1})).To(Succeed())
 			uploadID = upload(firstContent)
 			bs.AssertNumberOfCalls(GinkgoT(), "UploadFromReader", 0)
 		}

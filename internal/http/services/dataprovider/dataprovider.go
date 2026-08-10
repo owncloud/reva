@@ -122,7 +122,7 @@ func New(m map[string]interface{}, log *zerolog.Logger) (global.Service, error) 
 	// to postprocessing and commits them once the verdict comes back. Without this
 	// the coordinator commits inline and uploads are never scanned.
 	if ac := pkgupload.AsyncConfFromDriverConf(conf.Drivers[conf.Driver]); ac.Enabled {
-		if err := coord.RunPostprocessingConsumer(evstream, ac.ConsumerGroup, ac.MountID, ac.NumConsumers); err != nil {
+		if err := coord.RunPostprocessingConsumer(evstream, ac); err != nil {
 			return nil, fmt.Errorf("dataprovider: could not start postprocessing: %w", err)
 		}
 	}

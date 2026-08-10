@@ -31,6 +31,7 @@ import (
 	"errors"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/rs/zerolog"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
@@ -38,6 +39,56 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rhttp/datatx/metrics"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
+
+// AsyncConf is how a service asks for async uploads: whether they are enabled,
+// and the consumer subscription to use if they are.
+type AsyncConf struct {
+	Enabled       bool
+	ConsumerGroup string
+	NumConsumers  int
+	// MountID is the storage id this provider answers for, used to drop
+	// postprocessing events belonging to other storages.
+	MountID string
+}
+
+// AsyncConfFromDriverConf reads the postprocessing settings off the driver config
+// map the services already hand us.
+//
+// The keys are decomposedfs's (options.go: `asyncfileuploads`, `events`). Reading
+// the driver's own keys rather than introducing service-level ones keeps a single
+// source of truth: if the coordinator and the driver disagreed, uploads would
+// either commit twice or never get scanned.
+//
+// The consumer group matters most. It is what makes retiring the driver's
+// consumer a move rather than an addition: two consumers in one group take turns
+// stealing each other's events, two in different groups both act and commit the
+// same upload twice.
+func AsyncConfFromDriverConf(driverConf map[string]interface{}) AsyncConf {
+	if driverConf == nil {
+		return AsyncConf{}
+	}
+	var ac struct {
+		AsyncFileUploads bool   `mapstructure:"asyncfileuploads"`
+		MountID          string `mapstructure:"mount_id"`
+		Events           struct {
+			NumConsumers  int    `mapstructure:"numconsumers"`
+			ConsumerGroup string `mapstructure:"consumer_group"`
+		} `mapstructure:"events"`
+	}
+	_ = mapstructure.Decode(driverConf, &ac)
+	group := ac.Events.ConsumerGroup
+	if group == "" {
+		// decomposedfs's default (options.go:177). The coordinator takes over the
+		// driver's subscription, so it must land in the same group.
+		group = "dcfs"
+	}
+	return AsyncConf{
+		Enabled:       ac.AsyncFileUploads,
+		ConsumerGroup: group,
+		NumConsumers:  ac.Events.NumConsumers,
+		MountID:       ac.MountID,
+	}
+}
 
 // RegisteredEvents are the postprocessing events the coordinator consumes.
 var RegisteredEvents = []events.Unmarshaller{
@@ -62,18 +113,19 @@ var RegisteredEvents = []events.Unmarshaller{
 // numConsumers goroutines share the subscription. Call once, before serving
 // requests. Fails without a publisher: nothing would hand uploads to
 // postprocessing, so every one of them would wait for a verdict that never comes.
-func (c *coordinator) RunPostprocessingConsumer(stream events.Consumer, group, mountID string, numConsumers int) error {
+func (c *coordinator) RunPostprocessingConsumer(stream events.Consumer, conf AsyncConf) error {
 	if c.pub == nil {
 		return errors.New("coordinator: async uploads need an event publisher")
 	}
-	ch, err := events.Consume(stream, group, RegisteredEvents...)
+	ch, err := events.Consume(stream, conf.ConsumerGroup, RegisteredEvents...)
 	if err != nil {
 		return err
 	}
+	numConsumers := conf.NumConsumers
 	if numConsumers <= 0 {
 		numConsumers = 1
 	}
-	c.mountID = mountID
+	c.mountID = conf.MountID
 	c.async = true
 	for i := 0; i < numConsumers; i++ {
 		go c.Postprocessing(ch)
