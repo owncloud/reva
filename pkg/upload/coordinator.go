@@ -287,11 +287,6 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		session.SetStorageValue("SpaceOwnerType", utils.UserTypeToString(spaceOwner.GetType()))
 	}
 
-	// TODO(OCISDEV-900, finding B7): main copies CtxKeySpaceGID into the session
-	// (upload.go:188) to drive posix uid/gid scoping at commit. That key lives in the
-	// decomposedfs package; reading it here would make the driver-agnostic coordinator
-	// depend on a concrete driver. posix-only concern (unset on ocis/s3ng). Deferred.
-
 	usr := ctxpkg.ContextMustGetUser(ctx)
 	session.SetExecutant(usr)
 
@@ -346,10 +341,6 @@ func (c *coordinator) initiateUpload(ctx context.Context, ref *provider.Referenc
 		session.SetStorageValue("Chunk", chunkName)
 	}
 
-	// TODO(OCISDEV-900, finding B7): main wraps TouchBin+Persist in fs.um.RunInBaseScope
-	// (upload.go:316) so the .bin/.info files get correct posix ownership. That usermapper
-	// lives in decomposedfs; the driver-agnostic coordinator can't reach it. posix-only
-	// (no-op on ocis/s3ng). Same root cause as SpaceGid; deferred.
 	if err := session.TouchBin(); err != nil {
 		return nil, fmt.Errorf("coordinator: could not create bin file: %w", err)
 	}
