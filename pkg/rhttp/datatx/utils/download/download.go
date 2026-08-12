@@ -275,7 +275,7 @@ func handleError(w http.ResponseWriter, log *zerolog.Logger, err error, action s
 	case errtypes.Aborted:
 		log.Debug().Err(err).Str("action", action).Msg("etags do not match")
 		w.WriteHeader(http.StatusPreconditionFailed)
-	case errtypes.IsResourceProcessing, errtypes.IsTooEarly:
+	case errtypes.IsTooEarly:
 		log.Debug().Err(err).Str("action", action).Msg("resource is processing")
 		w.WriteHeader(http.StatusTooEarly)
 	default:
