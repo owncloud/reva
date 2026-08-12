@@ -441,7 +441,7 @@ func (s *Service) InitiateFileUpload(ctx context.Context, req *provider.Initiate
 		case errtypes.Locked:
 			st = status.NewLocked(ctx, "locked")
 		case errtypes.IsTooEarly:
-			st = status.NewTooEarly(ctx, err.Error())
+			st = status.NewAborted(ctx, err, "upload in progress, retry later")
 		default:
 			st = status.NewInternal(ctx, "error getting upload id: "+err.Error())
 		}
