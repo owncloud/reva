@@ -9,6 +9,7 @@ import (
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 )
 
@@ -61,15 +62,19 @@ func (u *tusAdapter) FinishUpload(ctx context.Context) error {
 
 // Terminate discards an upload, so a cancelled one leaves nothing behind.
 func (u *tusAdapter) Terminate(ctx context.Context) error {
-	// Terminate can run before the node was created.
 	ref := u.session.Reference()
-	if ref.GetResourceId().GetOpaqueId() == "" {
-		u.session.Cleanup(ctx, true, true)
-		return nil
+
+	// Rollback rather than Delete, which is permission-gated. It is a no-op unless
+	// this upload still owns the node.
+	if err := u.coord.fs.RollbackUpload(ctx, &ref, u.session.ID(), u.session.NodeExists(), u.session.SizeDiff()); err != nil {
+		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", u.session.ID()).Msg("could not roll back terminated upload")
+	}
+	// A node that was never created cannot be unmarked, which is the normal case here.
+	if err := u.coord.fs.MarkProcessing(ctx, &ref, false, u.session.ID()); err != nil {
+		appctx.GetLogger(ctx).Debug().Err(err).Str("uploadid", u.session.ID()).Msg("could not unmark terminated upload")
 	}
 
-	// Rollback rather than Delete, which is permission-gated.
-	u.coord.rollbackMarked(ctx, u.session)
+	u.session.Cleanup(ctx, true, true)
 	return nil
 }
 

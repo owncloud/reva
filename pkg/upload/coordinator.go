@@ -250,7 +250,8 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provi
 		return nil, err
 	}
 
-	if c.async && session.Size() > 0 {
+	// Without a publisher there is nothing to hand the bytes to, so commit inline.
+	if c.async && c.pub != nil && session.Size() > 0 {
 		if err := c.publishBytesReceived(ctx, session); err != nil {
 			c.rollbackPrepared(ctx, session, session.SizeDiff())
 			return nil, err
