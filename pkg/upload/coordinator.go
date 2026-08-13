@@ -141,10 +141,6 @@ func (c *coordinator) applyRequestMetadata(session Session, metadata map[string]
 	}
 	session.SetMetadata("mtime", mtime)
 
-	if metadata == nil {
-		return nil
-	}
-
 	session.SetMetadata("providerID", metadata["providerID"])
 	if v, ok := metadata["expires"]; ok && v != "null" {
 		session.SetMetadata("expires", v)
