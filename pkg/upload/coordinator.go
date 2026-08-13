@@ -392,9 +392,7 @@ func (c *coordinator) rollbackMarked(ctx context.Context, session Session) {
 			appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
 		}
 	}
-	if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
-		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
-	}
+	c.unmarkProcessing(ctx, session, &ref)
 	metrics.UploadProcessing.Dec()
 	session.Cleanup(ctx, true, true)
 }
@@ -407,11 +405,24 @@ func (c *coordinator) rollbackPrepared(ctx context.Context, session Session, siz
 	if err := c.fs.RollbackUpload(ctx, &ref, session.ID(), session.NodeExists(), sizeDiff); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not roll back upload")
 	}
-	if err := c.fs.MarkProcessing(ctx, &ref, false, session.ID()); err != nil {
-		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", session.ID()).Msg("could not unmark processing")
-	}
+	c.unmarkProcessing(ctx, session, &ref)
 	metrics.UploadProcessing.Dec()
 	session.Cleanup(ctx, true, true)
+}
+
+// unmarkProcessing clears the processing flag, tolerating a node the rollback
+// already purged.
+func (c *coordinator) unmarkProcessing(ctx context.Context, session Session, ref *provider.Reference) {
+	err := c.fs.MarkProcessing(ctx, ref, false, session.ID())
+	log := appctx.GetLogger(ctx).With().Str("uploadid", session.ID()).Logger()
+	switch err.(type) {
+	case nil:
+	case errtypes.IsNotFound:
+		// RollbackUpload purged the node this upload created.
+		log.Debug().Err(err).Msg("could not unmark processing")
+	default:
+		log.Error().Err(err).Msg("could not unmark processing")
+	}
 }
 
 // uploadInfo collects what the driver needs to write the node metadata. The
