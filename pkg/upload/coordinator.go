@@ -37,6 +37,8 @@ type Coordinator interface {
 	Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error)
 }
 
+var _ Coordinator = (*coordinator)(nil)
+
 // coordinator is the concrete implementation of Coordinator.
 type coordinator struct {
 	fs           storage.FS
@@ -177,6 +179,57 @@ func (c *coordinator) applyRequestMetadata(session Session, metadata map[string]
 		return errtypes.BadRequest("unsupported checksum algorithm: " + parts[0])
 	}
 	return nil
+}
+
+// Upload writes the whole body of a non-resumable (PUT) upload and finishes it.
+// req.Ref.Path carries the session id minted by InitiateUpload.
+func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error) {
+	// The request path arrives rooted, while session ids are stored unrooted.
+	session, err := c.store.Get(ctx, strings.TrimPrefix(req.Ref.GetPath(), "/"))
+	if err != nil {
+		return nil, err
+	}
+
+	// Behind the data gateway the request carries a transfer token, not the user.
+	ctx = session.Context(ctx)
+
+	if chunk := session.Chunk(); chunk != "" { // legacy chunking v1
+		if c.chunkHandler == nil {
+			return nil, errtypes.NotSupported("coordinator: chunked uploads require a chunk folder")
+		}
+		assembled, assembledSize, done, aErr := c.chunkHandler.Assemble(chunk, req.Body)
+		if aErr != nil {
+			return nil, aErr
+		}
+		if !done {
+			// The bytes accumulate in the chunk folder, so this session holds nothing.
+			session.Cleanup(ctx, true, true)
+			return nil, errtypes.PartialContent(req.Ref.String())
+		}
+		defer assembled.Close()
+		// The declared length covers only the final chunk.
+		req.Body, req.Length = assembled, assembledSize
+		session.SetSize(assembledSize)
+	}
+
+	size, err := session.WriteChunk(ctx, 0, req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if size != req.Length {
+		return nil, errtypes.PartialContent("coordinator: unexpected end of stream")
+	}
+
+	ri, err := c.finishUpload(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+
+	if uff != nil {
+		executant := session.Executant()
+		uff(session.SpaceOwner(), &executant, c.uploadRef(session))
+	}
+	return ri, nil
 }
 
 // finishUpload creates the node, validates the staged bytes and commits them, or
