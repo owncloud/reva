@@ -37,8 +37,6 @@ type Coordinator interface {
 	Upload(ctx context.Context, req storage.UploadRequest, uff storage.UploadFinishedFunc) (*provider.ResourceInfo, error)
 }
 
-var _ Coordinator = (*coordinator)(nil)
-
 // coordinator is the concrete implementation of Coordinator.
 type coordinator struct {
 	fs           storage.FS
