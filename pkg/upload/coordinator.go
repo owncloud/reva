@@ -69,8 +69,6 @@ func (c *coordinator) InitiateUpload(ctx context.Context, ref *provider.Referenc
 		return nil, err
 	}
 
-	// TODO: main wraps this in the posix usermapper's base scope (upload.go:316),
-	// which is not reachable from a driver-agnostic package.
 	if err := session.TouchBin(); err != nil {
 		return nil, fmt.Errorf("coordinator: could not create bin file: %w", err)
 	}
@@ -108,7 +106,8 @@ func (c *coordinator) populateSession(ctx context.Context, session Session, t *u
 		session.SetStorageValue("NodeId", t.nodeID)
 		session.SetStorageValue("NodeExists", "true")
 	} else {
-		// A new file has no id yet, so mint a placeholder TouchFile replaces.
+		// A new file has no id yet, and an empty one would resolve to the space root
+		// (lookup.go:191), so mint a placeholder TouchFile replaces.
 		session.SetStorageValue("NodeId", uuid.New().String())
 	}
 
@@ -129,9 +128,6 @@ func (c *coordinator) populateSession(ctx context.Context, session Session, t *u
 	session.SetMetadata("initiatorid", initiatorID)
 
 	session.SetSize(uploadLength)
-
-	// TODO: main also copies CtxKeySpaceGID for posix uid/gid scoping
-	// (upload.go:188), which lives in the decomposedfs package.
 
 	return c.applyRequestMetadata(session, metadata)
 }
@@ -673,8 +669,7 @@ func (c *coordinator) describeExisting(ctx context.Context, ref *provider.Refere
 	t.spaceID = existing.GetId().GetSpaceId()
 	t.parentID = existing.GetParentId().GetOpaqueId()
 	t.name = existing.GetName()
-	// TODO: no manager fallback, so this stays nil on project drives.
-	t.spaceOwner = existing.GetOwner()
+	t.spaceOwner = c.spaceOwnerOrManager(ctx, existing.GetOwner(), t.spaceID)
 
 	// GetMD returns only the basename for id-based refs, so ask for the full path.
 	relPath := existing.GetPath()
@@ -691,6 +686,36 @@ func (c *coordinator) describeExisting(ctx context.Context, ref *provider.Refere
 	}
 	if metadata["if-none-match"] == "*" {
 		return errtypes.Aborted(fmt.Sprintf("parent %s already has a child %s, id %s", t.parentID, t.name, t.nodeID))
+	}
+	return nil
+}
+
+// spaceOwnerOrManager resolves the space owner, falling back to a manager.
+func (c *coordinator) spaceOwnerOrManager(ctx context.Context, owner *user.UserId, spaceID string) *user.UserId {
+	// A space with no personal owner stores a SPACE_OWNER placeholder (spaces.go:145).
+	if owner != nil && owner.GetType() != user.UserType_USER_TYPE_SPACE_OWNER {
+		return owner
+	}
+
+	grants, err := c.fs.ListGrants(ctx, &provider.Reference{ResourceId: &provider.ResourceId{
+		SpaceId:  spaceID,
+		OpaqueId: spaceID,
+	}})
+	if err != nil {
+		return nil
+	}
+
+	// Grants come back in map order, so several managers resolve to an arbitrary one.
+	for _, g := range grants {
+		// Group grants carry no user id.
+		uid := g.GetGrantee().GetUserId()
+		if uid == nil {
+			continue
+		}
+		p := g.GetPermissions()
+		if p.GetStat() && p.GetListContainer() && p.GetInitiateFileDownload() {
+			return uid
+		}
 	}
 	return nil
 }
