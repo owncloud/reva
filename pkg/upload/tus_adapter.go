@@ -68,7 +68,7 @@ func (u *tusAdapter) Terminate(ctx context.Context) error {
 
 	// Rollback rather than Delete, which is permission-gated. It is a no-op unless
 	// this upload still owns the node.
-	if err := u.coord.fs.RollbackUpload(ctx, &ref, u.session.ID(), u.session.NodeExists(), u.session.SizeDiff()); err != nil {
+	if err := u.coord.fs.RollbackUpload(ctx, &ref, u.session.ID(), rollbackInfo(u.session, u.session.SizeDiff())); err != nil {
 		appctx.GetLogger(ctx).Error().Err(err).Str("uploadid", u.session.ID()).Msg("could not roll back terminated upload")
 	}
 	// A node that was never created cannot be unmarked, which is the normal case here.
