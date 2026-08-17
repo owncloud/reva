@@ -559,8 +559,7 @@ var _ = Describe("the postprocessing consumer", func() {
 			Expect(errors.Is(sErr, os.ErrNotExist)).To(BeTrue())
 		})
 
-		// An admin inspecting an infected upload wants the bytes left alone.
-		It("leaves everything alone when asked to keep the upload", func() {
+		It("reverts the node but keeps the bytes and the session when asked to keep the upload", func() {
 			session := preparedSession(true)
 
 			c.processEvent(ctx, events.Event{Event: events.CleanUpload{
@@ -568,7 +567,10 @@ var _ = Describe("the postprocessing consumer", func() {
 				KeepUpload: true,
 			}})
 
-			Expect(fs.calls).To(BeEmpty())
+			Expect(fs.calls).To(Equal([]string{
+				"RollbackUpload(nodeExisted=true,sizeDiff=17)",
+				"MarkProcessing(false)",
+			}))
 			_, err := store.Get(ctx, session.ID())
 			Expect(err).ToNot(HaveOccurred())
 			_, sErr := os.Stat(session.BinPath())
@@ -753,6 +755,17 @@ var _ = Describe("the postprocessing consumer", func() {
 
 			Expect(delta(func() {
 				c.processEvent(ctx, events.Event{Event: events.CleanUpload{UploadID: session.ID()}})
+			})).To(Equal(float64(-1)))
+		})
+
+		It("comes back down on a clean-up that keeps the bytes", func() {
+			session := preparedSession(false)
+
+			Expect(delta(func() {
+				c.processEvent(ctx, events.Event{Event: events.CleanUpload{
+					UploadID:   session.ID(),
+					KeepUpload: true,
+				}})
 			})).To(Equal(float64(-1)))
 		})
 
