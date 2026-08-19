@@ -723,6 +723,11 @@ func (fs *Decomposedfs) rollbackOrphaned(ctx context.Context, ref *provider.Refe
 	if err := fs.lu.MetadataBackend().Purge(ctx, nodePath); err != nil && !errors.Is(err, iofs.ErrNotExist) {
 		appctx.GetLogger(ctx).Error().Err(err).Str("nodepath", nodePath).Msg("RollbackUpload: purging orphaned node metadata failed")
 	}
+	// parent holds a child entry pointing to the now-removed node
+	childEntry := filepath.Join(n.ParentPath(), n.Name)
+	if err := os.Remove(childEntry); err != nil && !errors.Is(err, iofs.ErrNotExist) {
+		appctx.GetLogger(ctx).Error().Err(err).Str("path", childEntry).Msg("RollbackUpload: removing orphaned child entry failed")
+	}
 	return nil
 }
 
