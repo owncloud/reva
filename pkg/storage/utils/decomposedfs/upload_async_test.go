@@ -336,6 +336,42 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			Eventually(parentSize).Should(Equal(0))
 		})
 
+		It("reports a session whose node no longer exists as orphaned", func() {
+			resources, err := fs.ListFolder(ctx, rootRef, []string{}, []string{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(len(resources)).To(Equal(1))
+
+			lister, ok := fs.(storage.UploadSessionLister)
+			Expect(ok).To(BeTrue())
+
+			orphaned := true
+			sessions, err := lister.ListUploadSessions(ctx, storage.UploadSessionFilter{Orphaned: &orphaned})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sessions).To(BeEmpty(), "a healthy session is not orphaned")
+
+			// Remove the node entirely, as an interrupted cleanup would leave it:
+			// the node is gone but the session is still there. ReadNode swallows a
+			// missing node and reports no error, so this has to be detected through
+			// the node's Exists flag.
+			nodePath := lu.InternalPath(ref.GetResourceId().GetSpaceId(), resources[0].GetId().GetOpaqueId())
+			Expect(lu.MetadataBackend().Purge(ctx, nodePath)).To(Succeed())
+			Expect(os.Remove(nodePath)).To(Succeed())
+
+			n, err := node.ReadNode(ctx, lu, ref.GetResourceId().GetSpaceId(), resources[0].GetId().GetOpaqueId(), false, nil, true)
+			Expect(err).ToNot(HaveOccurred(), "reading a missing node does not fail")
+			Expect(n.Exists).To(BeFalse())
+
+			sessions, err = lister.ListUploadSessions(ctx, storage.UploadSessionFilter{Orphaned: &orphaned})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sessions).To(HaveLen(1), "a session without a node should be reported as orphaned")
+			Expect(sessions[0].ID()).To(Equal(uploadID))
+
+			notOrphaned := false
+			sessions, err = lister.ListUploadSessions(ctx, storage.UploadSessionFilter{Orphaned: &notOrphaned})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sessions).To(BeEmpty())
+		})
+
 		It("deletes node and keeps the bytes when instructed", func() {
 			// node is created
 			resources, err := fs.ListFolder(ctx, rootRef, []string{}, []string{})
