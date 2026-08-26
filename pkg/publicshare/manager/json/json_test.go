@@ -569,12 +569,12 @@ var _ = Describe("Json", func() {
 				shares, err := m.ListPublicShares(ctx, user1, []*link.ListPublicSharesRequest_Filter{publicshare.ResourceIDFilter(rid)}, false)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(shares).To(BeEmpty())
-				client.AssertNumberOfCalls(GinkgoT(), "Stat", 1) // was 2 before negative caching
+				client.AssertNumberOfCalls(GinkgoT(), "Stat", 1) // deduplicated to a single Stat call by the pass-1 resource map
 			})
 
-			// userCanListGrants fails closed (excludes the share, caches false) for
+			// userCanListGrants fails closed (excludes the share, records false) for
 			// every one of these outcomes. None of them had a spec before: a
-			// regression flipping any one to fail-open (e.g. caching true on an
+			// regression flipping any one to fail-open (e.g. recording true on an
 			// error) would not have failed a single test.
 			DescribeTable("excludes a foreign share when Stat fails closed",
 				func(statFn func(ctx context.Context) (*providerv1beta1.StatResponse, error)) {

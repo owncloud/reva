@@ -636,7 +636,7 @@ func (m *manager) statForeignResources(ctx context.Context, u *user.User, client
 	statCtx, cancel := m.statBudgetContext(ctx)
 	defer cancel()
 
-	cache := newStatCache()
+	results := newStatResults()
 
 	numWorkers := m.maxConcurrency
 	if numWorkers > len(resourceIDs) {
@@ -678,14 +678,14 @@ func (m *manager) statForeignResources(ctx context.Context, u *user.User, client
 					// the caller treats it as not permitted.
 					continue
 				}
-				m.userCanListGrants(statCtx, client, cache, j.rid)
+				m.userCanListGrants(statCtx, client, results, j.rid)
 			}
 			return nil
 		})
 	}
 	_ = g.Wait()
 
-	result := cache.snapshot()
+	result := results.snapshot()
 	if skipped := len(resourceIDs) - len(result); skipped > 0 {
 		log.Warn().
 			Str("user_id", u.GetId().GetOpaqueId()).
@@ -719,52 +719,46 @@ func (m *manager) statBudgetContext(ctx context.Context) (context.Context, conte
 	return context.WithTimeout(ctx, budget)
 }
 
-// statCache memoises ListGrants answers for resources, keyed by
+// statResults collects ListGrants answers for resources, keyed by
 // storagespace.FormatResourceID. It is safe for concurrent use by the bounded
 // worker pool in statForeignResources.
-type statCache struct {
+type statResults struct {
 	mu   sync.Mutex
 	data map[string]bool
 }
 
-func newStatCache() *statCache {
-	return &statCache{data: make(map[string]bool)}
+func newStatResults() *statResults {
+	return &statResults{data: make(map[string]bool)}
 }
 
-func (c *statCache) get(key string) (bool, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	allowed, hit := c.data[key]
-	return allowed, hit
+func (r *statResults) set(key string, allowed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[key] = allowed
 }
 
-func (c *statCache) set(key string, allowed bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.data[key] = allowed
-}
-
-// snapshot returns a copy of the cache contents. Call only once no more
-// writers are running (e.g. after an errgroup.Wait), or take a copy under the
-// same lock discipline as get/set.
-func (c *statCache) snapshot() map[string]bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[string]bool, len(c.data))
-	for k, v := range c.data {
+// snapshot returns a copy of the results collected so far. Call only once no
+// more writers are running (e.g. after an errgroup.Wait), or take a copy
+// under the same lock discipline as set.
+func (r *statResults) snapshot() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]bool, len(r.data))
+	for k, v := range r.data {
 		out[k] = v
 	}
 	return out
 }
 
 // userCanListGrants reports whether the current user may list grants on the
-// given resource, memoising both positive and negative answers in cache.
-func (m *manager) userCanListGrants(ctx context.Context, client gateway.GatewayAPIClient, cache *statCache, rid *provider.ResourceId) bool {
+// given resource and records the answer in results. The resource IDs are
+// already deduplicated by the caller (see the foreignResourceIDs map built
+// in ListPublicShares) before statForeignResources ever runs, so each
+// resource is stated at most once and there is nothing to look up here
+// beforehand.
+func (m *manager) userCanListGrants(ctx context.Context, client gateway.GatewayAPIClient, results *statResults, rid *provider.ResourceId) bool {
 	log := appctx.GetLogger(ctx)
 	key := storagespace.FormatResourceID(rid)
-	if allowed, hit := cache.get(key); hit {
-		return allowed
-	}
 
 	sRes, err := client.Stat(ctx, &provider.StatRequest{
 		Ref:       &provider.Reference{ResourceId: rid},
@@ -773,20 +767,20 @@ func (m *manager) userCanListGrants(ctx context.Context, client gateway.GatewayA
 	switch {
 	case err != nil:
 		log.Error().Err(err).Interface("resource_id", rid).Msg("ListShares: an error occurred during stat on the resource")
-		cache.set(key, false)
+		results.set(key, false)
 		return false
 	case sRes.Status.Code == rpc.Code_CODE_NOT_FOUND:
 		log.Debug().Str("message", sRes.Status.Message).Interface("status", sRes.Status).Interface("resource_id", rid).Msg("ListShares: Resource not found")
-		cache.set(key, false)
+		results.set(key, false)
 		return false
 	case sRes.Status.Code != rpc.Code_CODE_OK:
 		log.Error().Str("message", sRes.Status.Message).Interface("status", sRes.Status).Interface("resource_id", rid).Msg("ListShares: could not stat resource")
-		cache.set(key, false)
+		results.set(key, false)
 		return false
 	}
 
 	allowed := sRes.GetInfo().GetPermissionSet().GetListGrants()
-	cache.set(key, allowed)
+	results.set(key, allowed)
 	return allowed
 }
 
