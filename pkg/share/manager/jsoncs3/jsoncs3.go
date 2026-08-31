@@ -20,6 +20,7 @@ package jsoncs3
 
 import (
 	"context"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -1310,4 +1311,126 @@ func (m *Manager) CleanupStaleShares(ctx context.Context) {
 
 		return true
 	})
+}
+
+// maxPurgeErrorSamples caps how many error messages a PurgeOrphanedReceivedShares
+// run collects, so a broadly-failing run cannot produce an unbounded slice.
+const maxPurgeErrorSamples = 50
+
+// PurgeStats aggregates the counters of a PurgeOrphanedReceivedShares run.
+type PurgeStats struct {
+	UsersScanned   int
+	SpacesScanned  int
+	OrphansFound   int
+	OrphansRemoved int
+	Errors         int
+	// ErrorSamples holds up to maxPurgeErrorSamples of the encountered error
+	// messages to give a sense of what went wrong without dumping every error.
+	ErrorSamples []string
+}
+
+// recordError increments the error counter and keeps a capped sample of messages.
+func (s *PurgeStats) recordError(err error) {
+	s.Errors++
+	if len(s.ErrorSamples) < maxPurgeErrorSamples {
+		s.ErrorSamples = append(s.ErrorSamples, err.Error())
+	}
+}
+
+// PurgeOrphanedReceivedShares scans users' received-share state and removes
+// entries that point at shares which no longer exist in the provider cache.
+// These orphans accumulate when a space is deleted but its per-user
+// received.json blocks are not cleaned up (e.g. a missed SpaceDeleted event).
+// They are otherwise removed inline on ListReceivedShares, but that path is on
+// the request hot path; this offline, batched variant drains them without
+// racing a client deadline.
+//
+// If spaceID is non-empty it must be the "{storageID}:{spaceID}" key as stored
+// in received.json (storage and space id joined by shareid.IDDelimiter); only
+// that space is considered. When dryRun is true nothing is written; the
+// returned stats still reflect what would be removed.
+//
+// An entry is only treated as an orphan when the share is confirmed absent from
+// the provider cache after a successful ListSpace prime. Spaces whose share
+// list cannot be read are skipped (counted as errors) so live shares are never
+// removed on a transient failure.
+func (m *Manager) PurgeOrphanedReceivedShares(ctx context.Context, spaceID string, dryRun bool) (PurgeStats, error) {
+	log := appctx.GetLogger(ctx)
+	stats := PurgeStats{}
+
+	if err := m.initialize(ctx); err != nil {
+		return stats, err
+	}
+
+	entries, err := m.storage.ReadDir(ctx, "/users")
+	if err != nil {
+		return stats, err
+	}
+
+	for _, entry := range entries {
+		userID := path.Base(entry)
+		if userID == "" || userID == "." {
+			continue
+		}
+		stats.UsersScanned++
+
+		spaces, err := m.UserReceivedStates.List(ctx, userID)
+		if err != nil {
+			log.Error().Err(err).Str("userid", userID).Msg("could not list received shares for user")
+			stats.recordError(err)
+			continue
+		}
+
+		for ssid, rspace := range spaces {
+			if spaceID != "" && ssid != spaceID {
+				continue
+			}
+			stats.SpacesScanned++
+
+			storageID, spid, _ := shareid.Decode(ssid)
+			userlog := log.With().Str("userid", userID).Str("storageid", storageID).Str("spaceid", spid).Logger()
+
+			// Prime the provider cache for this space so the subsequent
+			// Get(skipSync=true) lookups reflect current on-disk state. A
+			// read error here means we cannot tell live from dead shares, so
+			// we skip the whole space rather than risk removing live entries.
+			if _, err := m.Cache.ListSpace(ctx, storageID, spid); err != nil {
+				userlog.Error().Err(err).Msg("failed to list shares in space, skipping")
+				stats.recordError(err)
+				continue
+			}
+
+			orphans := []string{}
+			for shareID := range rspace.States {
+				s, err := m.Cache.Get(ctx, storageID, spid, shareID, true)
+				if err != nil {
+					userlog.Error().Err(err).Str("shareid", shareID).Msg("could not retrieve share, skipping")
+					stats.recordError(err)
+					continue
+				}
+				if s == nil {
+					orphans = append(orphans, shareID)
+				}
+			}
+
+			if len(orphans) == 0 {
+				continue
+			}
+			stats.OrphansFound += len(orphans)
+			userlog.Info().Int("count", len(orphans)).Bool("dryRun", dryRun).Msg("found orphaned received shares")
+			userlog.Debug().Strs("shareids", orphans).Msg("orphaned received share ids")
+
+			if dryRun {
+				continue
+			}
+			if err := m.UserReceivedStates.RemoveSpaceShares(ctx, userID, ssid, orphans); err != nil {
+				userlog.Error().Err(err).Msg("failed to remove orphaned received shares")
+				stats.recordError(err)
+				continue
+			}
+			stats.OrphansRemoved += len(orphans)
+		}
+	}
+
+	return stats, nil
 }
