@@ -1069,7 +1069,9 @@ func (fs *Decomposedfs) ListFolder(ctx context.Context, ref *provider.Reference,
 	for i := 0; i < numWorkers; i++ {
 		g.Go(func() error {
 			for child := range work {
-				np := rp
+				// make a copy of the parent's permissions; shallow copy is good enough
+				np := &provider.ResourcePermissions{}
+				*np = *rp
 				// add this childs permissions
 				pset, _ := child.PermissionSet(ctx)
 				node.AddPermissions(np, pset)
