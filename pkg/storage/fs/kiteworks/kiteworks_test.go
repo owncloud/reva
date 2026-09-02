@@ -239,4 +239,12 @@ var _ = Describe("kiteworks driver", func() {
 			Expect(err).To(Satisfy(notSupported))
 		})
 	})
+
+	Context("capabilities", func() {
+		It("declares an all-false (read-only) set", func() {
+			cp, ok := d.(storage.CapabilityProvider)
+			Expect(ok).To(BeTrue())
+			Expect(cp.Capabilities(fix.ctx)).To(Equal(storage.Capabilities{}))
+		})
+	})
 })
