@@ -12,4 +12,4 @@ closed if the permission cannot be determined. Group grantees are rejected, beca
 settings role assignments are held by individual accounts and group membership can
 change after the share has been created.
 
-https://github.com/owncloud/reva/pull/TODO-fill-in-after-opening-the-pr
+https://github.com/owncloud/reva/pull/727
