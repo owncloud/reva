@@ -17,7 +17,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/ceph/go-ceph v0.41.0
 	github.com/cheggaaa/pb v1.0.29
-	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/cs3org/cato v0.0.0-20200828125504-e418fc54dd5e
 	github.com/cs3org/go-cs3apis v0.0.0-20241105092511-3ad35d174fc1
 	github.com/dgraph-io/ristretto v0.2.0
@@ -34,9 +34,9 @@ require (
 	github.com/go-micro/plugins/v4/store/redis v1.2.1
 	github.com/go-playground/locales v0.14.1
 	github.com/go-playground/universal-translator v0.18.1
-	github.com/go-playground/validator/v10 v10.30.3
+	github.com/go-playground/validator/v10 v10.30.4
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/gofrs/flock v0.13.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/protobuf v1.5.4
@@ -75,7 +75,7 @@ require (
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/sethvargo/go-password v0.4.0
-	github.com/shamaton/msgpack/v2 v2.4.1
+	github.com/shamaton/msgpack/v2 v2.4.2
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/stretchr/testify v1.12.1
 	github.com/studio-b12/gowebdav v0.9.0
@@ -91,7 +91,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
@@ -130,7 +130,7 @@ require (
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
@@ -161,7 +161,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
