@@ -45,6 +45,9 @@ var _ = Describe("Trashbin", func() {
 		var err error
 		env, err = helpers.NewTestEnv(map[string]interface{}{
 			"metadata_backend": "messagepack",
+			// the permission checks do not involve the fs watcher, and starting
+			// one inotifywait per spec races with the test space setup
+			"watch_fs": false,
 		})
 		Expect(err).ToNot(HaveOccurred())
 
