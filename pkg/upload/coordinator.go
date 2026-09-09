@@ -38,9 +38,6 @@ type Coordinator interface {
 	// StartPostprocessing subscribes to postprocessing results and enables async
 	// uploads. Call once, before serving requests.
 	StartPostprocessing(stream events.Consumer, group, mountID string, numConsumers int) error
-	// Capabilities returns the served provider's declaration, defaulting to the
-	// full set when the driver does not implement storage.CapabilityProvider.
-	Capabilities(ctx context.Context) storage.Capabilities
 }
 
 // coordinator is the concrete implementation of Coordinator.
@@ -63,13 +60,6 @@ func NewCoordinator(fs storage.FS, store SessionStore, chunkFolder string, pub e
 		c.chunkHandler = chunking.NewChunkHandler(chunkFolder)
 	}
 	return c
-}
-
-func (c *coordinator) Capabilities(ctx context.Context) storage.Capabilities {
-	if cp, ok := c.fs.(storage.CapabilityProvider); ok {
-		return cp.Capabilities(ctx)
-	}
-	return storage.FullCapabilities()
 }
 
 // InitiateUpload resolves the target, then creates and persists the session that

@@ -350,24 +350,4 @@ var _ = Describe("coordinator", func() {
 			Expect(fs.calls).To(BeEmpty())
 		})
 	})
-
-	Describe("Capabilities", func() {
-		It("defaults to the full set when the driver is not a CapabilityProvider", func() {
-			Expect(c.Capabilities(ctx)).To(Equal(storage.FullCapabilities()))
-		})
-
-		It("delegates to a driver that declares its own capabilities", func() {
-			want := storage.Capabilities{Upload: true, Trash: true}
-			c = NewCoordinator(&capableFS{fakeFS: fs, caps: want}, store, "", nil)
-			Expect(c.Capabilities(ctx)).To(Equal(want))
-		})
-	})
 })
-
-// capableFS is a fakeFS that also declares capabilities.
-type capableFS struct {
-	*fakeFS
-	caps storage.Capabilities
-}
-
-func (f *capableFS) Capabilities(context.Context) storage.Capabilities { return f.caps }
