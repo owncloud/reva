@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -371,6 +372,61 @@ var _ = Describe("Tree", func() {
 					g.Expect(n.ID).To(Equal(dirId))
 					g.Expect(n.GetTreeSize(env.Ctx)).To(Equal(uint64(11)))
 				}).Should(Succeed())
+			})
+		})
+
+		Describe("of non-regular files", func() {
+			var outside string
+
+			BeforeEach(func() {
+				outside = GinkgoT().TempDir() + "/secret.txt"
+				Expect(os.WriteFile(outside, []byte("secret"), 0600)).To(Succeed())
+			})
+
+			// cachedID reports whether the item has been assimilated, i.e. whether it made
+			// it into the id cache
+			cachedID := func(name string) error {
+				_, _, err := env.Lookup.IDsForPath(env.Ctx, root+"/"+name)
+				return err
+			}
+
+			// waitForScanner blocks until a plain file created after the item under test has
+			// been assimilated. By then the scanner has worked through the earlier event.
+			waitForScanner := func() {
+				_, err := os.Create(root + "/sentinel.txt")
+				Expect(err).ToNot(HaveOccurred())
+
+				Eventually(func() error {
+					return cachedID("sentinel.txt")
+				}).ProbeEvery(200 * time.Millisecond).Should(Succeed())
+			}
+
+			It("skips symlinks", func() {
+				Expect(os.Symlink(outside, root+"/link.txt")).To(Succeed())
+				waitForScanner()
+
+				Consistently(func() error {
+					return cachedID("link.txt")
+				}, 2*time.Second, 200*time.Millisecond).ShouldNot(Succeed())
+			})
+
+			It("skips fifos without stalling the scanner", func() {
+				Expect(syscall.Mkfifo(root+"/fifo", 0600)).To(Succeed())
+				waitForScanner()
+
+				Consistently(func() error {
+					return cachedID("fifo")
+				}, 2*time.Second, 200*time.Millisecond).ShouldNot(Succeed())
+			})
+
+			It("walks past them when warming up the id cache", func() {
+				Expect(os.Symlink(outside, root+"/link.txt")).To(Succeed())
+				Expect(syscall.Mkfifo(root+"/fifo", 0600)).To(Succeed())
+
+				Expect(env.Tree.WarmupIDCache(env.Root, true, false)).To(Succeed())
+
+				Expect(cachedID("link.txt")).ToNot(Succeed())
+				Expect(cachedID("fifo")).ToNot(Succeed())
 			})
 		})
 	})
