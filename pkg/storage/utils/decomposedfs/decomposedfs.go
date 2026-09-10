@@ -78,6 +78,8 @@ const (
 	CtxKeySpaceGID CtxKey = iota
 )
 
+const maxCommitRetryBackoff = 2 * time.Minute
+
 var (
 	tracer trace.Tracer
 
@@ -293,6 +295,32 @@ func (fs *Decomposedfs) Postprocessing(ch <-chan events.Event) {
 	}
 }
 
+// finalizeWithRetry commits the staged bytes, retrying transient blobstore
+// failures with backoff. Nothing waits on this commit, so one unretried
+// large-file failure would strand the node in processing for good.
+func (fs *Decomposedfs) finalizeWithRetry(ctx context.Context, session *upload.OcisSession, log *zerolog.Logger) error {
+	backoff := fs.o.Events.CommitRetryBackoff
+	var err error
+	for attempt := 0; attempt <= fs.o.Events.CommitMaxRetries; attempt++ {
+		if attempt > 0 {
+			if backoff > maxCommitRetryBackoff {
+				backoff = maxCommitRetryBackoff
+			}
+			log.Warn().Err(err).Int("attempt", attempt).Dur("backoff", backoff).Msg("retrying blob commit after failed finalize")
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		if err = session.Finalize(ctx); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
 func (fs *Decomposedfs) processEvent(evCtx context.Context, event events.Event, log *zerolog.Logger) {
 	ctx, span := events.TraceEventConsumerWithTracer(evCtx, tracer, event)
 	ctx = autoprop.SetMetaToContext(ctx, event.ExtraInfo)
@@ -347,13 +375,14 @@ func (fs *Decomposedfs) processEvent(evCtx context.Context, event events.Event, 
 			keepUpload = true
 			metrics.UploadSessionsAborted.Inc()
 		case events.PPOutcomeContinue:
-			if err := session.Finalize(ctx); err != nil {
-				sublog.Error().Err(err).Msg("could not finalize upload")
+			if err := fs.finalizeWithRetry(ctx, session, &sublog); err != nil {
+				sublog.Error().Err(err).Msg("could not finalize upload after retries, reverting to a recoverable failed state")
+				// Revert like an abort: it clears the processing marker (no more
+				// 425) and keeps the bytes for a RestartPostprocessing.
 				failed = true
-				revertNodeMetadata = false
+				revertNodeMetadata = true
 				keepUpload = true
-				// keep postprocessing status so the upload is not deleted during housekeeping
-				unmarkPostprocessing = false
+				metrics.UploadSessionsAborted.Inc()
 			} else {
 				metrics.UploadSessionsFinalized.Inc()
 			}
