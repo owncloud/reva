@@ -94,6 +94,13 @@ func (d *Driver) toResourceInfo(fi *kwlib.FileInfo, spaceID string) *provider.Re
 	return ri
 }
 
+// Capabilities declares kiteworks read-only: every write method rejects with
+// NotSupported. The zero value is the declaration, so any capability added later
+// stays false here without an edit.
+func (d *Driver) Capabilities(_ context.Context) storage.Capabilities {
+	return storage.Capabilities{}
+}
+
 // --- Read methods ---
 
 func (d *Driver) Shutdown(_ context.Context) error { return nil }
