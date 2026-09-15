@@ -547,10 +547,11 @@ func (c *coordinator) commit(ctx context.Context, session Session) (*provider.Re
 
 	// CommitUpload does not own the body; we opened it, so we close it.
 	err = c.fs.CommitUpload(ctx, &ref, session.ID(), storage.UploadSource{
-		Body:       f,
-		Length:     session.Size(),
-		ScanResult: scanResult,
-		ScanDate:   scanDate,
+		Body:        f,
+		Length:      session.Size(),
+		NodeExisted: session.NodeExists(),
+		ScanResult:  scanResult,
+		ScanDate:    scanDate,
 	})
 	f.Close()
 	if err != nil {
