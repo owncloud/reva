@@ -302,21 +302,23 @@ func (fs *Decomposedfs) finalizeWithRetry(ctx context.Context, session *upload.O
 	backoff := fs.o.Events.CommitRetryBackoff
 	var err error
 	for attempt := 0; attempt <= fs.o.Events.CommitMaxRetries; attempt++ {
-		if attempt > 0 {
-			if backoff > maxCommitRetryBackoff {
-				backoff = maxCommitRetryBackoff
-			}
-			log.Warn().Err(err).Int("attempt", attempt).Dur("backoff", backoff).Msg("retrying blob commit after failed finalize")
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-			backoff *= 2
-		}
 		if err = session.Finalize(ctx); err == nil {
 			return nil
 		}
+		// Last attempt failed: return so the caller reverts and logs the give-up.
+		if attempt == fs.o.Events.CommitMaxRetries {
+			break
+		}
+		if backoff > maxCommitRetryBackoff {
+			backoff = maxCommitRetryBackoff
+		}
+		log.Warn().Err(err).Int("attempt", attempt+1).Dur("backoff", backoff).Msg("blob commit failed, retrying after backoff")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
 	}
 	return err
 }
