@@ -488,6 +488,7 @@ func (d *Driver) Delete(ctx context.Context, ref *provider.Reference) (*storage.
 			return nil, err
 		}
 	}
+	d.locks.Delete(nodeID)
 	return &storage.DeleteResult{
 		ResourceId: &provider.ResourceId{
 			StorageId: d.storageID,

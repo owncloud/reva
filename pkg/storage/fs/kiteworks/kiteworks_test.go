@@ -608,7 +608,7 @@ var _ = Describe("kiteworks driver", func() {
 				Expect(rc).To(BeNil())
 			})
 
-			It("returns PermissionDenied when version_view is not granted", func() {
+			It("returns PermissionDenied when download is not granted", func() {
 				skipIfRealBox()
 				ref := &provider.Reference{
 					ResourceId: &provider.ResourceId{SpaceId: fix.spaceID, OpaqueId: "file-1"},
@@ -660,6 +660,15 @@ var _ = Describe("kiteworks driver", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(string(b)).To(Equal("version 2 content"))
 				Expect(ri.Size).To(BeEquivalentTo(len("version 2 content")))
+			})
+
+			It("returns PermissionDenied when download is not granted", func() {
+				skipIfRealBox()
+				ref := &provider.Reference{
+					ResourceId: &provider.ResourceId{SpaceId: fix.spaceID, OpaqueId: "file-1@rev-1"},
+				}
+				_, _, err := d.Download(fix.ctx, ref, func(_ *provider.ResourceInfo) bool { return true })
+				Expect(err).To(Satisfy(permDenied))
 			})
 		})
 	})

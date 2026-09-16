@@ -155,7 +155,7 @@ func mockKiteworksHandler() http.Handler {
 	})
 
 	// Versioning test nodes
-	versionedFileJSON := `{"id":"versioned-file-1","type":"f","name":"versioned.txt","path":"/My Docs/versioned.txt","size":20,"modified":"2024-01-01T00:00:00+0000","permissions":[{"id":1,"name":"version_view","allowed":true},{"id":2,"name":"version_promote","allowed":true}]}`
+	versionedFileJSON := `{"id":"versioned-file-1","type":"f","name":"versioned.txt","path":"/My Docs/versioned.txt","size":20,"modified":"2024-01-01T00:00:00+0000","permissions":[{"id":1,"name":"version_view","allowed":true},{"id":2,"name":"version_promote","allowed":true},{"id":3,"name":"download","allowed":true}]}`
 	mux.HandleFunc("/rest/files/versioned-file-1", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, versionedFileJSON)
 	})

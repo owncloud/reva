@@ -51,6 +51,9 @@ func (d *Driver) downloadVersion(ctx context.Context, ref *provider.Reference, v
 	if err != nil {
 		return nil, nil, err
 	}
+	if !fi.HasPermission(kwlib.PermDownload) {
+		return nil, nil, errtypes.PermissionDenied(vr.fileID)
+	}
 	// Fetch content first to read Content-Length from the response headers.
 	// This is required because the dataprovider uses ri.Size to set Content-Length,
 	// and an empty size causes browsers to receive a zero-byte file.
@@ -135,7 +138,7 @@ func (d *Driver) DownloadRevision(ctx context.Context, ref *provider.Reference, 
 	if err != nil {
 		return nil, nil, err
 	}
-	if !fi.HasPermission(kwlib.PermVersionView) {
+	if !fi.HasPermission(kwlib.PermDownload) {
 		return nil, nil, errtypes.PermissionDenied(nodeID)
 	}
 	_, versionID, _ := strings.Cut(revisionKey, "@")
