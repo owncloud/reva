@@ -173,6 +173,7 @@ func (t *Tree) TouchFile(ctx context.Context, n *node.Node, markprocessing bool,
 	childNameLink := filepath.Join(n.ParentPath(), n.Name)
 	relativeNodePath := filepath.Join("../../../../../", lookup.Pathify(n.ID, 4, 2))
 	if err = os.Symlink(relativeNodePath, childNameLink); err != nil {
+		_ = os.Remove(nodePath)
 		if errors.Is(err, fs.ErrExist) {
 			return errtypes.AlreadyExists(n.Name)
 		}
