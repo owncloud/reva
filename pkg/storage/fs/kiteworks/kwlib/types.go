@@ -33,9 +33,6 @@ const (
 	PermVersionDelete  = "version_delete"
 	PermFileDelete     = "file_delete"
 	PermFileMove       = "file_move"
-
-	// Deprecated: use PermDownload.
-	DownloadPermission = PermDownload
 )
 
 type FileSearch struct {

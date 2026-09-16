@@ -678,10 +678,17 @@ var _ = Describe("kiteworks driver", func() {
 	})
 
 	Context("capabilities", func() {
-		It("declares an all-false (read-only) set", func() {
+		It("declares the implemented write, version and lock support", func() {
 			cp, ok := d.(storage.CapabilityProvider)
 			Expect(ok).To(BeTrue())
-			Expect(cp.Capabilities(fix.ctx)).To(Equal(storage.Capabilities{}))
+			Expect(cp.Capabilities(fix.ctx)).To(Equal(storage.Capabilities{
+				Upload:          true,
+				CreateContainer: true,
+				Delete:          true,
+				Move:            true,
+				Versioning:      true,
+				Locking:         true,
+			}))
 		})
 	})
 })

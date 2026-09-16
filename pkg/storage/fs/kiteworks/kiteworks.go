@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -128,11 +129,17 @@ func (d *Driver) toResourceInfo(fi *kwlib.FileInfo, spaceID, spaceRootPath strin
 	return ri
 }
 
-// Capabilities declares kiteworks read-only: every write method rejects with
-// NotSupported. The zero value is the declaration, so any capability added later
-// stays false here without an edit.
+// Capabilities omits Trash, Sharing and ArbitraryMetadata: those methods still
+// reject with NotSupported.
 func (d *Driver) Capabilities(_ context.Context) storage.Capabilities {
-	return storage.Capabilities{}
+	return storage.Capabilities{
+		Upload:          true,
+		CreateContainer: true,
+		Delete:          true,
+		Move:            true,
+		Versioning:      true,
+		Locking:         true,
+	}
 }
 
 // --- Read methods ---
@@ -474,7 +481,7 @@ func (d *Driver) Delete(ctx context.Context, ref *provider.Reference) (*storage.
 	err = c.DeleteFolder(nodeID)
 	if err != nil {
 		var ce *kwlib.ClientError
-		if !errors.As(err, &ce) || (ce.StatusCode != http.StatusNotFound && ce.StatusCode != http.StatusForbidden) {
+		if !errors.As(err, &ce) || ce.StatusCode != http.StatusNotFound {
 			return nil, err
 		}
 		if err = c.DeleteFile(nodeID); err != nil {
@@ -505,21 +512,44 @@ func (d *Driver) rawNodeInfo(ctx context.Context, nodeID string) (*kwlib.FileInf
 	return c.GetFileByID(nodeID)
 }
 
+func moveNode(c *kwlib.APIClient, fi *kwlib.FileInfo, parentID string) error {
+	if fi.IsDir() {
+		return c.MoveFolder(fi.ID, parentID)
+	}
+	_, err := c.Move(fi, &kwlib.FileInfo{ID: parentID}, false)
+	return err
+}
+
+func renameNode(c *kwlib.APIClient, fi *kwlib.FileInfo, name string) error {
+	if fi.IsDir() {
+		_, err := c.RenameFolder(fi, name)
+		return err
+	}
+	_, err := c.RenameFile(fi, name, false)
+	return err
+}
+
 func (d *Driver) Move(ctx context.Context, src, dst *provider.Reference) (*storage.MoveResult, error) {
+	dstName := path.Base(dst.GetPath())
+	if dstName == "" || dstName == "." || dstName == "/" {
+		return nil, errtypes.BadRequest("kiteworks: Move requires a destination name")
+	}
+
 	srcNodeID, _, err := d.resolveRef(ctx, src)
 	if err != nil {
 		return nil, err
 	}
 
-	dstParentRef := &provider.Reference{
+	dstParentID, _, err := d.resolveRef(ctx, &provider.Reference{
 		ResourceId: dst.GetResourceId(),
 		Path:       path.Dir(dst.GetPath()),
-	}
-	dstParentID, _, err := d.resolveRef(ctx, dstParentRef)
+	})
 	if err != nil {
 		return nil, err
 	}
-	dstName := path.Base(dst.GetPath())
+	if dstParentID == srcNodeID {
+		return nil, errtypes.BadRequest("kiteworks: cannot move a resource into itself")
+	}
 
 	srcFI, err := d.rawNodeInfo(ctx, srcNodeID)
 	if err != nil {
@@ -531,28 +561,25 @@ func (d *Driver) Move(ctx context.Context, src, dst *provider.Reference) (*stora
 		srcParentID = *srcFI.ParentID
 	}
 
+	// KW has no combined move+rename. Rename first: it is the undoable step, and
+	// the new name cannot collide in a parent the node has not left yet.
 	c := d.client(ctx)
-	if srcParentID != dstParentID {
-		if srcFI.IsDir() {
-			if err = c.MoveFolder(srcNodeID, dstParentID); err != nil {
-				return nil, err
-			}
-		} else {
-			if _, err = c.Move(srcFI, &kwlib.FileInfo{ID: dstParentID}, false); err != nil {
-				return nil, err
-			}
+	renamed := dstName != srcFI.Name
+	if renamed {
+		if err := renameNode(c, srcFI, dstName); err != nil {
+			return nil, err
 		}
 	}
 
-	if dstName != srcFI.Name {
-		if srcFI.IsDir() {
-			if _, err = c.RenameFolder(srcFI, dstName); err != nil {
-				return nil, err
+	if srcParentID != dstParentID {
+		if err := moveNode(c, srcFI, dstParentID); err != nil {
+			if renamed {
+				if rbErr := renameNode(c, srcFI, srcFI.Name); rbErr != nil {
+					d.log.Error().Err(rbErr).Str("nodeID", srcNodeID).Msg("could not restore the original name after a failed move")
+					return nil, fmt.Errorf("kiteworks: move failed and %q is left renamed to %q: %w", srcFI.Name, dstName, err)
+				}
 			}
-		} else {
-			if _, err = c.RenameFile(srcFI, dstName, false); err != nil {
-				return nil, err
-			}
+			return nil, err
 		}
 	}
 
