@@ -3,9 +3,11 @@ package decomposedfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
@@ -74,6 +76,11 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		pub      chan interface{}
 		con      chan interface{}
 		uploadID string
+
+		// blobstore returns commitErr for the first commitFailCount commits
+		commitErr       error
+		commitFailCount int
+		commitCalls     int
 
 		fs                   storage.FS
 		o                    *options.Options
@@ -145,8 +152,14 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			"asyncfileuploads":    true,
 			"treetime_accounting": true,
 			"treesize_accounting": true,
+			// tiny backoff so the retry path runs fast; retry count stays default
+			"events": map[string]interface{}{
+				"commit_retry_backoff": time.Millisecond,
+			},
 		})
 		Expect(err).ToNot(HaveOccurred())
+
+		commitErr, commitFailCount, commitCalls = nil, 0, 0
 
 		lu = lookup.New(metadata.NewXattrsBackend(o.Root, cache.Config{}), o, &timemanager.Manager{})
 		pmock = &mocks.PermissionsChecker{}
@@ -199,7 +212,13 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		ref.ResourceId = &resID
 
 		bs.On("Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string"), mock.Anything).
-			Return(nil).
+			Return(func(n *node.Node, path string) error {
+				commitCalls++
+				if commitErr != nil && commitCalls <= commitFailCount {
+					return commitErr
+				}
+				return nil
+			}).
 			Run(func(args mock.Arguments) {
 				n := args.Get(0).(*node.Node)
 				data, err := os.ReadFile(args.Get(1).(string))
@@ -363,6 +382,50 @@ var _ = Describe("Async file uploads", Ordered, func() {
 			// bytes are still here
 			_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID))
 			Expect(err).To(BeNil())
+		})
+	})
+
+	When("the blob commit keeps failing after postprocessing", func() {
+		It("retries, then reverts to a recoverable state that clears the processing marker", func() {
+			commitErr = errors.New("blobstore unavailable")
+			commitFailCount = 1000 // every attempt fails
+
+			// node is processing
+			exists, status, _ := fileStatus()
+			Expect(exists).To(BeTrue())
+			Expect(status).To(Equal("processing"))
+
+			failPostprocessing(uploadID, events.PPOutcomeContinue)
+
+			// tried once, then CommitMaxRetries more
+			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 1+o.Events.CommitMaxRetries)
+
+			// new file reverted: node gone, processing marker cleared, no more 425
+			resources, err := fs.ListFolder(ctx, rootRef, []string{}, []string{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(len(resources)).To(Equal(0))
+
+			// bytes kept for a restart
+			_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID))
+			Expect(err).To(BeNil())
+		})
+
+		It("eventually succeeds when the commit recovers before the retries run out", func() {
+			commitErr = errors.New("blobstore blip")
+			commitFailCount = 2 // fail twice, then succeed
+
+			succeedPostprocessing(uploadID)
+
+			// two failures, third succeeds
+			bs.AssertNumberOfCalls(GinkgoT(), "Upload", 3)
+
+			// node ready
+			_, status, _ := fileStatus()
+			Expect(status).To(Equal(""))
+
+			// bytes gone
+			_, err := os.Stat(filepath.Join(o.Root, "uploads", uploadID))
+			Expect(err).ToNot(BeNil())
 		})
 	})
 
