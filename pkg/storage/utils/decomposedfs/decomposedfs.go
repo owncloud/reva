@@ -41,6 +41,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/autoprop"
@@ -133,7 +134,7 @@ type Decomposedfs struct {
 	spaceTypeIndex  *spaceidindex.Index
 
 	// commitLimiter caps concurrent async blob commits at NumConsumers.
-	commitLimiter chan struct{}
+	commitLimiter *semaphore.Weighted
 
 	log *zerolog.Logger
 }
@@ -281,7 +282,7 @@ func New(o *options.Options, aspects aspects.Aspects, log *zerolog.Logger) (stor
 			o.Events.NumConsumers = 1
 		}
 
-		fs.commitLimiter = make(chan struct{}, o.Events.NumConsumers)
+		fs.commitLimiter = semaphore.NewWeighted(int64(o.Events.NumConsumers))
 
 		for i := 0; i < o.Events.NumConsumers; i++ {
 			go fs.Postprocessing(ch)
@@ -303,23 +304,32 @@ func (fs *Decomposedfs) Postprocessing(ch <-chan events.Event) {
 // finalizeWithRetry commits the staged bytes, retrying blobstore failures with
 // capped exponential backoff.
 func (fs *Decomposedfs) finalizeWithRetry(ctx context.Context, session *upload.OcisSession, log *zerolog.Logger) error {
+	maxAttempts := fs.o.Events.CommitMaxRetries + 1
 	backoff := fs.o.Events.CommitRetryBackoff
 	var err error
-	for attempt := 0; attempt <= fs.o.Events.CommitMaxRetries; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if err = session.Finalize(ctx); err == nil {
 			return nil
 		}
-		if attempt == fs.o.Events.CommitMaxRetries {
+		ev := log.Warn().Err(err).
+			Int("attempt", attempt).Int("maxAttempts", maxAttempts).
+			Str("spaceid", session.SpaceID()).Str("nodeid", session.NodeID())
+		if attempt == maxAttempts {
+			ev.Msg("blob commit failed, giving up")
 			break
 		}
+		// clamp before use: this bounds backoff to maxCommitRetryBackoff every
+		// iteration, so the backoff *= 2 below can never grow past 2*max and
+		// cannot overflow the int64 duration.
 		backoff = min(backoff, maxCommitRetryBackoff)
-		log.Warn().Err(err).Int("attempt", attempt+1).Dur("backoff", backoff).Msg("blob commit failed, retrying after backoff")
+		ev.Dur("backoff", backoff).Msg("blob commit failed, retrying after backoff")
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
+			// backoff elapsed, fall through to the next attempt
 		}
 		backoff *= 2
 	}
@@ -443,8 +453,11 @@ func (fs *Decomposedfs) processEvent(evCtx context.Context, event events.Event, 
 			// commit re-uploads the whole file and can block for the retry window;
 			// run it detached (bounded by commitLimiter) to not stall the consumer
 			go func() {
-				fs.commitLimiter <- struct{}{}
-				defer func() { <-fs.commitLimiter }()
+				if err := fs.commitLimiter.Acquire(ctx, 1); err != nil {
+					sublog.Error().Err(err).Msg("could not acquire commit slot")
+					return
+				}
+				defer fs.commitLimiter.Release(1)
 
 				if err := fs.finalizeWithRetry(ctx, session, &sublog); err != nil {
 					sublog.Error().Err(err).Msg("could not finalize upload after retries, reverting to a recoverable failed state")
