@@ -168,13 +168,22 @@ func (s *OcisSession) Node(ctx context.Context) (*node.Node, error) {
 }
 
 // IsOrphaned returns true if the session's target node can no longer be
-// resolved. This happens when the node file still exists but its metadata is
-// gone, e.g. because an ancestor was moved to the trash while the upload was in
-// flight. Such a session can never finish postprocessing: reading the node
-// fails before the destination can be determined.
+// resolved. Such a session can never finish postprocessing, because the
+// destination of the upload cannot be determined. There are two ways to end up
+// in that state:
+//
+//   - reading the node fails, e.g. because the node file still exists but its
+//     metadata is gone after an ancestor was moved to the trash while the upload
+//     was in flight
+//   - the node does not exist at all, e.g. because a previous cleanup removed it
+//     but did not get as far as removing the session
+//
+// The second case matters for recovery: ReadNode deliberately swallows a missing
+// node and reports no error, so it has to be detected through Exists. Otherwise a
+// session left behind by an interrupted cleanup could never be found again.
 func (s *OcisSession) IsOrphaned(ctx context.Context) bool {
-	_, err := s.Node(ctx)
-	return err != nil
+	n, err := s.Node(ctx)
+	return err != nil || n == nil || !n.Exists
 }
 
 // syntheticNode builds a node from the session metadata alone, without reading
