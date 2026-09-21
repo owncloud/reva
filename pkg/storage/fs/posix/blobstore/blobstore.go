@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"syscall"
 
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/pkg/errors"
@@ -52,7 +53,7 @@ func (bs *Blobstore) Upload(node *node.Node, source string) error {
 	}
 	defer file.Close()
 
-	f, err := os.OpenFile(node.InternalPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700)
+	f, err := os.OpenFile(node.InternalPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0700)
 	if err != nil {
 		return errors.Wrapf(err, "could not open blob '%s' for writing", node.InternalPath())
 	}
@@ -80,7 +81,7 @@ func (bs *Blobstore) Upload(node *node.Node, source string) error {
 
 // Download retrieves a blob from the blobstore for reading
 func (bs *Blobstore) Download(node *node.Node) (io.ReadCloser, error) {
-	file, err := os.Open(node.InternalPath())
+	file, err := os.OpenFile(node.InternalPath(), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not read blob '%s'", node.InternalPath())
 	}
