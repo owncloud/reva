@@ -44,8 +44,10 @@ type fakeFS struct {
 	markErr      error
 	prepared     *storage.PrepareUploadResult
 	prepareErr   error
-	commitErr    error
-	rollbackErr  error
+	commitErr      error
+	commitErrCount int // return commitErr for the first N calls, then succeed
+	commitCalls    int
+	rollbackErr    error
 	deleteErr    error
 
 	// markErrAfter applies markErr only from the nth MarkProcessing call on.
@@ -143,6 +145,13 @@ func (f *fakeFS) PrepareUpload(_ context.Context, _ *provider.Reference, _ strin
 func (f *fakeFS) CommitUpload(_ context.Context, _ *provider.Reference, _ string, source storage.UploadSource) error {
 	f.record("CommitUpload(length=%d)", source.Length)
 	f.committed = source
+	f.commitCalls++
+	if f.commitErrCount > 0 {
+		if f.commitCalls <= f.commitErrCount {
+			return f.commitErr
+		}
+		return nil
+	}
 	return f.commitErr
 }
 
