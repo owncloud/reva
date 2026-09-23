@@ -21,9 +21,13 @@ package capabilities
 import (
 	"encoding/json"
 	"encoding/xml"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocs/config"
 	"github.com/owncloud/reva/v2/pkg/owncloud/ocs"
+	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
 func TestMarshal(t *testing.T) {
@@ -57,5 +61,89 @@ func TestMarshal(t *testing.T) {
 	if string(xmlData) != xmlExpect {
 		t.Log(string(xmlData))
 		t.Fatal("xml data does not match")
+	}
+}
+
+// getCapabilities performs a GetCapabilities request against the handler and returns the
+// capabilities carried by the OCS response.
+func getCapabilities(t *testing.T, h *Handler, target string) *ocs.Capabilities {
+	t.Helper()
+
+	w := httptest.NewRecorder()
+	h.GetCapabilities(w, httptest.NewRequest(http.MethodGet, target, nil))
+
+	var payload struct {
+		OCS struct {
+			Data ocs.CapabilitiesData `json:"data"`
+		} `json:"ocs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("cant unmarshal response for %s: %v", target, err)
+	}
+	if payload.OCS.Data.Capabilities == nil {
+		t.Fatalf("no capabilities in response for %s", target)
+	}
+	return payload.OCS.Data.Capabilities
+}
+
+func newVaultHandler(t *testing.T, vaultEnabled bool, filesSharing *ocs.CapabilitiesFilesSharing) *Handler {
+	t.Helper()
+
+	vault := &ocs.CapabilitiesVault{}
+	if vaultEnabled {
+		vault.Enabled = true
+	}
+
+	h := &Handler{}
+	h.Init(&config.Config{
+		Capabilities: ocs.CapabilitiesData{
+			Capabilities: &ocs.Capabilities{
+				Vault:        vault,
+				FilesSharing: filesSharing,
+			},
+		},
+	})
+	return h
+}
+
+// The vault storage provider id must be announced on every capabilities response, not only
+// on `?vault=true`. Clients booted outside the vault fetch capabilities without that query
+// parameter and need the id to recognize vault resources.
+func TestGetCapabilitiesAnnouncesVaultStorageProvider(t *testing.T) {
+	h := newVaultHandler(t, true, &ocs.CapabilitiesFilesSharing{
+		APIEnabled: true,
+		Public:     &ocs.CapabilitiesFilesSharingPublic{Enabled: true},
+	})
+
+	for _, target := range []string{"/capabilities?format=json", "/capabilities?format=json&vault=true"} {
+		caps := getCapabilities(t, h, target)
+		if caps.Vault == nil {
+			t.Fatalf("no vault capabilities in response for %s", target)
+		}
+		if caps.Vault.VaultStorageProvider != utils.VaultStorageProviderID {
+			t.Errorf("%s: got vault storage provider %q, want %q",
+				target, caps.Vault.VaultStorageProvider, utils.VaultStorageProviderID)
+		}
+	}
+
+	// the vault scope still turns public sharing off, and only for that scope
+	if caps := getCapabilities(t, h, "/capabilities?format=json&vault=true"); bool(caps.FilesSharing.Public.Enabled) {
+		t.Error("vault capabilities should have public sharing disabled")
+	}
+	if caps := getCapabilities(t, h, "/capabilities?format=json"); !bool(caps.FilesSharing.Public.Enabled) {
+		t.Error("non-vault capabilities should keep public sharing enabled")
+	}
+}
+
+func TestGetCapabilitiesOmitsVaultStorageProviderWhenVaultDisabled(t *testing.T) {
+	h := newVaultHandler(t, false, &ocs.CapabilitiesFilesSharing{APIEnabled: true})
+
+	caps := getCapabilities(t, h, "/capabilities?format=json")
+	if caps.Vault == nil {
+		t.Fatal("no vault capabilities in response")
+	}
+	if caps.Vault.VaultStorageProvider != "" {
+		t.Errorf("got vault storage provider %q, want it empty while vault mode is disabled",
+			caps.Vault.VaultStorageProvider)
 	}
 }
