@@ -22,12 +22,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -39,6 +36,7 @@ import (
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/publicshare"
@@ -50,7 +48,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"github.com/owncloud/reva/v2/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 )
 
@@ -109,18 +106,24 @@ func NewCS3(c map[string]interface{}) (publicshare.Manager, error) {
 
 // New returns a new public share manager instance
 func New(gwAddr string, pwHashCost, janitorRunInterval int, enableCleanup bool, p persistence.Persistence) (publicshare.Manager, error) {
+	janitorCtx, janitorCancel := context.WithCancel(context.Background())
 	m := &manager{
 		gatewayAddr:                gwAddr,
-		mutex:                      &sync.Mutex{},
+		mutex:                      &sync.RWMutex{},
 		passwordHashCost:           pwHashCost,
 		janitorRunInterval:         janitorRunInterval,
 		enableExpiredSharesCleanup: enableCleanup,
 		persistence:                p,
+		janitorCtx:                 janitorCtx,
+		janitorCancel:              janitorCancel,
+		janitorDone:                make(chan struct{}),
 	}
 
 	go m.startJanitorRun()
 	return m, nil
 }
+
+var _ publicshare.ClosableManager = (*manager)(nil)
 
 type commonConfig struct {
 	GatewayAddr                string `mapstructure:"gateway_addr"`
@@ -149,40 +152,64 @@ func (c *commonConfig) init() {
 		c.SharePasswordHashCost = 11
 	}
 	if c.JanitorRunInterval == 0 {
-		c.JanitorRunInterval = 60
+		c.JanitorRunInterval = 600
 	}
 }
 
 type manager struct {
 	gatewayAddr string
-	mutex       *sync.Mutex
+	mutex       *sync.RWMutex
 	persistence persistence.Persistence
 
 	passwordHashCost           int
 	janitorRunInterval         int
 	enableExpiredSharesCleanup bool
+
+	// janitorCtx/janitorCancel let Close ask startJanitorRun's goroutine to
+	// stop - including cancelling a cleanupExpiredShares run it may be in
+	// the middle of - and janitorDone lets Close wait until that goroutine
+	// has actually returned, instead of racing it on shutdown.
+	janitorCtx    context.Context
+	janitorCancel context.CancelFunc
+	janitorDone   chan struct{}
 }
 
-func (m *manager) init() error {
-	return m.persistence.Init(context.Background())
+func (m *manager) init(ctx context.Context) error {
+	return m.persistence.Init(ctx)
 }
 
 func (m *manager) startJanitorRun() {
+	defer close(m.janitorDone)
+
 	if !m.enableExpiredSharesCleanup {
 		return
 	}
 
 	ticker := time.NewTicker(time.Duration(m.janitorRunInterval) * time.Second)
-	work := make(chan os.Signal, 1)
-	signal.Notify(work, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-work:
+		case <-m.janitorCtx.Done():
 			return
 		case <-ticker.C:
-			m.cleanupExpiredShares()
+			if err := m.cleanupExpiredShares(); err != nil {
+				log.Err(err).Msg("publicShareJSONManager: error cleaning up expired shares")
+			}
 		}
+	}
+}
+
+// Close stops the janitor and waits for any in-flight cleanupExpiredShares
+// run to finish, bounded by ctx. It satisfies publicshare.ClosableManager.
+func (m *manager) Close(ctx context.Context) error {
+	m.janitorCancel()
+
+	select {
+	case <-m.janitorDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -190,10 +217,10 @@ func (m *manager) startJanitorRun() {
 func (m *manager) Dump(ctx context.Context, shareChan chan<- *publicshare.WithPassword) error {
 	log := appctx.GetLogger(ctx)
 
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
 		return err
 	}
 
@@ -219,7 +246,7 @@ func (m *manager) Load(ctx context.Context, shareChan <-chan *publicshare.WithPa
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
 		return err
 	}
 
@@ -294,15 +321,15 @@ func (m *manager) CreatePublicShare(ctx context.Context, u *user.User, rInfo *pr
 	}
 	proto.Merge(&ps.PublicShare, s)
 
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if err := m.init(); err != nil {
+	encShare, err := utils.MarshalProtoV1ToJSON(&ps.PublicShare)
+	if err != nil {
 		return nil, err
 	}
 
-	encShare, err := utils.MarshalProtoV1ToJSON(&ps.PublicShare)
-	if err != nil {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
 
@@ -390,7 +417,7 @@ func (m *manager) UpdatePublicShare(ctx context.Context, u *user.User, req *link
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
 
@@ -426,10 +453,10 @@ func (m *manager) UpdatePublicShare(ctx context.Context, u *user.User, req *link
 
 // GetPublicShare gets a public share either by ID or Token.
 func (m *manager) GetPublicShare(ctx context.Context, u *user.User, ref *link.PublicShareReference, sign bool) (*link.PublicShare, error) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
 
@@ -463,9 +490,7 @@ func (m *manager) GetPublicShare(ctx context.Context, u *user.User, ref *link.Pu
 
 		if ref.GetId().GetOpaqueId() == ps.Id.OpaqueId {
 			if publicshare.IsExpired(&ps) {
-				if err := m.revokeExpiredPublicShare(ctx, &ps); err != nil {
-					return nil, err
-				}
+				// actual deletion is left to the janitor (cleanupExpiredShares)
 				return nil, errtypes.NotFound("no shares found by id:" + ref.GetId().String())
 			}
 			if ps.PasswordProtected && sign {
@@ -483,19 +508,26 @@ func (m *manager) GetPublicShare(ctx context.Context, u *user.User, ref *link.Pu
 
 // ListPublicShares retrieves all the shares on the manager that are valid.
 func (m *manager) ListPublicShares(ctx context.Context, u *user.User, filters []*link.ListPublicSharesRequest_Filter, sign bool) ([]*link.PublicShare, error) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.mutex.RLock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
+		m.mutex.RUnlock()
 		return nil, err
 	}
 
-	log := appctx.GetLogger(ctx)
-
+	// Read returns a copy that shares no mutable state with the persistence
+	// backend (see persistence.Copy), so it's safe to keep using db after
+	// the lock is released below - a concurrent writer can no longer race
+	// what we do with it.
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
+		m.mutex.RUnlock()
 		return nil, err
 	}
+
+	m.mutex.RUnlock()
+
+	log := appctx.GetLogger(ctx)
 
 	client, err := pool.GetGatewayServiceClient(m.gatewayAddr)
 	if err != nil {
@@ -511,11 +543,7 @@ func (m *manager) ListPublicShares(ctx context.Context, u *user.User, filters []
 		}
 
 		if publicshare.IsExpired(&local.PublicShare) {
-			if err := m.revokeExpiredPublicShare(ctx, &local.PublicShare); err != nil {
-				log.Error().Err(err).
-					Str("share_token", local.Token).
-					Msg("failed to revoke expired public share")
-			}
+			// actual deletion is left to the janitor (cleanupExpiredShares)
 			continue
 		}
 
@@ -576,47 +604,47 @@ func (m *manager) ListPublicShares(ctx context.Context, u *user.User, filters []
 	return shares, nil
 }
 
-func (m *manager) cleanupExpiredShares() {
+func (m *manager) cleanupExpiredShares() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if err := m.init(); err != nil {
-		return
-	}
+	// Deriving from m.janitorCtx (not context.Background()) means Close
+	// cancels an in-flight run immediately instead of leaving it to run out its full timeout.
+	ctx, cancel := context.WithTimeout(m.janitorCtx, 60*time.Second)
+	defer cancel()
 
-	db, _ := m.persistence.Read(context.Background())
-
-	for _, v := range db {
-		d := v.(map[string]interface{})["share"]
-
-		var ps link.PublicShare
-		_ = utils.UnmarshalJSONToProtoV1([]byte(d.(string)), &ps)
-
-		if publicshare.IsExpired(&ps) {
-			_ = m.revokeExpiredPublicShare(context.Background(), &ps)
-		}
-	}
-}
-
-// revokeExpiredPublicShare doesn't have a lock inside, ensure a lock before call
-func (m *manager) revokeExpiredPublicShare(ctx context.Context, s *link.PublicShare) error {
-	if !m.enableExpiredSharesCleanup {
-		return nil
-	}
-
-	err := m.revokePublicShare(ctx, &link.PublicShareReference{
-		Spec: &link.PublicShareReference_Id{
-			Id: &link.PublicShareId{
-				OpaqueId: s.Id.OpaqueId,
-			},
-		},
-	})
-	if err != nil {
-		log.Err(err).Msg(fmt.Sprintf("publicShareJSONManager: error deleting public share with opaqueId: %s", s.Id.OpaqueId))
+	if err := m.init(ctx); err != nil {
 		return err
 	}
 
-	return nil
+	db, err := m.persistence.Read(ctx)
+	if err != nil {
+		return err
+	}
+
+	var changed bool
+	for id, v := range db {
+		d := v.(map[string]interface{})["share"]
+
+		var ps link.PublicShare
+		if err := utils.UnmarshalJSONToProtoV1([]byte(d.(string)), &ps); err != nil {
+			continue
+		}
+
+		if publicshare.IsExpired(&ps) {
+			// db is our own copy (see persistence.Copy), so deleting the
+			// current entry while ranging over it is safe: single goroutine,
+			// no aliasing with the persistence backend's internal state.
+			delete(db, id)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return m.persistence.Write(ctx, db)
 }
 
 // RevokePublicShare undocumented.
@@ -624,7 +652,7 @@ func (m *manager) RevokePublicShare(ctx context.Context, _ *user.User, ref *link
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
 		return err
 	}
 
@@ -682,10 +710,10 @@ func (m *manager) getByToken(ctx context.Context, token string) (*link.PublicSha
 
 // GetPublicShareByToken gets a public share by its opaque token.
 func (m *manager) GetPublicShareByToken(ctx context.Context, token string, auth *link.PublicShareAuthentication, sign bool) (*link.PublicShare, error) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
-	if err := m.init(); err != nil {
+	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
 
@@ -703,9 +731,7 @@ func (m *manager) GetPublicShareByToken(ctx context.Context, token string, auth 
 
 		if local.Token == token {
 			if publicshare.IsExpired(&local) {
-				if err := m.revokeExpiredPublicShare(ctx, &local); err != nil {
-					return nil, err
-				}
+				// actual deletion is left to the janitor (cleanupExpiredShares)
 				break
 			}
 
