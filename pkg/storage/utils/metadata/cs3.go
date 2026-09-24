@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/net"
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
@@ -592,12 +593,8 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 	if err != nil {
 		// this used to fail silently by never returning at all, so make sure
 		// an exhausted deadline is visible at production log level
-		appctx.GetLogger(ctx).Warn().
-			Err(err).
-			Str("gateway_addr", cs3.gatewayAddr).
-			Dur("elapsed", time.Since(start)).
-			Dur("timeout", timeout).
-			Msg("cs3: machine authentication failed")
+		appctx.GetLogger(ctx).Warn().Err(err).Str("gateway_addr", cs3.gatewayAddr).
+			Dur("elapsed", time.Since(start)).Dur("timeout", timeout).Msg("cs3: machine authentication failed")
 		return nil, err
 	}
 	if authRes.GetStatus().GetCode() != rpc.Code_CODE_OK {

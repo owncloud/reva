@@ -174,6 +174,14 @@ type manager struct {
 	janitorDone   chan struct{}
 }
 
+// init is called at the top of every public method to lazily initialize the
+// persistence layer. It must not take m.mutex: persistence.Init is already
+// idempotent and self-synchronized (it returns immediately once the
+// persistence layer reports itself initialized), so wrapping it in the
+// manager's write lock added nothing but contention - and because a pending
+// sync.RWMutex writer blocks new readers, that contention serialized every
+// concurrent call through this single point regardless of whether it needed
+// a read or a write lock.
 func (m *manager) init(ctx context.Context) error {
 	return m.persistence.Init(ctx)
 }
@@ -217,12 +225,12 @@ func (m *manager) Close(ctx context.Context) error {
 func (m *manager) Dump(ctx context.Context, shareChan chan<- *publicshare.WithPassword) error {
 	log := appctx.GetLogger(ctx)
 
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
 	if err := m.init(ctx); err != nil {
 		return err
 	}
+
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
@@ -243,12 +251,12 @@ func (m *manager) Dump(ctx context.Context, shareChan chan<- *publicshare.WithPa
 
 // Load imports public shares and received shares from channels (e.g. during migration)
 func (m *manager) Load(ctx context.Context, shareChan <-chan *publicshare.WithPassword) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if err := m.init(ctx); err != nil {
 		return err
 	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
@@ -326,12 +334,12 @@ func (m *manager) CreatePublicShare(ctx context.Context, u *user.User, rInfo *pr
 		return nil, err
 	}
 
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
@@ -414,12 +422,12 @@ func (m *manager) UpdatePublicShare(ctx context.Context, u *user.User, req *link
 		Nanos:   uint32(now % int64(time.Second)),
 	}
 
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
@@ -453,12 +461,12 @@ func (m *manager) UpdatePublicShare(ctx context.Context, u *user.User, req *link
 
 // GetPublicShare gets a public share either by ID or Token.
 func (m *manager) GetPublicShare(ctx context.Context, u *user.User, ref *link.PublicShareReference, sign bool) (*link.PublicShare, error) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
 	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
+
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
 	if ref.GetToken() != "" {
 		ps, pw, err := m.getByToken(ctx, ref.GetToken())
@@ -508,12 +516,11 @@ func (m *manager) GetPublicShare(ctx context.Context, u *user.User, ref *link.Pu
 
 // ListPublicShares retrieves all the shares on the manager that are valid.
 func (m *manager) ListPublicShares(ctx context.Context, u *user.User, filters []*link.ListPublicSharesRequest_Filter, sign bool) ([]*link.PublicShare, error) {
-	m.mutex.RLock()
-
 	if err := m.init(ctx); err != nil {
-		m.mutex.RUnlock()
 		return nil, err
 	}
+
+	m.mutex.RLock()
 
 	// Read returns a copy that shares no mutable state with the persistence
 	// backend (see persistence.Copy), so it's safe to keep using db after
@@ -605,9 +612,6 @@ func (m *manager) ListPublicShares(ctx context.Context, u *user.User, filters []
 }
 
 func (m *manager) cleanupExpiredShares() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	// Deriving from m.janitorCtx (not context.Background()) means Close
 	// cancels an in-flight run immediately instead of leaving it to run out its full timeout.
 	ctx, cancel := context.WithTimeout(m.janitorCtx, 60*time.Second)
@@ -616,6 +620,9 @@ func (m *manager) cleanupExpiredShares() error {
 	if err := m.init(ctx); err != nil {
 		return err
 	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
@@ -649,12 +656,12 @@ func (m *manager) cleanupExpiredShares() error {
 
 // RevokePublicShare undocumented.
 func (m *manager) RevokePublicShare(ctx context.Context, _ *user.User, ref *link.PublicShareReference) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if err := m.init(ctx); err != nil {
 		return err
 	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	return m.revokePublicShare(ctx, ref)
 }
@@ -710,12 +717,12 @@ func (m *manager) getByToken(ctx context.Context, token string) (*link.PublicSha
 
 // GetPublicShareByToken gets a public share by its opaque token.
 func (m *manager) GetPublicShareByToken(ctx context.Context, token string, auth *link.PublicShareAuthentication, sign bool) (*link.PublicShare, error) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
 	if err := m.init(ctx); err != nil {
 		return nil, err
 	}
+
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
 	db, err := m.persistence.Read(ctx)
 	if err != nil {
