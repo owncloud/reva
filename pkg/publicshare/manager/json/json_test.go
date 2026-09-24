@@ -32,6 +32,7 @@ import (
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/publicshare"
 	"github.com/owncloud/reva/v2/pkg/publicshare/manager/json"
+	"github.com/owncloud/reva/v2/pkg/publicshare/manager/json/persistence"
 	"github.com/owncloud/reva/v2/pkg/publicshare/manager/json/persistence/cs3"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"golang.org/x/crypto/bcrypt"
@@ -41,6 +42,26 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// slowReadPersistence is a fake persistence.Persistence whose Read blocks
+// for a fixed delay, standing in for a network round trip such as the cs3
+// persistence layer's Stat/SimpleDownload against metadata.CS3. It has no
+// state of its own to protect - it exists to let a test observe whether
+// concurrent manager calls overlap during that delay.
+type slowReadPersistence struct {
+	delay time.Duration
+}
+
+func (p *slowReadPersistence) Init(_ context.Context) error { return nil }
+
+func (p *slowReadPersistence) Read(_ context.Context) (persistence.PublicShares, error) {
+	time.Sleep(p.delay)
+	return persistence.PublicShares{}, nil
+}
+
+func (p *slowReadPersistence) Write(_ context.Context, _ persistence.PublicShares) error {
+	return nil
+}
 
 var _ = Describe("Json", func() {
 	var (
@@ -329,6 +350,41 @@ var _ = Describe("Json", func() {
 				for err := range createErrs {
 					Expect(err).ToNot(HaveOccurred())
 				}
+			})
+
+			It("overlaps concurrent ListPublicShares calls instead of queueing them", func() {
+				// Regression test for manager.init (json.go) taking the manager's
+				// write lock on every call ahead of ListPublicShares' own RLock.
+				// Because a pending sync.RWMutex writer blocks new readers, that
+				// turned every concurrent ListPublicShares call into a queue behind
+				// whichever call was already inside persistence.Read - silently
+				// undoing the switch from sync.Mutex to sync.RWMutex. A wrong
+				// re-introduction of that lock wouldn't fail -race (it's a
+				// correctly-used lock), only show up as this test timing out.
+				const (
+					delay       = 150 * time.Millisecond
+					concurrency = 8
+				)
+
+				slow, err := json.New("https://localhost:9200", 11, 60, false, &slowReadPersistence{delay: delay})
+				Expect(err).ToNot(HaveOccurred())
+
+				var wg sync.WaitGroup
+				start := time.Now()
+				wg.Add(concurrency)
+				for range concurrency {
+					go func() {
+						defer wg.Done()
+						_, _ = slow.ListPublicShares(ctx, user1, nil, false)
+					}()
+				}
+				wg.Wait()
+
+				// Fully serialized would take concurrency*delay (1.2s here).
+				// Overlapping reads should finish close to a single delay - allow
+				// generous slack for scheduling noise without letting a real
+				// regression pass.
+				Expect(time.Since(start)).To(BeNumerically("<", delay*3))
 			})
 
 			It("refreshes its cache before writing new data", func() {

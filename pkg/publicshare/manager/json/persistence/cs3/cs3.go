@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/owncloud/reva/v2/pkg/errtypes"
@@ -37,13 +38,22 @@ type db struct {
 }
 
 type cs3 struct {
-	initialized bool
+	// initialized is read on every call (Init is called unconditionally by
+	// the manager ahead of every Read/Write) and must stay lock-free once
+	// true, or every already-initialized caller would queue behind mu for a
+	// single bool check - and worse, behind whatever Read is doing with mu
+	// at the time, since they'd be contending for the same lock.
+	initialized atomic.Bool
 	s           metadata.Storage
+	// initMu serializes the one-time (and retried-on-failure) call into
+	// s.Init. It is deliberately not mu: that state is independent of the
+	// mtime cache below, and sharing a lock would reintroduce the same
+	// contention initialized/atomic.Bool exists to avoid.
+	initMu sync.Mutex
 	// cs3 caches the remote publicshares.json in p.db and only refetches it when
 	// its mtime advances. That cache refill mutates p.db as a side effect of
 	// Read, so Read cannot be treated as a pure/reentrant read by callers - mu
-	// serializes access to p.initialized and p.db regardless of how the caller
-	// itself locks.
+	// serializes access to p.db regardless of how the caller itself locks.
 	mu sync.Mutex
 	db db
 }
@@ -59,10 +69,14 @@ func New(s metadata.Storage) persistence.Persistence {
 }
 
 func (p *cs3) Init(ctx context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	if p.initialized.Load() {
+		return nil
+	}
 
-	if p.initialized {
+	p.initMu.Lock()
+	defer p.initMu.Unlock()
+
+	if p.initialized.Load() {
 		return nil
 	}
 
@@ -70,19 +84,19 @@ func (p *cs3) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	p.initialized = true
+	p.initialized.Store(true)
 
 	return nil
 }
 
 func (p *cs3) Read(ctx context.Context) (persistence.PublicShares, error) {
+	if !p.initialized.Load() {
+		return nil, fmt.Errorf("not initialized")
+	}
+
 	// We use the Lock because the read function updates the cache. So most time operations should be fast.
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	if !p.initialized {
-		return nil, fmt.Errorf("not initialized")
-	}
 
 	info, err := p.s.Stat(ctx, "publicshares.json")
 	if err != nil {
@@ -107,12 +121,13 @@ func (p *cs3) Read(ctx context.Context) (persistence.PublicShares, error) {
 }
 
 func (p *cs3) Write(ctx context.Context, db persistence.PublicShares) error {
+	if !p.initialized.Load() {
+		return fmt.Errorf("not initialized")
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.initialized {
-		return fmt.Errorf("not initialized")
-	}
 	dbAsJSON, err := json.Marshal(db)
 	if err != nil {
 		return err
