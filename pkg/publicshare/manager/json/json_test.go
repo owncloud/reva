@@ -276,6 +276,61 @@ var _ = Describe("Json", func() {
 				Expect(ps[0].ResourceId).To(Equal(sharedResource.Id))
 			})
 
+			It("serves concurrent readers and writers without racing", func() {
+				// This doesn't assert much beyond "no error" - its real job is to
+				// give `go test -race` enough concurrent traffic through the
+				// manager's RWMutex and the cs3 persistence's own internal mutex
+				// to catch a regression of either lock being removed or a
+				// persistence Read() result being aliased across goroutines.
+				const writers = 4
+				const readers = 4
+				const perWorker = 25
+
+				var wg sync.WaitGroup
+				createErrs := make(chan error, writers*perWorker)
+
+				wg.Add(writers)
+				for range writers {
+					go func() {
+						defer wg.Done()
+						for range perWorker {
+							if _, err := m.CreatePublicShare(ctx, user1, sharedResource, grant); err != nil {
+								createErrs <- err
+							}
+						}
+					}()
+				}
+
+				wg.Add(readers)
+				for range readers {
+					go func() {
+						defer wg.Done()
+						missingRef := &link.PublicShareReference{
+							Spec: &link.PublicShareReference_Id{Id: &link.PublicShareId{OpaqueId: "missing"}},
+						}
+						for range perWorker {
+							_, _ = m.ListPublicShares(ctx, user1, nil, false)
+							_, _ = m.GetPublicShare(ctx, user1, missingRef, false)
+							_, _ = m.GetPublicShareByToken(ctx, "missing-token", nil, false)
+
+							sharesChan := make(chan *publicshare.WithPassword)
+							go func() {
+								for range sharesChan {
+								}
+							}()
+							_ = m.(publicshare.DumpableManager).Dump(ctx, sharesChan)
+							close(sharesChan)
+						}
+					}()
+				}
+
+				wg.Wait()
+				close(createErrs)
+				for err := range createErrs {
+					Expect(err).ToNot(HaveOccurred())
+				}
+			})
+
 			It("refreshes its cache before writing new data", func() {
 				_, err := m.CreatePublicShare(ctx, user1, sharedResource, grant)
 				Expect(err).ToNot(HaveOccurred())
@@ -297,6 +352,62 @@ var _ = Describe("Json", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(len(ps)).To(Equal(1)) // Make sure the first created public share is gone
 			})
+		})
+	})
+
+	Context("with a memory persistence layer", func() {
+		// Unlike cs3, the memory backend has no lock of its own - Read/Write
+		// rely entirely on persistence.Copy plus the manager's own RWMutex
+		// for safety. This is the test that would catch persistence.Copy
+		// being dropped from memory.Read.
+		BeforeEach(func() {
+			var err error
+			m, err = json.NewMemory(map[string]interface{}{})
+			Expect(err).ToNot(HaveOccurred())
+
+			ctx = ctxpkg.ContextSetUser(context.Background(), user1)
+		})
+
+		It("serves concurrent readers and writers without racing", func() {
+			const writers = 4
+			const readers = 4
+			const perWorker = 25
+
+			var wg sync.WaitGroup
+			createErrs := make(chan error, writers*perWorker)
+
+			wg.Add(writers)
+			for range writers {
+				go func() {
+					defer wg.Done()
+					for range perWorker {
+						if _, err := m.CreatePublicShare(ctx, user1, sharedResource, grant); err != nil {
+							createErrs <- err
+						}
+					}
+				}()
+			}
+
+			wg.Add(readers)
+			for range readers {
+				go func() {
+					defer wg.Done()
+					missingRef := &link.PublicShareReference{
+						Spec: &link.PublicShareReference_Id{Id: &link.PublicShareId{OpaqueId: "missing"}},
+					}
+					for range perWorker {
+						_, _ = m.ListPublicShares(ctx, user1, nil, false)
+						_, _ = m.GetPublicShare(ctx, user1, missingRef, false)
+						_, _ = m.GetPublicShareByToken(ctx, "missing-token", nil, false)
+					}
+				}()
+			}
+
+			wg.Wait()
+			close(createErrs)
+			for err := range createErrs {
+				Expect(err).ToNot(HaveOccurred())
+			}
 		})
 	})
 })
