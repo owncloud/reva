@@ -312,7 +312,15 @@ func (c *Cache) syncIfStale(ctx context.Context, userID string) error {
 	case errtypes.NotFound:
 		span.SetStatus(codes.Ok, "")
 		if err := c.persist(ctx, userID); err != nil {
-			log.Warn().Err(err).Msg("failed to create empty received share cache file")
+			switch err.(type) {
+			case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly, errtypes.InternalError:
+				// another replica already created (or is creating) the file, or a transient
+				// storage error occurred; the next sync will pick up the real state.
+				log.Warn().Err(err).Msg("bootstrap persist lost race or hit a transient error, will retry on next sync")
+			default:
+				log.Error().Err(err).Msg("failed to create empty received share cache file")
+				return err
+			}
 		}
 		return nil
 	case errtypes.NotModified:

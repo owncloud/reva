@@ -74,6 +74,68 @@ var _ = Describe("Cache", func() {
 		}
 	})
 
+	Describe("List", func() {
+		Context("when no cache file exists yet", func() {
+			It("creates the cache file on first call", func() {
+				_, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = os.Stat(tmpdir + "/users/" + userID + "/received.json")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("returns empty spaces", func() {
+				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(BeEmpty())
+			})
+
+			It("returns an error when persist fails during NotFound bootstrap with a non-transient error", func() {
+				ps := &permissionDeniedStorage{Storage: storage}
+				c2 := receivedsharecache.New(ps, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).To(HaveOccurred())
+				Expect(atomic.LoadInt32(&ps.uploads)).To(Equal(int32(1)))
+			})
+
+			It("does not error when bootstrap persist loses a CAS race (AlreadyExists)", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(1)))
+			})
+
+			It("is readable by a fresh cache instance after first call", func() {
+				_, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+
+				// a new cache instance must be able to read the bootstrapped file
+				c2 := receivedsharecache.New(storage, 0*time.Second)
+				spaces, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(BeEmpty())
+			})
+
+			It("allows adding a share after bootstrap", func() {
+				_, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+
+				rs := &collaboration.ReceivedShare{
+					Share: share,
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				}
+				Expect(c.Add(ctx, userID, spaceID, rs)).To(Succeed())
+
+				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces[spaceID].States).To(HaveKey(shareID))
+			})
+		})
+	})
+
 	Describe("Add", func() {
 		It("adds an entry", func() {
 			rs := &collaboration.ReceivedShare{
@@ -237,6 +299,18 @@ type alwaysFailStorage struct {
 func (a *alwaysFailStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
 	atomic.AddInt32(&a.uploads, 1)
 	return nil, errtypes.PreconditionFailed("injected")
+}
+
+// permissionDeniedStorage always fails Upload with a non-transient error, unlike
+// alwaysFailStorage's PreconditionFailed which mimics a benign CAS race loss.
+type permissionDeniedStorage struct {
+	metadata.Storage
+	uploads int32
+}
+
+func (p *permissionDeniedStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	atomic.AddInt32(&p.uploads, 1)
+	return nil, errtypes.PermissionDenied("injected")
 }
 
 // flakyInternalErrorStorage fails Upload with errtypes.InternalError a fixed
