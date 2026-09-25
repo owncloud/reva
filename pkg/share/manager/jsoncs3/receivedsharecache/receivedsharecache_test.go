@@ -21,9 +21,12 @@ package receivedsharecache_test
 import (
 	"context"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 
@@ -154,6 +157,39 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil())
 			})
+
+			It("returns context.Canceled immediately when ctx is already canceled", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+
+				err := c2.Remove(canceled, userID, spaceID, shareID)
+				Expect(err).To(MatchError(context.Canceled))
+				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(0)))
+			})
+
+			It("exits the backoff sleep when ctx is canceled", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				ctx2, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+				defer cancel()
+
+				start := time.Now()
+				_ = c2.Remove(ctx2, userID, spaceID, shareID)
+				Expect(time.Since(start)).To(BeNumerically("<", 200*time.Millisecond))
+			})
+
+			It("retries on errtypes.InternalError like other transient storage errors", func() {
+				fs := &flakyInternalErrorStorage{Storage: storage, failures: 3}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(4))) // 3 failures + 1 success
+			})
 		})
 	})
 })
@@ -201,4 +237,20 @@ type alwaysFailStorage struct {
 func (a *alwaysFailStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
 	atomic.AddInt32(&a.uploads, 1)
 	return nil, errtypes.PreconditionFailed("injected")
+}
+
+// flakyInternalErrorStorage fails Upload with errtypes.InternalError a fixed
+// number of times before delegating to the wrapped Storage.
+type flakyInternalErrorStorage struct {
+	metadata.Storage
+	failures int32 // remaining failures before success
+	uploads  int32
+}
+
+func (a *flakyInternalErrorStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	atomic.AddInt32(&a.uploads, 1)
+	if atomic.AddInt32(&a.failures, -1) >= 0 {
+		return nil, errtypes.InternalError("injected")
+	}
+	return a.Storage.Upload(ctx, req)
 }
