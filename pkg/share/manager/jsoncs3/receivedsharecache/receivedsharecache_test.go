@@ -93,6 +93,24 @@ var _ = Describe("Cache", func() {
 				Expect(spaces).To(BeEmpty())
 			})
 
+			It("returns an error when persist fails during NotFound bootstrap with a non-transient error", func() {
+				ps := &permissionDeniedStorage{Storage: storage}
+				c2 := receivedsharecache.New(ps, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).To(HaveOccurred())
+				Expect(atomic.LoadInt32(&ps.uploads)).To(Equal(int32(1)))
+			})
+
+			It("does not error when bootstrap persist loses a CAS race (AlreadyExists)", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(1)))
+			})
+
 			It("is readable by a fresh cache instance after first call", func() {
 				_, err := c.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
@@ -312,6 +330,18 @@ type alwaysFailStorage struct {
 func (a *alwaysFailStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
 	atomic.AddInt32(&a.uploads, 1)
 	return nil, errtypes.PreconditionFailed("injected")
+}
+
+// permissionDeniedStorage always fails Upload with a non-transient error, unlike
+// alwaysFailStorage's PreconditionFailed which mimics a benign CAS race loss.
+type permissionDeniedStorage struct {
+	metadata.Storage
+	uploads int32
+}
+
+func (p *permissionDeniedStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	atomic.AddInt32(&p.uploads, 1)
+	return nil, errtypes.PermissionDenied("injected")
 }
 
 // flakyInternalErrorStorage fails Upload with errtypes.InternalError a fixed
