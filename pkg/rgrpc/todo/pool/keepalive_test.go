@@ -19,10 +19,13 @@ import (
 )
 
 func TestGetClientKeepaliveParams(t *testing.T) {
-	t.Run("defaults", func(t *testing.T) {
+	// unset means the operator hasn't opted in, so this package must not
+	// change grpc's own out-of-the-box behavior - grpc's zero-value defaults
+	// apply (Time: effectively never, Timeout: 20s).
+	t.Run("unset env vars defer to grpc's own defaults", func(t *testing.T) {
 		kp := GetClientKeepaliveParams()
-		assert.Equal(t, _defaultKeepaliveTime, kp.Time)
-		assert.Equal(t, _defaultKeepaliveTimeout, kp.Timeout)
+		assert.Equal(t, time.Duration(math.MaxInt64), kp.Time)
+		assert.Equal(t, 20*time.Second, kp.Timeout)
 		// an idle connection nobody uses does not need to be probed, and not
 		// probing it keeps us clear of a server's ping enforcement policy
 		assert.False(t, kp.PermitWithoutStream)
@@ -37,10 +40,10 @@ func TestGetClientKeepaliveParams(t *testing.T) {
 		assert.Equal(t, 5*time.Second, kp.Timeout)
 	})
 
-	// GRPC_MAX_CONNECTION_AGE, which this replaces, fell back to infinity on a
-	// parse error, so a missing unit suffix silently disabled it. A typo must
-	// only ever get you the working default.
-	t.Run("unparseable values fall back to the default", func(t *testing.T) {
+	// setting the variable at all is an explicit opt-in; a mistyped value is
+	// a configuration mistake, not an opt-out, so it must fall back to this
+	// package's own working default rather than grpc's do-nothing default.
+	t.Run("unparseable values fall back to the working default", func(t *testing.T) {
 		t.Setenv(_clientKeepaliveTimeEnv, "30")
 		t.Setenv(_clientKeepaliveTimeoutEnv, "not a duration")
 
@@ -49,18 +52,19 @@ func TestGetClientKeepaliveParams(t *testing.T) {
 		assert.Equal(t, _defaultKeepaliveTimeout, kp.Timeout)
 	})
 
-	t.Run("negative values fall back to the default", func(t *testing.T) {
+	t.Run("negative values fall back to the working default", func(t *testing.T) {
 		t.Setenv(_clientKeepaliveTimeEnv, "-1s")
 
 		assert.Equal(t, _defaultKeepaliveTime, GetClientKeepaliveParams().Time)
 	})
 
-	// the deliberate escape hatch: grpc raises any interval below 10s to 10s,
-	// so 0 cannot mean "off" - it has to be spelled as an infinite interval
-	t.Run("zero disables the pings", func(t *testing.T) {
+	// zero is not a usable interval (grpc raises anything below 10s to 10s
+	// anyway) and is no longer a magic "disable" value - it's treated the
+	// same as any other invalid input: the working default.
+	t.Run("zero falls back to the working default", func(t *testing.T) {
 		t.Setenv(_clientKeepaliveTimeEnv, "0")
 
-		assert.Equal(t, time.Duration(math.MaxInt64), GetClientKeepaliveParams().Time)
+		assert.Equal(t, _defaultKeepaliveTime, GetClientKeepaliveParams().Time)
 	})
 }
 
