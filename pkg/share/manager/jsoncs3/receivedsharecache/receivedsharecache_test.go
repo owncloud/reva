@@ -171,7 +171,7 @@ var _ = Describe("Cache", func() {
 
 			// barrier releases all 15 Upload calls at once — every replica is a loser
 			// except one, maximising retry pressure on a single shared file.
-			bs := newBarrierStorage(storage, numReplicas)
+			bs := metadata.NewBarrierStorage(storage, numReplicas)
 			replicas := make([]receivedsharecache.Cache, numReplicas)
 			for i := range replicas {
 				replicas[i] = receivedsharecache.New(bs, 0*time.Second)
@@ -307,41 +307,6 @@ var _ = Describe("Cache", func() {
 		})
 	})
 })
-
-// barrierStorage wraps a Storage and holds Upload calls until n goroutines have
-// arrived, then releases them all at once. This makes the concurrent-write race
-// reproducible regardless of OS goroutine scheduling.
-// mu serializes Upload/Download pairs because DiskStorage.Upload is not atomic
-// on this branch (os.WriteFile, not renameio) — without it a concurrent Download
-// can read a partial file and get a json.SyntaxError.
-type barrierStorage struct {
-	metadata.Storage
-	mu        sync.Mutex
-	arrived   int32
-	n         int32
-	ready     chan struct{}
-	closeOnce sync.Once
-}
-
-func newBarrierStorage(s metadata.Storage, n int) *barrierStorage {
-	return &barrierStorage{Storage: s, n: int32(n), ready: make(chan struct{})}
-}
-
-func (b *barrierStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	if atomic.AddInt32(&b.arrived, 1) >= b.n {
-		b.closeOnce.Do(func() { close(b.ready) })
-	}
-	<-b.ready
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.Storage.Upload(ctx, req)
-}
-
-func (b *barrierStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.Storage.Download(ctx, req)
-}
 
 type alwaysFailStorage struct {
 	metadata.Storage
