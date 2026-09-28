@@ -454,8 +454,10 @@ func (p *Handler) propfindResponse(ctx context.Context, w http.ResponseWriter, r
 	ctx, span := appctx.GetTracerProvider(r.Context()).Tracer(tracerName).Start(ctx, "propfind_response")
 	defer span.End()
 
-	linkshares := p.resolveLinkshares(ctx, w, namespace, pf, resourceInfos, log)
-
+	var linkshares map[string]struct{}
+	if !p.c.DisablePropfindPublicLinkResolution {
+		linkshares = p.resolveLinkshares(ctx, w, namespace, pf, resourceInfos, log)
+	}
 	prefer := net.ParsePrefer(r.Header.Get(net.HeaderPrefer))
 	returnMinimal := prefer[net.HeaderPreferReturn] == "minimal"
 
