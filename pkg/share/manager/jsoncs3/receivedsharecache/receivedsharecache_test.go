@@ -20,6 +20,7 @@ package receivedsharecache_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -202,6 +203,42 @@ var _ = Describe("Cache", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(spaces[spaceID]).ToNot(BeNil())
 			Expect(spaces[spaceID].States).To(HaveKey("share-0"))
+		})
+
+		It("preserves every share when 40 replicas write concurrently through the real disk lock", func() {
+			const numReplicas = 40
+
+			replicas := make([]receivedsharecache.Cache, numReplicas)
+			for i := range replicas {
+				replicas[i] = receivedsharecache.New(storage, 0*time.Second)
+			}
+
+			errs := make([]error, numReplicas)
+			var wg sync.WaitGroup
+			for i := 0; i < numReplicas; i++ {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					rs := &collaboration.ReceivedShare{
+						Share: &collaboration.Share{
+							Id: &collaboration.ShareId{OpaqueId: fmt.Sprintf("share-%d", idx)},
+						},
+						State: collaboration.ShareState_SHARE_STATE_PENDING,
+					}
+					errs[idx] = replicas[idx].Add(ctx, userID, spaceID, rs)
+				}(i)
+			}
+			wg.Wait()
+			for i, err := range errs {
+				Expect(err).ToNot(HaveOccurred(), "replica %d failed", i)
+			}
+
+			fresh := receivedsharecache.New(storage, 0*time.Second)
+			spaces, err := fresh.List(ctx, userID)
+			Expect(err).ToNot(HaveOccurred())
+			for i := 0; i < numReplicas; i++ {
+				Expect(spaces[spaceID].States).To(HaveKey(fmt.Sprintf("share-%d", i)), "missing share-%d", i)
+			}
 		})
 	})
 
