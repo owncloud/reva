@@ -43,24 +43,65 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// slowReadPersistence is a fake persistence.Persistence whose Read blocks
-// for a fixed delay, standing in for a network round trip such as the cs3
-// persistence layer's Stat/SimpleDownload against metadata.CS3. It has no
-// state of its own to protect - it exists to let a test observe whether
-// concurrent manager calls overlap during that delay.
-type slowReadPersistence struct {
-	delay time.Duration
+// barrierPersistence is a fake persistence.Persistence standing in for one
+// whose Read is a network round trip, such as the cs3 layer's Stat and
+// SimpleDownload against metadata.CS3. Its Read parks until the expected number
+// of callers are inside it at once and records how many ever were, which turns
+// "do these calls overlap?" into a counter the test can assert on rather than
+// an elapsed time it has to interpret. A loaded CI runner slows every caller
+// equally and so cannot change the answer.
+type barrierPersistence struct {
+	expected int
+
+	mu            sync.Mutex
+	concurrent    int
+	maxConcurrent int
+
+	releaseOnce sync.Once
+	release     chan struct{}
 }
 
-func (p *slowReadPersistence) Init(_ context.Context) error { return nil }
+func newBarrierPersistence(expected int) *barrierPersistence {
+	return &barrierPersistence{expected: expected, release: make(chan struct{})}
+}
 
-func (p *slowReadPersistence) Read(_ context.Context) (persistence.PublicShares, error) {
-	time.Sleep(p.delay)
+func (p *barrierPersistence) Init(_ context.Context) error { return nil }
+
+func (p *barrierPersistence) Read(_ context.Context) (persistence.PublicShares, error) {
+	p.mu.Lock()
+	p.concurrent++
+	if p.concurrent > p.maxConcurrent {
+		p.maxConcurrent = p.concurrent
+	}
+	if p.concurrent == p.expected {
+		p.releaseOnce.Do(func() { close(p.release) })
+	}
+	p.mu.Unlock()
+
+	select {
+	case <-p.release:
+	case <-time.After(10 * time.Second):
+		// Nobody joined us, so the callers are being serialized somewhere above.
+		// Open the gate for good, or every queued caller would wait out its own
+		// timeout and the test would take expected*timeout to report it.
+		p.releaseOnce.Do(func() { close(p.release) })
+	}
+
+	p.mu.Lock()
+	p.concurrent--
+	p.mu.Unlock()
+
 	return persistence.PublicShares{}, nil
 }
 
-func (p *slowReadPersistence) Write(_ context.Context, _ persistence.PublicShares) error {
+func (p *barrierPersistence) Write(_ context.Context, _ persistence.PublicShares) error {
 	return nil
+}
+
+func (p *barrierPersistence) peakConcurrency() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxConcurrent
 }
 
 var _ = Describe("Json", func() {
@@ -360,17 +401,15 @@ var _ = Describe("Json", func() {
 				// whichever call was already inside persistence.Read - silently
 				// undoing the switch from sync.Mutex to sync.RWMutex. A wrong
 				// re-introduction of that lock wouldn't fail -race (it's a
-				// correctly-used lock), only show up as this test timing out.
-				const (
-					delay       = 150 * time.Millisecond
-					concurrency = 8
-				)
+				// correctly-used lock), only show up here as the reads no longer
+				// managing to be inside persistence.Read at the same time.
+				const concurrency = 8
 
-				slow, err := json.New("https://localhost:9200", 11, 60, false, &slowReadPersistence{delay: delay})
+				barrier := newBarrierPersistence(concurrency)
+				slow, err := json.New("https://localhost:9200", 11, 60, false, barrier)
 				Expect(err).ToNot(HaveOccurred())
 
 				var wg sync.WaitGroup
-				start := time.Now()
 				wg.Add(concurrency)
 				for range concurrency {
 					go func() {
@@ -380,11 +419,9 @@ var _ = Describe("Json", func() {
 				}
 				wg.Wait()
 
-				// Fully serialized would take concurrency*delay (1.2s here).
-				// Overlapping reads should finish close to a single delay - allow
-				// generous slack for scheduling noise without letting a real
-				// regression pass.
-				Expect(time.Since(start)).To(BeNumerically("<", delay*3))
+				Expect(barrier.peakConcurrency()).To(Equal(concurrency),
+					"only %d of %d ListPublicShares calls were ever inside persistence.Read together, so they are being serialized",
+					barrier.peakConcurrency(), concurrency)
 			})
 
 			It("refreshes its cache before writing new data", func() {

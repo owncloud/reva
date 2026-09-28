@@ -13,18 +13,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// slowStatStorage wraps a real metadata.Storage but adds a fixed delay to
-// Stat, standing in for a slow network round trip (e.g. against a loaded or
-// stalling storage-system). It lets a test observe whether a warm Init
-// overlaps with a concurrent, in-flight Read instead of queuing behind
-// whatever lock Read holds for the duration of that delay.
-type slowStatStorage struct {
+// blockingStatStorage wraps a real metadata.Storage and parks Stat until the
+// test releases it, reporting on entered that it has been reached. That gives a
+// test two exact signals - "Read is now inside Stat, holding whatever lock it
+// took" and "Read may proceed" - instead of a sleep long enough to hope the
+// same thing has happened by now.
+type blockingStatStorage struct {
 	metadata.Storage
-	delay time.Duration
+
+	enteredOnce sync.Once
+	entered     chan struct{}
+	release     chan struct{}
 }
 
-func (s *slowStatStorage) Stat(ctx context.Context, path string) (*provider.ResourceInfo, error) {
-	time.Sleep(s.delay)
+func (s *blockingStatStorage) Stat(ctx context.Context, path string) (*provider.ResourceInfo, error) {
+	s.enteredOnce.Do(func() { close(s.entered) })
+	<-s.release
 	return s.Storage.Stat(ctx, path)
 }
 
@@ -43,31 +47,45 @@ func TestInitDoesNotQueueBehindRead(t *testing.T) {
 	disk, err := metadata.NewDiskStorage(tmpdir)
 	require.NoError(t, err)
 
-	const delay = 200 * time.Millisecond
-	slow := &slowStatStorage{Storage: disk, delay: delay}
+	blocking := &blockingStatStorage{
+		Storage: disk,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
 
-	p := cs3.New(slow)
+	p := cs3.New(blocking)
 	require.NoError(t, p.Init(context.Background()))
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	readDone := make(chan struct{})
 	go func() {
-		defer wg.Done()
+		defer close(readDone)
 		_, _ = p.Read(context.Background())
 	}()
 
-	// Give the Read goroutine time to be inside its (slow) Stat call,
-	// holding mu, before Init races it.
-	time.Sleep(delay / 5)
+	// Read is inside its Stat from here on, so it is holding mu for as long as
+	// we withhold release.
+	<-blocking.entered
 
-	initStart := time.Now()
-	require.NoError(t, p.Init(context.Background()))
-	initElapsed := time.Since(initStart)
+	var initErr error
+	initDone := make(chan struct{})
+	go func() {
+		defer close(initDone)
+		initErr = p.Init(context.Background())
+	}()
 
-	wg.Wait()
-
-	if max := delay / 2; initElapsed > max {
-		t.Fatalf("warm Init queued behind a concurrent Read: took %s while Read's own Stat delay is %s (want < %s)",
-			initElapsed, delay, max)
+	// A warm Init touches nothing but an atomic bool, so it has to return while
+	// Read is still parked. The timeout is only here to break the deadlock a
+	// regression would cause - it is never waited on when the test passes, so
+	// it can be generous without weakening the assertion.
+	select {
+	case <-initDone:
+		require.NoError(t, initErr)
+	case <-time.After(10 * time.Second):
+		close(blocking.release)
+		<-readDone
+		t.Fatal("warm Init blocked on a Read that is parked inside Stat, so it is contending for Read's lock")
 	}
+
+	close(blocking.release)
+	<-readDone
 }
