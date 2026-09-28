@@ -100,7 +100,7 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 	defer unlock()
 
 	if _, ok := c.ReceivedSpaces.Load(userID); !ok {
-		err := c.syncIfStale(ctx, userID)
+		err := c.syncIfStale(ctx, userID, true)
 		if err != nil {
 			return err
 		}
@@ -143,7 +143,7 @@ func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*Stat
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 	defer unlock()
 
-	err := c.syncIfStale(ctx, userID)
+	err := c.syncIfStale(ctx, userID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 	unlock := c.lockUser(userID)
 	defer unlock()
 
-	err := c.syncIfStale(ctx, userID)
+	err := c.syncIfStale(ctx, userID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -247,9 +247,9 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		case nil:
 			return nil
 		case errtypes.Aborted:
-			// this is the expected status code from the server when the if-match etag check fails
+			// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
 			// continue with sync below
-			log.Debug().Int("attempt", attempt).Msg("CAS failed: Aborted (etag changed), retrying")
+			log.Debug().Int("attempt", attempt).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
 		case errtypes.PreconditionFailed:
 			// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
 			// continue with sync below
@@ -277,7 +277,8 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			timer.Stop()
 			return ctx.Err()
 		}
-		if serr := c.syncIfStale(ctx, userID); serr != nil {
+		// skip bootstrap: persistFunc issues its own real-data upload next attempt
+		if serr := c.syncIfStale(ctx, userID, false); serr != nil {
 			if !isSyncTransient(serr) {
 				log.Error().Int("attempt", attempt).Err(serr).Msg("lost update: re-read failed, aborting")
 				return serr
@@ -289,7 +290,8 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 }
 
 // syncIfStale pulls the authoritative state from storage when the local replica is stale; caller must hold the user lock.
-func (c *Cache) syncIfStale(ctx context.Context, userID string) error {
+// bootstrapOnNotFound: pass false when the caller is about to do its own real-data write right after.
+func (c *Cache) syncIfStale(ctx context.Context, userID string, bootstrapOnNotFound bool) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "SyncIfStale")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
@@ -311,11 +313,13 @@ func (c *Cache) syncIfStale(ctx context.Context, userID string) error {
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
 		span.SetStatus(codes.Ok, "")
+		if !bootstrapOnNotFound {
+			return nil
+		}
 		if err := c.persist(ctx, userID); err != nil {
 			switch err.(type) {
 			case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly, errtypes.InternalError:
-				// another replica already created (or is creating) the file, or a transient
-				// storage error occurred; the next sync will pick up the real state.
+				// lost a CAS race or hit a transient error; next sync picks up the real state
 				log.Warn().Err(err).Msg("bootstrap persist lost race or hit a transient error, will retry on next sync")
 			default:
 				log.Error().Err(err).Msg("failed to create empty received share cache file")
