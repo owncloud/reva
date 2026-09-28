@@ -165,6 +165,58 @@ var _ = Describe("Cache", func() {
 		})
 	})
 
+	Describe("concurrent writes from multiple cache instances", func() {
+		It("preserves the share when 15 replicas write the same file simultaneously", func() {
+			const numReplicas = 15
+
+			// barrier releases all 15 Upload calls at once — every replica is a loser
+			// except one, maximising retry pressure on a single shared file.
+			bs := newBarrierStorage(storage, numReplicas)
+			replicas := make([]receivedsharecache.Cache, numReplicas)
+			for i := range replicas {
+				replicas[i] = receivedsharecache.New(bs, 0*time.Second)
+			}
+
+			errs := make([]error, numReplicas)
+			var wg sync.WaitGroup
+			for i := 0; i < numReplicas; i++ {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					rs := &collaboration.ReceivedShare{
+						Share: &collaboration.Share{
+							Id: &collaboration.ShareId{OpaqueId: "share-0"},
+						},
+						State: collaboration.ShareState_SHARE_STATE_PENDING,
+					}
+					errs[idx] = replicas[idx].Add(ctx, userID, spaceID, rs)
+				}(i)
+			}
+			wg.Wait()
+			for i, err := range errs {
+				Expect(err).ToNot(HaveOccurred(), "replica %d failed", i)
+			}
+
+			fresh := receivedsharecache.New(storage, 0*time.Second)
+			spaces, err := fresh.List(ctx, userID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces[spaceID]).ToNot(BeNil())
+			Expect(spaces[spaceID].States).To(HaveKey("share-0"))
+		})
+	})
+
+	Describe("retryPersist's post-failure resync", func() {
+		It("does not perform a redundant bootstrap upload when no file exists yet", func() {
+			fs := &failFirstUploadStorage{Storage: storage}
+			c2 := receivedsharecache.New(fs, 0*time.Second)
+
+			err := c2.Remove(ctx, userID, spaceID, shareID)
+			Expect(err).ToNot(HaveOccurred())
+			// 1 forced failure + 1 real write; no extra bootstrap upload from the resync in between.
+			Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+		})
+	})
+
 	Describe("with an existing entry", func() {
 		BeforeEach(func() {
 			rs := &collaboration.ReceivedShare{
@@ -301,8 +353,20 @@ func (a *alwaysFailStorage) Upload(_ context.Context, _ metadata.UploadRequest) 
 	return nil, errtypes.PreconditionFailed("injected")
 }
 
-// permissionDeniedStorage always fails Upload with a non-transient error, unlike
-// alwaysFailStorage's PreconditionFailed which mimics a benign CAS race loss.
+// failFirstUploadStorage fails the first Upload with a CAS conflict, then delegates.
+type failFirstUploadStorage struct {
+	metadata.Storage
+	uploads int32
+}
+
+func (f *failFirstUploadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if atomic.AddInt32(&f.uploads, 1) == 1 {
+		return nil, errtypes.Aborted("injected")
+	}
+	return f.Storage.Upload(ctx, req)
+}
+
+// permissionDeniedStorage fails Upload with a non-transient error (unlike alwaysFailStorage).
 type permissionDeniedStorage struct {
 	metadata.Storage
 	uploads int32
@@ -313,8 +377,7 @@ func (p *permissionDeniedStorage) Upload(_ context.Context, _ metadata.UploadReq
 	return nil, errtypes.PermissionDenied("injected")
 }
 
-// flakyInternalErrorStorage fails Upload with errtypes.InternalError a fixed
-// number of times before delegating to the wrapped Storage.
+// flakyInternalErrorStorage fails Upload with InternalError N times, then delegates.
 type flakyInternalErrorStorage struct {
 	metadata.Storage
 	failures int32 // remaining failures before success
