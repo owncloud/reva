@@ -22,13 +22,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"path"
 	"path/filepath"
 	"sync"
 	"time"
 
+	backoff "github.com/cenkalti/backoff/v5"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/appctx"
@@ -235,55 +235,73 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		Str("userID", userID).
 		Str("spaceID", spaceID).Logger()
 
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 500 * time.Microsecond
+	bo.Multiplier = 2.0
+	bo.RandomizationFactor = 1.0
+	bo.MaxInterval = 50 * time.Millisecond
+
 	var err error
+	needsResync := false
 	for attempt := 0; attempt < 20; attempt++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		err = persistFunc()
-		switch err.(type) {
-		case nil:
-			return nil
-		case errtypes.Aborted:
-			// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
-			// continue with sync below
-			log.Debug().Int("attempt", attempt).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
-		case errtypes.PreconditionFailed:
-			// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
-			// continue with sync below
-			log.Debug().Int("attempt", attempt).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
-		case errtypes.AlreadyExists:
-			// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
-			// Thas happens when the cache thinks there is no file.
-			// continue with sync below
-			log.Debug().Int("attempt", attempt).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
-		case errtypes.TooEarly:
-			// storage-system has an upload in progress for this node; wait for it to finish
-			// continue with sync below
-			log.Debug().Int("attempt", attempt).Msg("CAS failed: TooEarly (upload in progress), retrying")
-		case errtypes.InternalError:
-			// transient backend error; isSyncTransient treats this the same way below, so retry here too
-			log.Debug().Int("attempt", attempt).Err(err).Msg("persist failed: InternalError (transient), retrying")
-		default:
-			log.Error().Int("attempt", attempt).Err(err).Msg("persisting received share failed, giving up")
-			return err
+
+		if needsResync {
+			// a previous persist attempt failed and the re-read to pick up fresh state
+			// was itself transient; keep retrying the re-read instead of hammering
+			// persistFunc again with the same stale in-memory rss/etag
+			err = c.syncIfStale(ctx, userID, false)
+			if err == nil {
+				needsResync = false
+				continue // fresh state is in memory; retry persistFunc next attempt, no need to wait
+			}
+			if !isSyncTransient(err) {
+				log.Error().Int("attempt", attempt).Err(err).Msg("lost update: re-read failed, aborting")
+				return err
+			}
+			log.Warn().Int("attempt", attempt).Err(err).Msg("lost update: re-read before retry")
+		} else {
+			err = persistFunc()
+			switch err.(type) {
+			case nil:
+				return nil
+			case errtypes.Aborted:
+				// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
+				// continue with sync below
+				log.Debug().Int("attempt", attempt).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
+			case errtypes.PreconditionFailed:
+				// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
+				// continue with sync below
+				log.Debug().Int("attempt", attempt).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
+			case errtypes.AlreadyExists:
+				// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
+				// Thas happens when the cache thinks there is no file.
+				// continue with sync below
+				log.Debug().Int("attempt", attempt).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
+			case errtypes.TooEarly:
+				// storage-system has an upload in progress for this node; wait for it to finish
+				// continue with sync below
+				log.Debug().Int("attempt", attempt).Msg("CAS failed: TooEarly (upload in progress), retrying")
+			case errtypes.InternalError:
+				// transient backend error; isSyncTransient treats this the same way below, so retry here too
+				log.Debug().Int("attempt", attempt).Err(err).Msg("persist failed: InternalError (transient), retrying")
+			default:
+				log.Error().Int("attempt", attempt).Err(err).Msg("persisting received share failed, giving up")
+				return err
+			}
+			needsResync = true
 		}
-		timer := time.NewTimer(expBackoff(attempt))
+
+		timer := time.NewTimer(bo.NextBackOff())
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
-		}
-		// skip bootstrap: persistFunc issues its own real-data upload next attempt
-		if serr := c.syncIfStale(ctx, userID, false); serr != nil {
-			if !isSyncTransient(serr) {
-				log.Error().Int("attempt", attempt).Err(serr).Msg("lost update: re-read failed, aborting")
-				return serr
-			}
-			log.Warn().Int("attempt", attempt).Err(serr).Msg("lost update: re-read before retry")
 		}
 	}
 	return err
@@ -399,17 +417,6 @@ func (c *Cache) persist(ctx context.Context, userID string) error {
 	rss.etag = res.Etag
 	span.SetStatus(codes.Ok, "")
 	return nil
-}
-
-// expBackoff returns full-jitter delay: rand(0, min(100ms, 2^attempt ms)).
-// attempt:  0    1    2    3    4    5    6    7+
-// max ms:   1    2    4    8   16   32   64  100
-func expBackoff(attempt int) time.Duration {
-	base := time.Duration(1<<uint(attempt)) * time.Millisecond
-	if base > 100*time.Millisecond {
-		base = 100 * time.Millisecond
-	}
-	return time.Duration(rand.Int64N(int64(base) + 1))
 }
 
 func userJSONPath(userID string) string {
