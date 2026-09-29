@@ -31,6 +31,7 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/filelocks"
 )
 
 // Disk represents a disk metadata storage
@@ -126,7 +127,7 @@ func (disk *Disk) Upload(_ context.Context, req UploadRequest) (*UploadResponse,
 			}
 		}
 	}
-	err := os.WriteFile(p, req.Content, 0644)
+	err = os.WriteFile(p, req.Content, 0644)
 	if err != nil {
 		return nil, err
 	}
