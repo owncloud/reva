@@ -341,6 +341,20 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(4))) // 3 failures + 1 success
 			})
+
+			It("does not reuse stale state when the post-failure resync itself fails transiently", func() {
+				fs := &flakyDownloadStorage{Storage: storage, downloadFailures: 2}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+
+				// exactly one upload before the resync, one after it recovers — never
+				// interleaved with the still-failing downloads, which is what the bug did
+				Expect(fs.calls).To(Equal([]string{"upload", "download", "download", "download", "upload"}))
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(3)))
+			})
 		})
 	})
 })
@@ -392,4 +406,41 @@ func (a *flakyInternalErrorStorage) Upload(ctx context.Context, req metadata.Upl
 		return nil, errtypes.InternalError("injected")
 	}
 	return a.Storage.Upload(ctx, req)
+}
+
+// flakyDownloadStorage fails the first Upload with a CAS conflict (to enter
+// retryPersist's post-failure resync path), then fails the subsequent Download
+// calls with InternalError downloadFailures times before delegating. It records
+// the call sequence so a test can prove persistFunc/Upload is never re-invoked
+// with stale state while the resync is still failing transiently.
+type flakyDownloadStorage struct {
+	metadata.Storage
+
+	downloadFailures int32 // remaining transient Download failures before success
+	uploads          int32
+	downloads        int32
+
+	mu    sync.Mutex
+	calls []string // "upload" / "download" in call order
+}
+
+func (f *flakyDownloadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "upload")
+	f.mu.Unlock()
+	if atomic.AddInt32(&f.uploads, 1) == 1 {
+		return nil, errtypes.Aborted("injected")
+	}
+	return f.Storage.Upload(ctx, req)
+}
+
+func (f *flakyDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "download")
+	f.mu.Unlock()
+	atomic.AddInt32(&f.downloads, 1)
+	if atomic.AddInt32(&f.downloadFailures, -1) >= 0 {
+		return nil, errtypes.InternalError("injected")
+	}
+	return f.Storage.Download(ctx, req)
 }
