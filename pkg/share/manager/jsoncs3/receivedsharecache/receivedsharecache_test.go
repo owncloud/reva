@@ -333,6 +333,14 @@ var _ = Describe("Cache", func() {
 				Expect(time.Since(start)).To(BeNumerically("<", 200*time.Millisecond))
 			})
 
+			It("returns an error when the retry budget is exhausted, never a false success", func() {
+				as := &alwaysFailStorage{Storage: storage}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).To(HaveOccurred(), "persist never succeeded; retryPersist must not report success")
+			})
+
 			It("retries on errtypes.InternalError like other transient storage errors", func() {
 				fs := &flakyInternalErrorStorage{Storage: storage, failures: 3}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
