@@ -254,16 +254,19 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			// a previous persist attempt failed and the re-read to pick up fresh state
 			// was itself transient; keep retrying the re-read instead of hammering
 			// persistFunc again with the same stale in-memory rss/etag
-			err = c.syncIfStale(ctx, userID, false)
-			if err == nil {
+			serr := c.syncIfStale(ctx, userID, false)
+			if serr == nil {
 				needsResync = false
 				continue // fresh state is in memory; retry persistFunc next attempt, no need to wait
 			}
-			if !isSyncTransient(err) {
-				log.Error().Int("attempt", attempt).Err(err).Msg("lost update: re-read failed, aborting")
-				return err
+			// keep err at its last real (persist or resync) failure; never let a
+			// budget-exhausting resync success clobber it into a false nil return
+			err = serr
+			if !isSyncTransient(serr) {
+				log.Error().Int("attempt", attempt).Err(serr).Msg("lost update: re-read failed, aborting")
+				return serr
 			}
-			log.Warn().Int("attempt", attempt).Err(err).Msg("lost update: re-read before retry")
+			log.Warn().Int("attempt", attempt).Err(serr).Msg("lost update: re-read before retry")
 		} else {
 			err = persistFunc()
 			switch err.(type) {
