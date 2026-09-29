@@ -22,6 +22,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -40,6 +41,38 @@ func TestAcquireReadLock_Errors(t *testing.T) {
 	l3, err := acquireLock(file, false)
 	assert.Nil(t, l3)
 	assert.Equal(t, err, ErrAcquireLockFailed)
+}
+
+func TestAcquireWriteLock_DoesNotWedgeAfterExternalContentionClears(t *testing.T) {
+	file, fin, _ := FileFactory()
+	defer fin()
+
+	// speed up the retry loops for this test
+	origCycles, origFactor := _lockCyclesValue, _lockCycleDurationFactor
+	_lockCyclesValue, _lockCycleDurationFactor = 3, 1
+	defer func() { _lockCyclesValue, _lockCycleDurationFactor = origCycles, origFactor }()
+
+	// simulate a real external OS-level holder of the lock (e.g. another
+	// process), independent of this package's local bookkeeping.
+	external := flock.New(FlockFile(file))
+	ok, err := external.TryLock()
+	assert.True(t, ok)
+	assert.Nil(t, err)
+
+	// contended: must fail while the external holder is locked.
+	l1, err := acquireLock(file, true)
+	assert.Nil(t, l1)
+	assert.Equal(t, ErrAcquireLockFailed, err)
+
+	// release the external holder: nothing real is locking the file anymore.
+	assert.Nil(t, external.Unlock())
+
+	// must now succeed, since no one holds the real lock. If this fails,
+	// acquireLock's earlier failed attempt leaked its entry in _localLocks
+	// and every subsequent call for this path is permanently wedged.
+	l2, err := acquireLock(file, true)
+	assert.NotNil(t, l2, "acquireLock is permanently wedged after a transient external lock cleared")
+	assert.Nil(t, err)
 }
 
 // utils
