@@ -11,7 +11,6 @@ import (
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
 	v1beta11 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/owncloud/reva/v2/pkg/appctx"
 	ruser "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/events"
 	"github.com/owncloud/reva/v2/pkg/events/stream"
@@ -69,7 +68,7 @@ var _ = Describe("Async file uploads", Ordered, func() {
 		firstContent  = []byte("0123456789")
 		secondContent = []byte("01234567890123456789")
 
-		ctx context.Context
+		ctx = ruser.ContextSetUser(context.Background(), user)
 
 		pub      chan interface{}
 		con      chan interface{}
@@ -130,9 +129,6 @@ var _ = Describe("Async file uploads", Ordered, func() {
 	)
 
 	BeforeEach(func() {
-		zl := zerolog.New(os.Stdout).Level(zerolog.DebugLevel)
-		ctx = appctx.WithLogger(ruser.ContextSetUser(context.Background(), user), &zl)
-
 		// setup test
 		tmpRoot, err := helpers.TempDir("reva-unit-tests-*-root")
 		Expect(err).ToNot(HaveOccurred())
