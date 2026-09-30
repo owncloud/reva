@@ -30,6 +30,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -375,6 +377,15 @@ var _ = Describe("Cache", func() {
 				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(15)))
 			})
 
+			It("retries a raw gRPC Unavailable error the way CS3's Upload actually returns it", func() {
+				fs := &flakyUnavailableStorage{Storage: storage}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred(), "a transient gRPC transport error must be retried, not treated as fatal")
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+			})
+
 			It("retries on errtypes.InternalError like other transient storage errors", func() {
 				fs := &flakyInternalErrorStorage{Storage: storage, failures: 3}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
@@ -461,6 +472,19 @@ func (n *notFoundThenLoseRaceStorage) Download(ctx context.Context, req metadata
 		return nil, errtypes.NotFound("injected")
 	}
 	return n.Storage.Download(ctx, req)
+}
+
+// flakyUnavailableStorage fails Upload once with a raw gRPC transport error, then delegates.
+type flakyUnavailableStorage struct {
+	metadata.Storage
+	uploads int32
+}
+
+func (f *flakyUnavailableStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if atomic.AddInt32(&f.uploads, 1) == 1 {
+		return nil, status.Error(codes.Unavailable, "backend temporarily unavailable")
+	}
+	return f.Storage.Upload(ctx, req)
 }
 
 // flakyAbortedStorage fails Upload with a CAS conflict N times, then delegates.
