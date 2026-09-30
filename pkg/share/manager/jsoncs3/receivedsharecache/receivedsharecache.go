@@ -241,9 +241,13 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 	bo.RandomizationFactor = 1.0
 	bo.MaxInterval = 50 * time.Millisecond
 
+	const maxPersistAttempts = 20
+	const maxIterations = 2 * maxPersistAttempts
+
 	var err error
 	needsResync := false
-	for attempt := 0; attempt < 20; attempt++ {
+	persistAttempts := 0
+	for iter := 0; iter < maxIterations && persistAttempts < maxPersistAttempts; iter++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -263,11 +267,12 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			// budget-exhausting resync success clobber it into a false nil return
 			err = serr
 			if !isSyncTransient(serr) {
-				log.Error().Int("attempt", attempt).Err(serr).Msg("lost update: re-read failed, aborting")
+				log.Error().Int("attempt", iter).Err(serr).Msg("lost update: re-read failed, aborting")
 				return serr
 			}
-			log.Warn().Int("attempt", attempt).Err(serr).Msg("lost update: re-read before retry")
+			log.Warn().Int("attempt", iter).Err(serr).Msg("lost update: re-read before retry")
 		} else {
+			persistAttempts++
 			err = persistFunc()
 			switch err.(type) {
 			case nil:
@@ -275,25 +280,25 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			case errtypes.Aborted:
 				// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
 				// continue with sync below
-				log.Debug().Int("attempt", attempt).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
+				log.Debug().Int("attempt", iter).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
 			case errtypes.PreconditionFailed:
 				// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
 				// continue with sync below
-				log.Debug().Int("attempt", attempt).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
+				log.Debug().Int("attempt", iter).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
 			case errtypes.AlreadyExists:
 				// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
 				// Thas happens when the cache thinks there is no file.
 				// continue with sync below
-				log.Debug().Int("attempt", attempt).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
+				log.Debug().Int("attempt", iter).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
 			case errtypes.TooEarly:
 				// storage-system has an upload in progress for this node; wait for it to finish
 				// continue with sync below
-				log.Debug().Int("attempt", attempt).Msg("CAS failed: TooEarly (upload in progress), retrying")
+				log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
 			case errtypes.InternalError:
 				// transient backend error; isSyncTransient treats this the same way below, so retry here too
-				log.Debug().Int("attempt", attempt).Err(err).Msg("persist failed: InternalError (transient), retrying")
+				log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: InternalError (transient), retrying")
 			default:
-				log.Error().Int("attempt", attempt).Err(err).Msg("persisting received share failed, giving up")
+				log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
 				return err
 			}
 			needsResync = true
@@ -340,8 +345,8 @@ func (c *Cache) syncIfStale(ctx context.Context, userID string, bootstrapOnNotFo
 		if err := c.persist(ctx, userID); err != nil {
 			switch err.(type) {
 			case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly, errtypes.InternalError:
-				// lost a CAS race or hit a transient error; next sync picks up the real state
-				log.Warn().Err(err).Msg("bootstrap persist lost race or hit a transient error, will retry on next sync")
+				log.Warn().Err(err).Msg("bootstrap persist lost race or hit a transient error, re-reading real state")
+				return c.syncIfStale(ctx, userID, false)
 			default:
 				log.Error().Err(err).Msg("failed to create empty received share cache file")
 				return err
