@@ -102,7 +102,7 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 	defer unlock()
 
 	if _, ok := c.ReceivedSpaces.Load(userID); !ok {
-		err := c.syncIfStaleWithRetry(ctx, userID)
+		err := c.syncWithRetry(ctx, userID)
 		if err != nil {
 			return err
 		}
@@ -145,7 +145,7 @@ func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*Stat
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 	defer unlock()
 
-	err := c.syncIfStaleWithRetry(ctx, userID)
+	err := c.syncWithRetry(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +202,7 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 	unlock := c.lockUser(userID)
 	defer unlock()
 
-	err := c.syncIfStaleWithRetry(ctx, userID)
+	err := c.syncWithRetry(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +227,8 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 
 func isSyncTransient(err error) bool {
 	_, isTooEarly := err.(errtypes.IsTooEarly)
-	return isTooEarly || isTransientGRPCStatus(err)
+	_, isInternal := err.(errtypes.IsInternalError)
+	return isTooEarly || isInternal || isTransientGRPCStatus(err)
 }
 
 // isTransientGRPCStatus catches raw gRPC transport errors that metadata.CS3 never wraps in errtypes.
@@ -273,7 +274,7 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			// a previous persist attempt failed and the re-read to pick up fresh state
 			// was itself transient; keep retrying the re-read instead of hammering
 			// persistFunc again with the same stale in-memory rss/etag
-			serr := c.syncIfStale(ctx, userID, false)
+			serr := c.sync(ctx, userID, false)
 			if serr == nil {
 				needsResync = false
 				continue // fresh state is in memory; retry persistFunc next attempt, no need to wait
@@ -332,9 +333,9 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 	return err
 }
 
-// syncIfStaleWithRetry retries syncIfStale's cold-start sync on transient errors, since
+// syncWithRetry retries sync's cold-start read on transient errors, since
 // Add/Get/List call it directly with no other retry wrapper around it.
-func (c *Cache) syncIfStaleWithRetry(ctx context.Context, userID string) error {
+func (c *Cache) syncWithRetry(ctx context.Context, userID string) error {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 500 * time.Microsecond
 	bo.Multiplier = 2.0
@@ -348,7 +349,7 @@ func (c *Cache) syncIfStaleWithRetry(ctx context.Context, userID string) error {
 			return ctx.Err()
 		default:
 		}
-		err = c.syncIfStale(ctx, userID, true)
+		err = c.sync(ctx, userID, true)
 		if err == nil {
 			return nil
 		}
@@ -366,10 +367,10 @@ func (c *Cache) syncIfStaleWithRetry(ctx context.Context, userID string) error {
 	return err
 }
 
-// syncIfStale pulls the authoritative state from storage when the local replica is stale; caller must hold the user lock.
+// sync pulls the authoritative state from storage; caller must hold the user lock.
 // bootstrapOnNotFound: pass false when the caller is about to do its own real-data write right after.
-func (c *Cache) syncIfStale(ctx context.Context, userID string, bootstrapOnNotFound bool) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "SyncIfStale")
+func (c *Cache) sync(ctx context.Context, userID string, bootstrapOnNotFound bool) error {
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Sync")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 
@@ -397,7 +398,7 @@ func (c *Cache) syncIfStale(ctx context.Context, userID string, bootstrapOnNotFo
 			switch err.(type) {
 			case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly, errtypes.InternalError:
 				log.Warn().Err(err).Msg("bootstrap persist lost race or hit a transient error, re-reading real state")
-				return c.syncIfStale(ctx, userID, false)
+				return c.sync(ctx, userID, false)
 			default:
 				log.Error().Err(err).Msg("failed to create empty received share cache file")
 				return err
