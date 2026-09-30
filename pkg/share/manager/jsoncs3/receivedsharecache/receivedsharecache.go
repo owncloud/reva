@@ -37,6 +37,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	grpccodes "google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // name is the Tracer name used to identify this instrumentation library.
@@ -226,7 +228,21 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 func isSyncTransient(err error) bool {
 	_, isTooEarly := err.(errtypes.IsTooEarly)
 	_, isInternal := err.(errtypes.IsInternalError)
-	return isTooEarly || isInternal
+	return isTooEarly || isInternal || isTransientGRPCStatus(err)
+}
+
+// isTransientGRPCStatus catches raw gRPC transport errors that metadata.CS3 never wraps in errtypes.
+func isTransientGRPCStatus(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case grpccodes.Unavailable, grpccodes.DeadlineExceeded, grpccodes.Canceled, grpccodes.ResourceExhausted:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persistFunc func() error) error {
@@ -274,32 +290,37 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		} else {
 			persistAttempts++
 			err = persistFunc()
-			switch err.(type) {
-			case nil:
+			switch {
+			case err == nil:
 				return nil
-			case errtypes.Aborted:
-				// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
-				// continue with sync below
-				log.Debug().Int("attempt", iter).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
-			case errtypes.PreconditionFailed:
-				// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
-				// continue with sync below
-				log.Debug().Int("attempt", iter).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
-			case errtypes.AlreadyExists:
-				// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
-				// Thas happens when the cache thinks there is no file.
-				// continue with sync below
-				log.Debug().Int("attempt", iter).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
-			case errtypes.TooEarly:
-				// storage-system has an upload in progress for this node; wait for it to finish
-				// continue with sync below
-				log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
-			case errtypes.InternalError:
-				// transient backend error; isSyncTransient treats this the same way below, so retry here too
-				log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: InternalError (transient), retrying")
+			case isTransientGRPCStatus(err):
+				log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: transient gRPC error, retrying")
 			default:
-				log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
-				return err
+				switch err.(type) {
+				case errtypes.Aborted:
+					// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
+					// continue with sync below
+					log.Debug().Int("attempt", iter).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
+				case errtypes.PreconditionFailed:
+					// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
+					// continue with sync below
+					log.Debug().Int("attempt", iter).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
+				case errtypes.AlreadyExists:
+					// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
+					// Thas happens when the cache thinks there is no file.
+					// continue with sync below
+					log.Debug().Int("attempt", iter).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
+				case errtypes.TooEarly:
+					// storage-system has an upload in progress for this node; wait for it to finish
+					// continue with sync below
+					log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
+				case errtypes.InternalError:
+					// transient backend error; isSyncTransient treats this the same way below, so retry here too
+					log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: InternalError (transient), retrying")
+				default:
+					log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
+					return err
+				}
 			}
 			needsResync = true
 		}
