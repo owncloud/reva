@@ -30,8 +30,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -91,6 +89,14 @@ var _ = Describe("Cache", func() {
 				spaces, err := c.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(spaces).To(BeEmpty())
+			})
+
+			It("retries a transient error on the initial sync instead of failing immediately", func() {
+				fs := &flakyTooEarlyDownloadStorage{Storage: storage, failures: 3}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			It("returns an error when persist fails during NotFound bootstrap with a non-transient error", func() {
@@ -477,6 +483,19 @@ func (a *flakyAbortedStorage) Upload(ctx context.Context, req metadata.UploadReq
 // calls with InternalError downloadFailures times before delegating. It records
 // the call sequence so a test can prove persistFunc/Upload is never re-invoked
 // with stale state while the resync is still failing transiently.
+// flakyTooEarlyDownloadStorage fails Download with TooEarly N times, then delegates.
+type flakyTooEarlyDownloadStorage struct {
+	metadata.Storage
+	failures int32 // remaining transient failures before delegating
+}
+
+func (f *flakyTooEarlyDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if atomic.AddInt32(&f.failures, -1) >= 0 {
+		return nil, errtypes.TooEarly("injected")
+	}
+	return f.Storage.Download(ctx, req)
+}
+
 type flakyDownloadStorage struct {
 	metadata.Storage
 
