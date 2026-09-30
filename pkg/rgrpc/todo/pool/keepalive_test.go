@@ -2,8 +2,8 @@ package pool
 
 import (
 	"context"
-	"math"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,61 +18,95 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// Keepalive is opt-in and driven by the keepalive time alone: anything that is
+// not a usable positive duration leaves the parameters zero, which NewConn reads
+// as "no keepalive dial option at all". A usable time without a usable timeout is
+// the one case that gets a default, so that detection cannot be half configured.
 func TestGetClientKeepaliveParams(t *testing.T) {
-	// unset means the operator hasn't opted in, so this package must not
-	// change grpc's own out-of-the-box behavior - grpc's zero-value defaults
-	// apply (Time: effectively never, Timeout: 20s).
-	t.Run("unset env vars defer to grpc's own defaults", func(t *testing.T) {
-		kp := GetClientKeepaliveParams()
-		assert.Equal(t, time.Duration(math.MaxInt64), kp.Time)
-		assert.Equal(t, 20*time.Second, kp.Timeout)
-		// an idle connection nobody uses does not need to be probed, and not
-		// probing it keeps us clear of a server's ping enforcement policy
-		assert.False(t, kp.PermitWithoutStream)
-	})
+	const (
+		unset = "<unset>" // no test value can collide with this
+		want0 = time.Duration(0)
+	)
 
-	t.Run("overridden", func(t *testing.T) {
-		t.Setenv(_clientKeepaliveTimeEnv, "30s")
-		t.Setenv(_clientKeepaliveTimeoutEnv, "5s")
+	tests := map[string]struct {
+		time, timeout       string
+		wantTime, wantTimeo time.Duration
+	}{
+		"unset sends no pings at all": {
+			time: unset, timeout: unset,
+			wantTime: want0, wantTimeo: want0,
+		},
+		"a timeout alone does not enable keepalive": {
+			time: unset, timeout: "5s",
+			wantTime: want0, wantTimeo: want0,
+		},
+		"a time without a unit suffix reads as not configured": {
+			time: "30", timeout: "5s",
+			wantTime: want0, wantTimeo: want0,
+		},
+		"an empty time reads as not configured": {
+			time: "", timeout: "5s",
+			wantTime: want0, wantTimeo: want0,
+		},
+		"a negative time reads as not configured": {
+			time: "-1s", timeout: "5s",
+			wantTime: want0, wantTimeo: want0,
+		},
+		"a zero time reads as not configured": {
+			time: "0s", timeout: "5s",
+			wantTime: want0, wantTimeo: want0,
+		},
+		"both values are used as configured": {
+			time: "30s", timeout: "5s",
+			wantTime: 30 * time.Second, wantTimeo: 5 * time.Second,
+		},
+		"a time without a timeout falls back to the working default": {
+			time: "30s", timeout: unset,
+			wantTime: 30 * time.Second, wantTimeo: _defaultKeepaliveTimeout,
+		},
+		"a time with an unparseable timeout falls back to the working default": {
+			time: "30s", timeout: "not a duration",
+			wantTime: 30 * time.Second, wantTimeo: _defaultKeepaliveTimeout,
+		},
+		"a time with a negative timeout falls back to the working default": {
+			time: "30s", timeout: "-5s",
+			wantTime: 30 * time.Second, wantTimeo: _defaultKeepaliveTimeout,
+		},
+	}
 
-		kp := GetClientKeepaliveParams()
-		assert.Equal(t, 30*time.Second, kp.Time)
-		assert.Equal(t, 5*time.Second, kp.Timeout)
-	})
+	setenv := func(t *testing.T, name, value string) {
+		t.Helper()
+		if value == unset {
+			// t.Setenv first, so its cleanup restores the ambient value - a
+			// variable set in the environment the test runs in would otherwise
+			// leak into the "not configured" cases
+			t.Setenv(name, "")
+			require.NoError(t, os.Unsetenv(name))
+			return
+		}
+		t.Setenv(name, value)
+	}
 
-	// setting the variable at all is an explicit opt-in; a mistyped value is
-	// a configuration mistake, not an opt-out, so it must fall back to this
-	// package's own working default rather than grpc's do-nothing default.
-	t.Run("unparseable values fall back to the working default", func(t *testing.T) {
-		t.Setenv(_clientKeepaliveTimeEnv, "30")
-		t.Setenv(_clientKeepaliveTimeoutEnv, "not a duration")
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			setenv(t, _clientKeepaliveTimeEnv, tt.time)
+			setenv(t, _clientKeepaliveTimeoutEnv, tt.timeout)
 
-		kp := GetClientKeepaliveParams()
-		assert.Equal(t, _defaultKeepaliveTime, kp.Time)
-		assert.Equal(t, _defaultKeepaliveTimeout, kp.Timeout)
-	})
+			kp := GetClientKeepaliveParams()
 
-	t.Run("negative values fall back to the working default", func(t *testing.T) {
-		t.Setenv(_clientKeepaliveTimeEnv, "-1s")
-
-		assert.Equal(t, _defaultKeepaliveTime, GetClientKeepaliveParams().Time)
-	})
-
-	// zero is not a usable interval (grpc raises anything below 10s to 10s
-	// anyway) and is no longer a magic "disable" value - it's treated the
-	// same as any other invalid input: the working default.
-	t.Run("zero falls back to the working default", func(t *testing.T) {
-		t.Setenv(_clientKeepaliveTimeEnv, "0")
-
-		assert.Equal(t, _defaultKeepaliveTime, GetClientKeepaliveParams().Time)
-	})
+			assert.Equal(t, tt.wantTime, kp.Time)
+			assert.Equal(t, tt.wantTimeo, kp.Timeout)
+			// an idle connection nobody uses does not need to be probed, and
+			// not probing it keeps us clear of a server's ping enforcement
+			assert.False(t, kp.PermitWithoutStream)
+		})
+	}
 }
 
-// A peer that stops answering on an established connection - the node
-// black-hole that wedged school-0336, school-0377 and school-0134 - must fail
-// the RPCs on that connection instead of parking them forever. Nothing in the
-// gRPC stack notices this on its own: the connection is up, the TCP writes
-// succeed, and the answer simply never comes.
+// A peer that stops answering on an established connection - a black-holed node,
+// a wedged process - must fail the rpcs on that connection instead of parking
+// them forever. Nothing in the grpc stack notices this on its own: the
+// connection is up, the TCP writes succeed, and the answer simply never comes.
 func TestClientKeepaliveDetectsABlackHoledPeer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("grpc clamps the keepalive interval to 10s, so this test needs ~12s")
