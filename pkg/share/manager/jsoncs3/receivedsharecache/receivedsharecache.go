@@ -100,7 +100,7 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 	defer unlock()
 
 	if _, ok := c.ReceivedSpaces.Load(userID); !ok {
-		err := c.syncIfStale(ctx, userID, true)
+		err := c.syncIfStaleWithRetry(ctx, userID)
 		if err != nil {
 			return err
 		}
@@ -143,7 +143,7 @@ func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*Stat
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 	defer unlock()
 
-	err := c.syncIfStale(ctx, userID, true)
+	err := c.syncIfStaleWithRetry(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 	unlock := c.lockUser(userID)
 	defer unlock()
 
-	err := c.syncIfStale(ctx, userID, true)
+	err := c.syncIfStaleWithRetry(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -304,6 +304,40 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			needsResync = true
 		}
 
+		timer := time.NewTimer(bo.NextBackOff())
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+// syncIfStaleWithRetry retries syncIfStale's cold-start sync on transient errors, since
+// Add/Get/List call it directly with no other retry wrapper around it.
+func (c *Cache) syncIfStaleWithRetry(ctx context.Context, userID string) error {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 500 * time.Microsecond
+	bo.Multiplier = 2.0
+	bo.RandomizationFactor = 1.0
+	bo.MaxInterval = 50 * time.Millisecond
+
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		err = c.syncIfStale(ctx, userID, true)
+		if err == nil {
+			return nil
+		}
+		if !isSyncTransient(err) {
+			return err
+		}
 		timer := time.NewTimer(bo.NextBackOff())
 		select {
 		case <-timer.C:
