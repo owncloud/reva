@@ -102,7 +102,7 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("returns an error when persist fails during NotFound bootstrap with a non-transient error", func() {
-				ps := &permissionDeniedStorage{Storage: storage}
+				ps := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PermissionDenied("injected")}
 				c2 := receivedsharecache.New(ps, 0*time.Second)
 
 				_, err := c2.List(ctx, userID)
@@ -111,12 +111,39 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("does not error when bootstrap persist loses a CAS race (AlreadyExists)", func() {
-				as := &alwaysFailStorage{Storage: storage}
+				as := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PreconditionFailed("injected")}
 				c2 := receivedsharecache.New(as, 0*time.Second)
 
 				_, err := c2.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(1)))
+			})
+
+			It("does not error when bootstrap persist hits Aborted", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.Aborted("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
+			})
+
+			It("does not error when bootstrap persist hits TooEarly", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
+			})
+
+			It("does not error when bootstrap persist hits a transient InternalError", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.InternalError("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
 			})
 
 			It("re-reads the real state after losing the bootstrap CAS race, instead of reporting empty", func() {
@@ -127,7 +154,7 @@ var _ = Describe("Cache", func() {
 				seed := receivedsharecache.New(storage, 0*time.Second)
 				Expect(seed.Add(ctx, userID, spaceID, rs)).To(Succeed())
 
-				fs := &notFoundThenLoseRaceStorage{Storage: storage}
+				fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.NotFound("injected")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				spaces, err := c2.List(ctx, userID)
@@ -271,7 +298,7 @@ var _ = Describe("Cache", func() {
 
 	Describe("retryPersist's post-failure resync", func() {
 		It("does not perform a redundant bootstrap upload when no file exists yet", func() {
-			fs := &failFirstUploadStorage{Storage: storage}
+			fs := &errOnceUploadStorage{Storage: storage, err: errtypes.Aborted("injected")}
 			c2 := receivedsharecache.New(fs, 0*time.Second)
 
 			err := c2.Remove(ctx, userID, spaceID, shareID)
@@ -314,6 +341,37 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).ToNot(BeNil())
 			})
+
+			It("retries a raw gRPC transient error on the resync path like it does on persist", func() {
+				fs := &errOnceDownloadStorage{Storage: storage, err: status.Error(codes.Unavailable, "backend temporarily unavailable")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(2)))
+			})
+
+			It("fails fast on a non-transient Download error instead of retrying", func() {
+				fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.PermissionDenied("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).To(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(1)))
+			})
+
+			It("returns without erroring when the server reports NotModified", func() {
+				spy := &downloadSpyStorage{Storage: storage}
+				c2 := receivedsharecache.New(spy, 0*time.Second)
+
+				_, err := c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spy.notModifiedSeen).To(BeFalse(), "first read has no etag yet, can't be NotModified")
+
+				_, err = c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spy.notModifiedSeen).To(BeTrue())
+			})
 		})
 
 		Describe("Remove", func() {
@@ -337,7 +395,7 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("returns context.Canceled immediately when ctx is already canceled", func() {
-				as := &alwaysFailStorage{Storage: storage}
+				as := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PreconditionFailed("injected")}
 				c2 := receivedsharecache.New(as, 0*time.Second)
 
 				canceled, cancel := context.WithCancel(ctx)
@@ -349,7 +407,7 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("exits the backoff sleep when ctx is canceled", func() {
-				as := &alwaysFailStorage{Storage: storage}
+				as := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PreconditionFailed("injected")}
 				c2 := receivedsharecache.New(as, 0*time.Second)
 
 				ctx2, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
@@ -361,7 +419,7 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("returns an error when the retry budget is exhausted, never a false success", func() {
-				as := &alwaysFailStorage{Storage: storage}
+				as := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PreconditionFailed("injected")}
 				c2 := receivedsharecache.New(as, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
@@ -378,7 +436,7 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("retries a raw gRPC Unavailable error the way CS3's Upload actually returns it", func() {
-				fs := &flakyUnavailableStorage{Storage: storage}
+				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.Unavailable, "backend temporarily unavailable")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
@@ -387,12 +445,57 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("fails fast on a permanent errtypes.InternalError instead of burning the whole retry budget", func() {
-				fs := &flakyInternalErrorStorage{Storage: storage, failures: 1000}
+				fs := &alwaysFailUploadStorage{Storage: storage, err: errtypes.InternalError("injected")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).To(HaveOccurred())
 				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)), "a permanent internal error must fail on the first attempt, not retry")
+			})
+
+			It("retries an AlreadyExists CAS conflict on persist like other transient storage errors", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.AlreadyExists("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+			})
+
+			It("retries a TooEarly CAS conflict on persist like other transient storage errors", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+			})
+
+			It("retries a raw gRPC DeadlineExceeded error on persist", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.DeadlineExceeded, "deadline exceeded")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+			})
+
+			It("retries a raw gRPC Canceled error on persist", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.Canceled, "canceled")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+			})
+
+			It("retries a raw gRPC ResourceExhausted error on persist", func() {
+				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.ResourceExhausted, "resource exhausted")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
 			})
 
 			It("does not reuse stale state when the post-failure resync itself fails transiently", func() {
@@ -412,79 +515,16 @@ var _ = Describe("Cache", func() {
 	})
 })
 
-type alwaysFailStorage struct {
+// alwaysFailUploadStorage fails every Upload with a configured error, never delegates.
+type alwaysFailUploadStorage struct {
 	metadata.Storage
+	err     error
 	uploads int32
 }
 
-func (a *alwaysFailStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
+func (a *alwaysFailUploadStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
 	atomic.AddInt32(&a.uploads, 1)
-	return nil, errtypes.PreconditionFailed("injected")
-}
-
-// failFirstUploadStorage fails the first Upload with a CAS conflict, then delegates.
-type failFirstUploadStorage struct {
-	metadata.Storage
-	uploads int32
-}
-
-func (f *failFirstUploadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	if atomic.AddInt32(&f.uploads, 1) == 1 {
-		return nil, errtypes.Aborted("injected")
-	}
-	return f.Storage.Upload(ctx, req)
-}
-
-// permissionDeniedStorage fails Upload with a non-transient error (unlike alwaysFailStorage).
-type permissionDeniedStorage struct {
-	metadata.Storage
-	uploads int32
-}
-
-func (p *permissionDeniedStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	atomic.AddInt32(&p.uploads, 1)
-	return nil, errtypes.PermissionDenied("injected")
-}
-
-// flakyInternalErrorStorage fails Upload with InternalError N times, then delegates.
-type flakyInternalErrorStorage struct {
-	metadata.Storage
-	failures int32 // remaining failures before success
-	uploads  int32
-}
-
-func (a *flakyInternalErrorStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	atomic.AddInt32(&a.uploads, 1)
-	if atomic.AddInt32(&a.failures, -1) >= 0 {
-		return nil, errtypes.InternalError("injected")
-	}
-	return a.Storage.Upload(ctx, req)
-}
-
-// notFoundThenLoseRaceStorage reports NotFound on the first Download only, then delegates.
-type notFoundThenLoseRaceStorage struct {
-	metadata.Storage
-	downloads int32
-}
-
-func (n *notFoundThenLoseRaceStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
-	if atomic.AddInt32(&n.downloads, 1) == 1 {
-		return nil, errtypes.NotFound("injected")
-	}
-	return n.Storage.Download(ctx, req)
-}
-
-// flakyUnavailableStorage fails Upload once with a raw gRPC transport error, then delegates.
-type flakyUnavailableStorage struct {
-	metadata.Storage
-	uploads int32
-}
-
-func (f *flakyUnavailableStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	if atomic.AddInt32(&f.uploads, 1) == 1 {
-		return nil, status.Error(codes.Unavailable, "backend temporarily unavailable")
-	}
-	return f.Storage.Upload(ctx, req)
+	return nil, a.err
 }
 
 // flakyAbortedStorage fails Upload with a CAS conflict N times, then delegates.
@@ -502,11 +542,6 @@ func (a *flakyAbortedStorage) Upload(ctx context.Context, req metadata.UploadReq
 	return a.Storage.Upload(ctx, req)
 }
 
-// flakyDownloadStorage fails the first Upload with a CAS conflict (to enter
-// retryPersist's post-failure resync path), then fails the subsequent Download
-// calls with InternalError downloadFailures times before delegating. It records
-// the call sequence so a test can prove persistFunc/Upload is never re-invoked
-// with stale state while the resync is still failing transiently.
 // flakyTooEarlyDownloadStorage fails Download with TooEarly N times, then delegates.
 type flakyTooEarlyDownloadStorage struct {
 	metadata.Storage
@@ -520,6 +555,53 @@ func (f *flakyTooEarlyDownloadStorage) Download(ctx context.Context, req metadat
 	return f.Storage.Download(ctx, req)
 }
 
+// errOnceUploadStorage fails Upload once with a configured error, then delegates.
+type errOnceUploadStorage struct {
+	metadata.Storage
+	err     error
+	uploads int32
+}
+
+func (e *errOnceUploadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if atomic.AddInt32(&e.uploads, 1) == 1 {
+		return nil, e.err
+	}
+	return e.Storage.Upload(ctx, req)
+}
+
+// errOnceDownloadStorage fails Download once with a configured error, then delegates.
+type errOnceDownloadStorage struct {
+	metadata.Storage
+	err       error
+	downloads int32
+}
+
+func (e *errOnceDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if atomic.AddInt32(&e.downloads, 1) == 1 {
+		return nil, e.err
+	}
+	return e.Storage.Download(ctx, req)
+}
+
+// downloadSpyStorage records whether the server ever answered NotModified.
+type downloadSpyStorage struct {
+	metadata.Storage
+	notModifiedSeen bool
+}
+
+func (s *downloadSpyStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	res, err := s.Storage.Download(ctx, req)
+	if _, ok := err.(errtypes.NotModified); ok {
+		s.notModifiedSeen = true
+	}
+	return res, err
+}
+
+// flakyDownloadStorage fails the first Upload with a CAS conflict (to enter
+// retryPersist's post-failure resync path), then fails the subsequent Download
+// calls with InternalError downloadFailures times before delegating. It records
+// the call sequence so a test can prove persistFunc/Upload is never re-invoked
+// with stale state while the resync is still failing transiently.
 type flakyDownloadStorage struct {
 	metadata.Storage
 
