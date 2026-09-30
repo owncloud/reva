@@ -109,6 +109,23 @@ var _ = Describe("Cache", func() {
 				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(1)))
 			})
 
+			It("re-reads the real state after losing the bootstrap CAS race, instead of reporting empty", func() {
+				rs := &collaboration.ReceivedShare{
+					Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "real-share"}},
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				}
+				seed := receivedsharecache.New(storage, 0*time.Second)
+				Expect(seed.Add(ctx, userID, spaceID, rs)).To(Succeed())
+
+				fs := &notFoundThenLoseRaceStorage{Storage: storage}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				spaces, err := c2.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces[spaceID]).ToNot(BeNil())
+				Expect(spaces[spaceID].States).To(HaveKey("real-share"))
+			})
+
 			It("is readable by a fresh cache instance after first call", func() {
 				_, err := c.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
@@ -341,6 +358,15 @@ var _ = Describe("Cache", func() {
 				Expect(err).To(HaveOccurred(), "persist never succeeded; retryPersist must not report success")
 			})
 
+			It("succeeds within budget when contention needs more than 10 real persist attempts", func() {
+				fs := &flakyAbortedStorage{Storage: storage, failures: 14}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred(), "retryPersist gave up before exhausting a reasonable persist-attempt budget")
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(15)))
+			})
+
 			It("retries on errtypes.InternalError like other transient storage errors", func() {
 				fs := &flakyInternalErrorStorage{Storage: storage, failures: 3}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
@@ -412,6 +438,34 @@ func (a *flakyInternalErrorStorage) Upload(ctx context.Context, req metadata.Upl
 	atomic.AddInt32(&a.uploads, 1)
 	if atomic.AddInt32(&a.failures, -1) >= 0 {
 		return nil, errtypes.InternalError("injected")
+	}
+	return a.Storage.Upload(ctx, req)
+}
+
+// notFoundThenLoseRaceStorage reports NotFound on the first Download only, then delegates.
+type notFoundThenLoseRaceStorage struct {
+	metadata.Storage
+	downloads int32
+}
+
+func (n *notFoundThenLoseRaceStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if atomic.AddInt32(&n.downloads, 1) == 1 {
+		return nil, errtypes.NotFound("injected")
+	}
+	return n.Storage.Download(ctx, req)
+}
+
+// flakyAbortedStorage fails Upload with a CAS conflict N times, then delegates.
+type flakyAbortedStorage struct {
+	metadata.Storage
+	failures int32 // remaining failures before success
+	uploads  int32
+}
+
+func (a *flakyAbortedStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	atomic.AddInt32(&a.uploads, 1)
+	if atomic.AddInt32(&a.failures, -1) >= 0 {
+		return nil, errtypes.Aborted("injected")
 	}
 	return a.Storage.Upload(ctx, req)
 }
