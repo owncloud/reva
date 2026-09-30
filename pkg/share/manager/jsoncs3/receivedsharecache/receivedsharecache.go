@@ -227,8 +227,7 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 
 func isSyncTransient(err error) bool {
 	_, isTooEarly := err.(errtypes.IsTooEarly)
-	_, isInternal := err.(errtypes.IsInternalError)
-	return isTooEarly || isInternal || isTransientGRPCStatus(err)
+	return isTooEarly || isTransientGRPCStatus(err)
 }
 
 // isTransientGRPCStatus catches raw gRPC transport errors that metadata.CS3 never wraps in errtypes.
@@ -314,9 +313,6 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 					// storage-system has an upload in progress for this node; wait for it to finish
 					// continue with sync below
 					log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
-				case errtypes.InternalError:
-					// transient backend error; isSyncTransient treats this the same way below, so retry here too
-					log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: InternalError (transient), retrying")
 				default:
 					log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
 					return err

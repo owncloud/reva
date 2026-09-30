@@ -386,13 +386,13 @@ var _ = Describe("Cache", func() {
 				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
 			})
 
-			It("retries on errtypes.InternalError like other transient storage errors", func() {
-				fs := &flakyInternalErrorStorage{Storage: storage, failures: 3}
+			It("fails fast on a permanent errtypes.InternalError instead of burning the whole retry budget", func() {
+				fs := &flakyInternalErrorStorage{Storage: storage, failures: 1000}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(4))) // 3 failures + 1 success
+				Expect(err).To(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)), "a permanent internal error must fail on the first attempt, not retry")
 			})
 
 			It("does not reuse stale state when the post-failure resync itself fails transiently", func() {
