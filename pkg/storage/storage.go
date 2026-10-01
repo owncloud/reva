@@ -135,7 +135,7 @@ type FS interface {
 	// CreateDir creates a resource of type container
 	CreateDir(ctx context.Context, ref *provider.Reference) (*CreateDirResult, error)
 	// TouchFile sets the mtime of a resource, creating an empty file if it does not exist
-	// FIXME(OCISDEV-900) remove markprocessing bool: coordinator calls MarkProcessing(true) explicitly after TouchFile
+	// FIXME(OCISDEV-900) remove markprocessing bool: PrepareUpload marks the node the coordinator touched
 	// FIXME the mtime should either be a time.Time or a CS3 Timestamp, not a string
 	TouchFile(ctx context.Context, ref *provider.Reference, markprocessing bool, mtime string) (*TouchFileResult, error)
 	// Delete deletes a resource.

@@ -89,7 +89,8 @@ var _ = Describe("coordinator", func() {
 
 	Describe("finishUpload", func() {
 		Context("for a new file", func() {
-			It("touches, marks, prepares and commits in that order", func() {
+			// PrepareUpload marks the node in its own write, so there is no separate mark.
+			It("touches, prepares and commits in that order", func() {
 				session := newSession(false)
 
 				ri, err := c.finishUpload(ctx, session)
@@ -98,7 +99,6 @@ var _ = Describe("coordinator", func() {
 				Expect(ri.GetEtag()).To(Equal("etag-after-commit"))
 				Expect(fs.calls).To(Equal([]string{
 					"TouchFile(markprocessing=false)",
-					"MarkProcessing(true)",
 					"PrepareUpload(size=17)",
 					"CommitUpload(length=17)",
 					"MarkProcessing(false)",
@@ -145,75 +145,49 @@ var _ = Describe("coordinator", func() {
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(fs.calls).ToNot(ContainElement(ContainSubstring("TouchFile")))
-				Expect(fs.calls[0]).To(Equal("MarkProcessing(true)"))
+				Expect(fs.calls[0]).To(Equal("PrepareUpload(size=17)"))
 			})
 		})
 
-		Context("when MarkProcessing fails", func() {
-			// The node carries no processing id for RollbackUpload to key off.
-			It("deletes the node it touched and does not roll back", func() {
+		// PrepareUpload undoes its own writes, purges a new file's node and marks the
+		// node only on success, so the coordinator has nothing to roll back or unmark.
+		Context("when PrepareUpload fails", func() {
+			It("leaves the cleanup of a new file's node to PrepareUpload", func() {
 				session := newSession(false)
-				fs.markErr = errors.New("flock timeout")
+				fs.prepareErr = errors.New("insufficient storage")
 
 				_, err := c.finishUpload(ctx, session)
 
-				Expect(err).To(MatchError("flock timeout"))
+				Expect(err).To(MatchError("insufficient storage"))
 				Expect(fs.calls).To(Equal([]string{
 					"TouchFile(markprocessing=false)",
-					"MarkProcessing(true)",
-					"Delete",
+					"PrepareUpload(size=17)",
 				}))
 			})
 
-			It("leaves an existing file alone", func() {
+			It("leaves an existing file to PrepareUpload as well", func() {
 				session := newSession(true)
-				fs.markErr = errors.New("flock timeout")
-
-				_, err := c.finishUpload(ctx, session)
-
-				Expect(err).To(HaveOccurred())
-				Expect(fs.calls).ToNot(ContainElement("Delete"))
-			})
-
-			It("removes the staged files", func() {
-				session := newSession(false)
-				fs.markErr = errors.New("flock timeout")
-
-				_, err := c.finishUpload(ctx, session)
-				Expect(err).To(HaveOccurred())
-
-				_, err = os.Stat(session.BinPath())
-				Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
-			})
-		})
-
-		Context("when PrepareUpload fails", func() {
-			// The unmark strips the id the rollback keys off, so it has to run second.
-			It("rolls back before unmarking, with no size to revert", func() {
-				session := newSession(false)
 				fs.prepareErr = errors.New("precondition failed")
 
 				_, err := c.finishUpload(ctx, session)
 
 				Expect(err).To(MatchError("precondition failed"))
 				Expect(fs.calls).To(Equal([]string{
-					"TouchFile(markprocessing=false)",
-					"MarkProcessing(true)",
 					"PrepareUpload(size=17)",
-					"RollbackUpload(nodeExisted=false,sizeDiff=0)",
-					"MarkProcessing(false)",
 				}))
 			})
 
-			It("skips the rollback for an overwrite, which has no revision yet", func() {
-				session := newSession(true)
-				fs.prepareErr = errors.New("precondition failed")
+			It("removes the staged files", func() {
+				session := newSession(false)
+				fs.prepareErr = errors.New("insufficient storage")
 
 				_, err := c.finishUpload(ctx, session)
-
 				Expect(err).To(HaveOccurred())
-				Expect(fs.calls).ToNot(ContainElement(ContainSubstring("RollbackUpload")))
-				Expect(fs.calls).To(ContainElement("MarkProcessing(false)"))
+
+				_, err = os.Stat(session.BinPath())
+				Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
+				_, err = store.Get(ctx, session.ID())
+				Expect(err).To(HaveOccurred())
 			})
 		})
 
@@ -228,7 +202,6 @@ var _ = Describe("coordinator", func() {
 
 				Expect(err).To(MatchError("blobstore unavailable"))
 				Expect(fs.calls).To(Equal([]string{
-					"MarkProcessing(true)",
 					"PrepareUpload(size=17)",
 					"CommitUpload(length=17)",
 					"RollbackUpload(nodeExisted=true,sizeDiff=17)",

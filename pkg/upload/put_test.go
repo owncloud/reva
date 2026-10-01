@@ -556,7 +556,6 @@ var _ = Describe("the finish path", func() {
 		// The bytes are already committed, and the cleanup job resolves the flag.
 		It("succeeds even when the node cannot be unmarked", func() {
 			session := stagedSession(ctx, store, true)
-			fs.markErrAfter = 1
 			fs.markErr = errors.New("flock timeout")
 
 			ri, err := c.finishUpload(ctx, session)
@@ -606,7 +605,6 @@ var _ = Describe("the finish path", func() {
 			Expect(err).To(MatchError("no space left on device"))
 			Expect(fs.calls).To(Equal([]string{
 				"TouchFile(markprocessing=false)",
-				"MarkProcessing(true)",
 				"PrepareUpload(size=17)",
 				"RollbackUpload(nodeExisted=false,sizeDiff=17)",
 				"MarkProcessing(false)",
@@ -622,7 +620,6 @@ var _ = Describe("the finish path", func() {
 
 			Expect(err).To(MatchError("no space left on device"))
 			Expect(fs.calls).To(Equal([]string{
-				"MarkProcessing(true)",
 				"PrepareUpload(size=17)",
 				"RollbackUpload(nodeExisted=true,sizeDiff=17)",
 				"MarkProcessing(false)",
@@ -667,44 +664,11 @@ var _ = Describe("the finish path", func() {
 			session := stagedSession(ctx, store, true)
 			fs.commitErr = errors.New("blobstore unavailable")
 			fs.rollbackErr = errors.New("no such node")
-			fs.markErrAfter = 1
 			fs.markErr = errors.New("flock timeout")
 
 			_, err := c.finishUpload(ctx, session)
 
 			Expect(err).To(MatchError("blobstore unavailable"))
-		})
-
-		// An Uploader-only role may leave the empty file behind.
-		It("still reports the failed mark when the node cannot be deleted", func() {
-			session := stagedSession(ctx, store, false)
-			fs.markErr = errors.New("flock timeout")
-			fs.deleteErr = errtypes.PermissionDenied("report.docx")
-
-			_, err := c.finishUpload(ctx, session)
-
-			Expect(err).To(MatchError("flock timeout"))
-			Expect(fs.calls).To(ContainElement("Delete"))
-		})
-
-		// Nothing was prepared here, so the node is purged rather than reverted.
-		It("still reports the original failure when the purge fails", func() {
-			session := stagedSession(ctx, store, false)
-			fs.prepareErr = errors.New("precondition failed")
-			fs.rollbackErr = errors.New("no such node")
-			fs.markErrAfter = 1
-			fs.markErr = errors.New("flock timeout")
-
-			_, err := c.finishUpload(ctx, session)
-
-			Expect(err).To(MatchError("precondition failed"))
-			Expect(fs.calls).To(Equal([]string{
-				"TouchFile(markprocessing=false)",
-				"MarkProcessing(true)",
-				"PrepareUpload(size=17)",
-				"RollbackUpload(nodeExisted=false,sizeDiff=0)",
-				"MarkProcessing(false)",
-			}))
 		})
 	})
 })
