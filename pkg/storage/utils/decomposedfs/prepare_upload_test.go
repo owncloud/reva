@@ -2,6 +2,7 @@ package decomposedfs_test
 
 import (
 	"context"
+	"os"
 	"time"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -263,6 +264,25 @@ var _ = Describe("PrepareUpload", func() {
 			_, ok := err.(errtypes.IsInsufficientStorage)
 			Expect(ok).To(BeTrue(), "expected errtypes.InsufficientStorage, got %T: %v", err, err)
 		})
+
+		// Only a node the upload created may be purged, never a file that already had content.
+		It("keeps the existing node", func() {
+			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-1", storage.UploadInfo{NodeExisted: false, Size: 5})
+			Expect(err).ToNot(HaveOccurred())
+
+			original := node.CheckQuota
+			node.CheckQuota = func(_ context.Context, _ *node.Node, _ bool, _, _ uint64) (bool, error) {
+				return false, errtypes.InsufficientStorage("quota exceeded")
+			}
+			defer func() { node.CheckQuota = original }()
+
+			_, err = env.Fs.PrepareUpload(env.Ctx, ref, "session-2", storage.UploadInfo{NodeExisted: true, Size: 20})
+			Expect(err).To(HaveOccurred())
+
+			n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.Exists).To(BeTrue())
+		})
 	})
 
 	Context("quota exceeded on a new file", func() {
@@ -292,6 +312,31 @@ var _ = Describe("PrepareUpload", func() {
 			// there are no bytes to replace, so the size must count as pure growth
 			Expect(gotOverwrite).To(BeFalse())
 			Expect(gotOldSize).To(BeZero())
+		})
+
+		// The node is not marked yet, so RollbackUpload would not recognise it as the
+		// upload's and the user would be left with an empty file.
+		It("purges the node it was asked to fill", func() {
+			touched, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(touched.Exists).To(BeTrue())
+
+			original := node.CheckQuota
+			node.CheckQuota = func(_ context.Context, _ *node.Node, _ bool, _, _ uint64) (bool, error) {
+				return false, errtypes.InsufficientStorage("quota exceeded")
+			}
+			defer func() { node.CheckQuota = original }()
+
+			_, err = env.Fs.PrepareUpload(env.Ctx, ref, "session-new", storage.UploadInfo{NodeExisted: false, Size: 20})
+			Expect(err).To(HaveOccurred())
+
+			n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.Exists).To(BeFalse(), "the empty file is still listed in its folder")
+			_, err = os.Stat(touched.InternalPath())
+			Expect(os.IsNotExist(err)).To(BeTrue(), "the node file was left on disk")
+			_, err = os.Stat(touched.InternalPath() + ".mpk")
+			Expect(os.IsNotExist(err)).To(BeTrue(), "the node metadata was left on disk")
 		})
 	})
 

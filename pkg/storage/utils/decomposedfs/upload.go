@@ -449,6 +449,23 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 	if !n.Exists {
 		return nil, errtypes.NotFound(ref.String())
 	}
+
+	committed := false
+	if !info.NodeExisted {
+		// This upload created the node, so a failure must not leave it behind as an
+		// empty file. Purge, not trash: it never had content, and Purge needs no
+		// Delete permission. Registered before the lock is taken, so it runs after the
+		// lock is released: Purge removes the lock file too.
+		defer func() {
+			if committed {
+				return
+			}
+			if err := n.Purge(ctx); err != nil {
+				appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not purge new node after failed prepare")
+			}
+		}()
+	}
+
 	n.SpaceRoot, err = node.ReadNode(ctx, fs.lu, n.SpaceID, n.SpaceID, false, nil, false)
 	if err != nil {
 		return nil, err
@@ -487,7 +504,6 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 		versionPath    string
 		oldAttrs       node.Attributes
 		oldMtime       time.Time
-		committed      bool
 	)
 
 	defer func() {
