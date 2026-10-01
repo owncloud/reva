@@ -99,7 +99,7 @@ func TestGetAppPassword_SkipsExpiredToken(t *testing.T) {
 	hash := hashPassword(t, pw)
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash: {
 				Password:   hash,
 				Label:      "expired-token",
@@ -125,7 +125,7 @@ func TestGetAppPassword_ValidToken(t *testing.T) {
 	hash := hashPassword(t, pw)
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash: {
 				Password:   hash,
 				Label:      "valid-token",
@@ -154,7 +154,7 @@ func TestGetAppPassword_NoExpirationNeverExpires(t *testing.T) {
 	hash := hashPassword(t, pw)
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash: {
 				Password: hash,
 				Label:    "no-expiry",
@@ -183,7 +183,7 @@ func TestGetAppPassword_ZeroExpirationNeverExpires(t *testing.T) {
 	hash := hashPassword(t, pw)
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash: {
 				Password:   hash,
 				Label:      "zero-expiry",
@@ -214,7 +214,7 @@ func TestPurgeExpiredTokensOnLoad(t *testing.T) {
 	hash2 := hashPassword(t, "valid-pw")
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash1: {
 				Password:   hash1,
 				Label:      "expired",
@@ -251,7 +251,7 @@ func TestKeepExpiredTokensOnLoad(t *testing.T) {
 	hash2 := hashPassword(t, "valid-pw")
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash1: {
 				Password:   hash1,
 				Label:      "expired",
@@ -319,7 +319,7 @@ func TestGenerateAppPassword_PurgesExpiredForUser(t *testing.T) {
 	hash := hashPassword(t, "old-expired-pw")
 
 	file := seedFile(t, map[string]map[string]*apppb.AppPassword{
-		uid.String(): {
+		userKey(uid): {
 			hash: {
 				Password:   hash,
 				Label:      "expired",
