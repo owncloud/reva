@@ -27,6 +27,10 @@ func (b *BarrierStorage) Upload(ctx context.Context, req UploadRequest) (*Upload
 	if atomic.AddInt32(&b.arrived, 1) >= b.n {
 		b.closeOnce.Do(func() { close(b.ready) })
 	}
-	<-b.ready
+	select {
+	case <-b.ready:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return b.Storage.Upload(ctx, req)
 }

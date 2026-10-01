@@ -97,8 +97,8 @@ func (c *Cache) lockUser(userID string) func() {
 func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaboration.ReceivedShare) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
 	unlock := c.lockUser(userID)
-	span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
+	span.End()
 	defer unlock()
 
 	if _, ok := c.ReceivedSpaces.Load(userID); !ok {
@@ -141,8 +141,8 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*State, error) {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
 	unlock := c.lockUser(userID)
-	span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
+	span.End()
 	defer unlock()
 
 	err := c.syncWithRetry(ctx, userID)
@@ -160,8 +160,8 @@ func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*Stat
 func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
 	unlock := c.lockUser(userID)
-	span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
+	span.End()
 	defer unlock()
 
 	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
@@ -274,7 +274,7 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			// a previous persist attempt failed and the re-read to pick up fresh state
 			// was itself transient; keep retrying the re-read instead of hammering
 			// persistFunc again with the same stale in-memory rss/etag
-			serr := c.sync(ctx, userID, false)
+			serr := c.sync(ctx, userID)
 			if serr == nil {
 				needsResync = false
 				continue // fresh state is in memory; retry persistFunc next attempt, no need to wait
@@ -314,6 +314,11 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 					// storage-system has an upload in progress for this node; wait for it to finish
 					// continue with sync below
 					log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
+				case errtypes.InternalError:
+					// transient backend error (e.g. disk.go's flock contention under write fan-in);
+					// CAS conflicts no longer masquerade as this since storageprovider.go's Aborted/
+					// AlreadyExists mapping fix (b1a5804ec)
+					log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: InternalError (transient), retrying")
 				default:
 					log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
 					return err
@@ -349,7 +354,7 @@ func (c *Cache) syncWithRetry(ctx context.Context, userID string) error {
 			return ctx.Err()
 		default:
 		}
-		err = c.sync(ctx, userID, true)
+		err = c.sync(ctx, userID)
 		if err == nil {
 			return nil
 		}
@@ -368,8 +373,7 @@ func (c *Cache) syncWithRetry(ctx context.Context, userID string) error {
 }
 
 // sync pulls the authoritative state from storage; caller must hold the user lock.
-// bootstrapOnNotFound: pass false when the caller is about to do its own real-data write right after.
-func (c *Cache) sync(ctx context.Context, userID string, bootstrapOnNotFound bool) error {
+func (c *Cache) sync(ctx context.Context, userID string) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Sync")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
@@ -391,19 +395,6 @@ func (c *Cache) sync(ctx context.Context, userID string, bootstrapOnNotFound boo
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
 		span.SetStatus(codes.Ok, "")
-		if !bootstrapOnNotFound {
-			return nil
-		}
-		if err := c.persist(ctx, userID); err != nil {
-			switch err.(type) {
-			case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly, errtypes.InternalError:
-				log.Warn().Err(err).Msg("bootstrap persist lost race or hit a transient error, re-reading real state")
-				return c.sync(ctx, userID, false)
-			default:
-				log.Error().Err(err).Msg("failed to create empty received share cache file")
-				return err
-			}
-		}
 		return nil
 	case errtypes.NotModified:
 		span.SetStatus(codes.Ok, "")
