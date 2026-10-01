@@ -595,8 +595,10 @@ var _ = Describe("the finish path", func() {
 
 	// An upload whose session cannot be written can never be finished.
 	Describe("when the session cannot be persisted", func() {
-		// The node id TouchFile returned is what would be lost.
-		It("rolls the mark back", func() {
+		// The node id TouchFile returned is what would be lost. The node is marked by
+		// then, so the rollback can purge it without a Delete permission.
+		It("rolls the new node back", func() {
+			fs.prepared = &storage.PrepareUploadResult{SizeDiff: bodyLen}
 			session := &brokenSession{Session: stagedSession(ctx, store, false), failPersist: true}
 
 			_, err := c.finishUpload(ctx, session)
@@ -605,7 +607,8 @@ var _ = Describe("the finish path", func() {
 			Expect(fs.calls).To(Equal([]string{
 				"TouchFile(markprocessing=false)",
 				"MarkProcessing(true)",
-				"RollbackUpload(nodeExisted=false,sizeDiff=0)",
+				"PrepareUpload(size=17)",
+				"RollbackUpload(nodeExisted=false,sizeDiff=17)",
 				"MarkProcessing(false)",
 			}))
 		})
@@ -613,12 +616,7 @@ var _ = Describe("the finish path", func() {
 		// The size PrepareUpload propagated is what would be lost.
 		It("rolls the prepared upload back", func() {
 			fs.prepared = &storage.PrepareUploadResult{SizeDiff: bodyLen}
-			// The mark's own persist has to get through for the prepare to be reached.
-			session := &brokenSession{
-				Session:          stagedSession(ctx, store, true),
-				failPersist:      true,
-				failPersistAfter: 1,
-			}
+			session := &brokenSession{Session: stagedSession(ctx, store, true), failPersist: true}
 
 			_, err := c.finishUpload(ctx, session)
 
@@ -629,6 +627,37 @@ var _ = Describe("the finish path", func() {
 				"RollbackUpload(nodeExisted=true,sizeDiff=17)",
 				"MarkProcessing(false)",
 			}))
+		})
+	})
+
+	// Each save rewrites the whole session file on the request path.
+	Describe("saving the session", func() {
+		DescribeTable("saves it once",
+			func(nodeExists bool) {
+				session := &brokenSession{Session: stagedSession(ctx, store, nodeExists)}
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(session.persistCalls).To(Equal(1))
+			},
+			Entry("for a new file", false),
+			Entry("for an overwrite", true),
+		)
+
+		// The commit may run in another process, which only has the saved session.
+		It("saves the node id TouchFile returned", func() {
+			fs.touched = &provider.ResourceId{StorageId: mountID, SpaceId: spaceID, OpaqueId: "real-node-id"}
+			session := stagedSession(ctx, store, false)
+			c.async = true
+			c.pub = &fakePublisher{}
+
+			_, err := c.finishUpload(ctx, session)
+			Expect(err).ToNot(HaveOccurred())
+
+			saved, err := store.Get(ctx, session.ID())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(saved.NodeID()).To(Equal("real-node-id"))
 		})
 	})
 

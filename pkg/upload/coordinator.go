@@ -341,13 +341,6 @@ func (c *coordinator) markProcessing(ctx context.Context, session Session) error
 		return err
 	}
 	metrics.UploadProcessing.Inc()
-
-	// The real node id from touchNode must reach the commit, which may run in
-	// another process.
-	if err := session.Persist(ctx); err != nil {
-		c.rollbackMarked(ctx, session)
-		return err
-	}
 	return nil
 }
 
@@ -376,7 +369,9 @@ func (c *coordinator) prepare(ctx context.Context, session Session, info storage
 	}
 
 	// Persisted, not just held: the commit may run in another process, which can
-	// only learn these by reading them back.
+	// only learn these, and the real node id from touchNode, by reading them back.
+	// Saved once, here: a failure now finds the node marked, so the rollback can
+	// purge it.
 	session.SetSizeDiff(prepared.SizeDiff)
 	session.SetVersionCreated(prepared.VersionCreated)
 	if err := session.Persist(ctx); err != nil {
