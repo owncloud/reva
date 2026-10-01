@@ -345,6 +345,11 @@ func (c *coordinator) prepare(ctx context.Context, session Session, info storage
 	// only learn these, and the real node id from touchNode, by reading them back.
 	// Saved once, here: a failure now finds the node marked, so the rollback can
 	// purge it.
+	if prepared.SpaceOwner != nil {
+		session.SetStorageValue("SpaceOwnerOrManager", prepared.SpaceOwner.GetOpaqueId())
+		session.SetStorageValue("SpaceOwnerIdp", prepared.SpaceOwner.GetIdp())
+		session.SetStorageValue("SpaceOwnerType", utils.UserTypeToString(prepared.SpaceOwner.GetType()))
+	}
 	session.SetSizeDiff(prepared.SizeDiff)
 	session.SetVersionCreated(prepared.VersionCreated)
 	if err := session.Persist(ctx); err != nil {

@@ -662,7 +662,13 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 	}
 	committed = true
 
-	return &storage.PrepareUploadResult{VersionCreated: versionCreated, SizeDiff: sizeDiff}, nil
+	result := &storage.PrepareUploadResult{VersionCreated: versionCreated, SizeDiff: sizeDiff}
+	if !info.NodeExisted {
+		// Read off the disk, not through ListGrants: an uploader who cannot see the
+		// space root still needs the manager of a project space reported.
+		result.SpaceOwner = n.SpaceOwnerOrManager(ctx)
+	}
+	return result, nil
 }
 
 // RollbackUpload reverts the node state written by PrepareUpload after a failed or aborted

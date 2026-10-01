@@ -102,6 +102,14 @@ var _ = Describe("PrepareUpload", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(id).To(Equal("session-new"))
 		})
+
+		// Without TouchFile the coordinator has no other source for a new file's owner.
+		It("reports the space owner", func() {
+			result, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-new", storage.UploadInfo{NodeExisted: false, Size: 42})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.SpaceOwner.GetOpaqueId()).To(Equal(env.Owner.GetId().GetOpaqueId()))
+		})
 	})
 
 	Context("overwrite with versioning enabled (default)", func() {
@@ -147,6 +155,17 @@ var _ = Describe("PrepareUpload", func() {
 			id, err := n.ProcessingID(env.Ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(id).To(Equal("session-2"))
+		})
+
+		// The coordinator already resolved an existing file's owner at initiate.
+		It("leaves the space owner to the coordinator", func() {
+			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-1", storage.UploadInfo{NodeExisted: false, Size: 10})
+			Expect(err).ToNot(HaveOccurred())
+
+			result, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-2", storage.UploadInfo{NodeExisted: true, Size: 20})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.SpaceOwner).To(BeNil())
 		})
 	})
 

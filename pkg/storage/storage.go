@@ -88,6 +88,7 @@ type UploadInfo struct {
 type PrepareUploadResult struct {
 	VersionCreated bool
 	SizeDiff       int64
+	SpaceOwner     *userpb.UserId // the space owner or a manager, for a new node; nil keeps the one already known
 }
 
 // RollbackInfo carries what a driver needs to undo PrepareUpload. NodeID and

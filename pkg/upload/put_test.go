@@ -656,6 +656,45 @@ var _ = Describe("the finish path", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(saved.NodeID()).To(Equal("real-node-id"))
 		})
+
+		Describe("the space owner", func() {
+			// savedOwner runs a finish handed to postprocessing, which keeps the session.
+			savedOwner := func() *userpb.UserId {
+				session := stagedSession(ctx, store, false)
+				c.async = true
+				c.pub = &fakePublisher{}
+
+				_, err := c.finishUpload(ctx, session)
+				Expect(err).ToNot(HaveOccurred())
+
+				saved, err := store.Get(ctx, session.ID())
+				Expect(err).ToNot(HaveOccurred())
+				return saved.SpaceOwner()
+			}
+
+			BeforeEach(func() {
+				fs.touchedOwner = &userpb.UserId{OpaqueId: "owner-1", Idp: "idp.example.com", Type: userpb.UserType_USER_TYPE_PRIMARY}
+			})
+
+			It("saves the one PrepareUpload reported", func() {
+				fs.prepared = &storage.PrepareUploadResult{
+					SizeDiff:   bodyLen,
+					SpaceOwner: &userpb.UserId{OpaqueId: "manager-1", Idp: "idp.example.com", Type: userpb.UserType_USER_TYPE_PRIMARY},
+				}
+
+				owner := savedOwner()
+
+				Expect(owner.GetOpaqueId()).To(Equal("manager-1"))
+				Expect(owner.GetIdp()).To(Equal("idp.example.com"))
+			})
+
+			// Drivers other than decomposedfs report it from TouchFile only.
+			It("keeps the one TouchFile reported when PrepareUpload reports none", func() {
+				fs.prepared = &storage.PrepareUploadResult{SizeDiff: bodyLen}
+
+				Expect(savedOwner().GetOpaqueId()).To(Equal("owner-1"))
+			})
+		})
 	})
 
 	// Cleanup runs on paths that are already failing, so it can only be logged.
