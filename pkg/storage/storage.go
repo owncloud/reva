@@ -155,7 +155,8 @@ type FS interface {
 	CommitUpload(ctx context.Context, ref *provider.Reference, sessionID string, source UploadSource) error
 	// PrepareUpload is called after all bytes are received and before postprocessing begins.
 	// Implementations may lock the target node, snapshot the previous version, write new metadata,
-	// and propagate size changes. Drivers that do not require any of these steps may return immediately.
+	// mark the node as processing for sessionID, and propagate size changes. Drivers that do not
+	// require any of these steps may return immediately.
 	PrepareUpload(ctx context.Context, ref *provider.Reference, sessionID string, info UploadInfo) (*PrepareUploadResult, error)
 	// RollbackUpload reverts node state after a failed or aborted postprocessing run.
 	// It is the inverse of PrepareUpload: restores previous metadata and reverts the optimistic

@@ -86,6 +86,21 @@ var _ = Describe("PrepareUpload", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(string(blobID)).To(Equal("session-new"))
 		})
+
+		// RollbackUpload and the unmark only act on the session that marked the node.
+		It("marks the node as processing for the session", func() {
+			info := storage.UploadInfo{NodeExisted: false, Size: 42}
+
+			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-new", info)
+			Expect(err).ToNot(HaveOccurred())
+
+			n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.IsProcessing(env.Ctx)).To(BeTrue())
+			id, err := n.ProcessingID(env.Ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(id).To(Equal("session-new"))
+		})
 	})
 
 	Context("overwrite with versioning enabled (default)", func() {
@@ -117,6 +132,20 @@ var _ = Describe("PrepareUpload", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(len(revisions)).To(BeNumerically(">=", 1))
+		})
+
+		It("marks the node as processing for the new session", func() {
+			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-1", storage.UploadInfo{NodeExisted: false, Size: 10})
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = env.Fs.PrepareUpload(env.Ctx, ref, "session-2", storage.UploadInfo{NodeExisted: true, Size: 20})
+			Expect(err).ToNot(HaveOccurred())
+
+			n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			id, err := n.ProcessingID(env.Ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(id).To(Equal("session-2"))
 		})
 	})
 
@@ -299,6 +328,23 @@ var _ = Describe("PrepareUpload", func() {
 				Expect(err).To(HaveOccurred())
 				_, ok := err.(errtypes.IsAborted)
 				Expect(ok).To(BeTrue(), "expected errtypes.Aborted, got %T: %v", err, err)
+			})
+
+			// The rejected session must not take the node over from the one that holds it.
+			It("leaves the processing mark alone", func() {
+				info := storage.UploadInfo{
+					NodeExisted: true,
+					Size:        5,
+					IfMatch:     "wrong-etag",
+				}
+				_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-x", info)
+				Expect(err).To(HaveOccurred())
+
+				n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+				Expect(err).ToNot(HaveOccurred())
+				id, err := n.ProcessingID(env.Ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(id).To(Equal("session-init"))
 			})
 		})
 

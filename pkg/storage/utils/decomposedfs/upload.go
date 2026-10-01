@@ -434,8 +434,9 @@ func (fs *Decomposedfs) CommitUpload(ctx context.Context, ref *provider.Referenc
 	return nil
 }
 
-// PrepareUpload finalizes node metadata after bytes are received, before postprocessing.
-// CommitUpload is called after postprocessing completes.
+// PrepareUpload finalizes node metadata after bytes are received, before postprocessing,
+// and marks the node as processing for sessionID. CommitUpload is called after
+// postprocessing completes.
 func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Reference, sessionID string, info storage.UploadInfo) (*storage.PrepareUploadResult, error) {
 	ctx, span := tracer.Start(ctx, "PrepareUpload")
 	defer span.End()
@@ -625,6 +626,8 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 	attrs[prefixes.ChecksumPrefix+"sha1"] = info.Checksums.SHA1
 	attrs[prefixes.ChecksumPrefix+"md5"] = info.Checksums.MD5
 	attrs[prefixes.ChecksumPrefix+"adler32"] = info.Checksums.Adler32
+	// in the same batch, so marking the node costs no write of its own
+	attrs.SetString(prefixes.StatusPrefix, node.ProcessingStatus+sessionID)
 
 	mtime := time.Now()
 	if !info.MTime.IsZero() {
