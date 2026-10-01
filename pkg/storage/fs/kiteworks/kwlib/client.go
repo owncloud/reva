@@ -88,8 +88,8 @@ func (f *APIClientFactory) Build(host, requestId, remoteAddr, token string, l *z
 	}
 }
 
-func (c *APIClient) GetTopFolders() (*DirectoryInfo, error) {
-	request, err := c.NewGetRequest("/rest/folders/top?deleted=false&with=(permissions)")
+func (c *APIClient) GetTopFolders(deleted bool) (*DirectoryInfo, error) {
+	request, err := c.NewGetRequest(fmt.Sprintf("/rest/folders/top?deleted=%t&with=(permissions)", deleted))
 	if err != nil {
 		return nil, err
 	}
@@ -360,8 +360,12 @@ func (c *APIClient) MoveFolder(id, destinationFolderID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.SendRequest(request)
-	return err
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // name must be the file's current name: the server requires it even for a version upload.
@@ -414,8 +418,12 @@ func (c *APIClient) DeleteFileVersion(fileID, versionID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.SendRequest(req)
-	return err
+	resp, err := c.SendRequest(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (c *APIClient) PromoteFileVersion(fileID, versionID string) error {
@@ -423,8 +431,12 @@ func (c *APIClient) PromoteFileVersion(fileID, versionID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.SendRequest(req)
-	return err
+	resp, err := c.SendRequest(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (c *APIClient) GetVersionContents(fileID, versionID string) (*http.Response, error) {
@@ -466,8 +478,40 @@ func (c *APIClient) DeleteFolder(id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.SendRequest(request)
-	return err
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (c *APIClient) PermanentDeleteFolder(id string) error {
+	request, err := c.newRequest("DELETE", fmt.Sprintf("/rest/folders/%s/actions/permanent", id), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// RecoverFolder un-marks a soft-deleted folder for deletion. KW answers 403
+// ERR_ENTITY_NOT_DELETED when the folder is not deleted.
+func (c *APIClient) RecoverFolder(id string) error {
+	request, err := c.newRequest("PATCH", fmt.Sprintf("/rest/folders/%s/actions/recover", id), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (c *APIClient) DeleteFile(id string) error {
@@ -475,8 +519,12 @@ func (c *APIClient) DeleteFile(id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.SendRequest(request)
-	return err
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (c *APIClient) Move(source *FileInfo, parent *FileInfo, replace bool) (bool, error) {
@@ -506,8 +554,28 @@ func (c *APIClient) moveOrCopy(op moveOrCopy, source *FileInfo, dest *FileInfo, 
 	q := request.URL.Query()
 	q.Add("id:in", source.ID)
 	request.URL.RawQuery = q.Encode()
-	_, err = c.SendRequest(request)
-	return err == nil, err
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	return true, nil
+}
+
+func (c *APIClient) SetFolderQuota(id string, bytes int64) error {
+	request, err := c.NewPutRequest(fmt.Sprintf("/rest/folders/%s", id), FolderQuotaUpdateRequest{
+		UseFolderQuota: true,
+		Quota:          bytes,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (c *APIClient) RenameFolder(source *FileInfo, name string) (bool, error) {
@@ -518,8 +586,12 @@ func (c *APIClient) RenameFolder(source *FileInfo, name string) (bool, error) {
 	q := request.URL.Query()
 	q.Add("id:in", source.ID)
 	request.URL.RawQuery = q.Encode()
-	_, err = c.SendRequest(request)
-	return err == nil, err
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	return true, nil
 }
 
 func (c *APIClient) RenameFile(source *FileInfo, name string, replace bool) (bool, error) {
@@ -527,8 +599,12 @@ func (c *APIClient) RenameFile(source *FileInfo, name string, replace bool) (boo
 	if err != nil {
 		return false, err
 	}
-	_, err = c.SendRequest(request)
-	return err == nil, err
+	resp, err := c.SendRequest(request)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	return true, nil
 }
 
 func (c *APIClient) NewGetRequest(path string) (*http.Request, error) {

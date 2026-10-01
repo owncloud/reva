@@ -2,20 +2,40 @@ package kiteworks_test
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
 )
+
+// mockState exposes what the driver sent to the mock server, for specs that need
+// to assert on the request body rather than on the driver's return value, and lets
+// them fail individual endpoints to exercise the driver's best-effort paths.
+type mockState struct {
+	quotaBody      atomic.Value // string: last body PUT to /rest/folders/space-quota-1
+	failMe         atomic.Bool
+	failDeletedTop atomic.Bool
+	permDeleted    atomic.Bool // set when /actions/permanent was called
+}
 
 func writeJSON(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(body))
 }
 
-func mockKiteworksHandler() http.Handler {
+func mockKiteworksHandler() (http.Handler, *mockState) {
 	mux := http.NewServeMux()
+	state := &mockState{}
 
 	mux.HandleFunc("/rest/folders/top", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("deleted") == "true" {
+			if state.failDeletedTop.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			writeJSON(w, `{"data":[{"id":"deleted-space-1","type":"d","name":"Deleted Space","path":"/Deleted Space","modified":"2024-01-01T00:00:00+0000","deleted":true}]}`)
+			return
+		}
 		writeJSON(w, `{"data":[{"id":"space-1","type":"d","name":"My Docs","path":"/My Docs","modified":"2024-01-01T00:00:00+0000"}]}`)
 	})
 	mux.HandleFunc("/rest/folders/space-1", func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +64,11 @@ func mockKiteworksHandler() http.Handler {
 		w.WriteHeader(http.StatusCreated)
 	})
 	mux.HandleFunc("/rest/users/me", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, `{"id":"user-1","name":"Test User","email":"test@example.com"}`)
+		if state.failMe.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		writeJSON(w, `{"id":"user-1","name":"Test User","email":"test@example.com","syncdirId":"space-1"}`)
 	})
 	mux.HandleFunc("/rest/folders/space-1/quota", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, `{"storage_quota":1073741824,"storage_used":14,"storage_available":1073741810}`)
@@ -172,6 +196,66 @@ func mockKiteworksHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// Space lifecycle (CreateStorageSpace / UpdateStorageSpace / DeleteStorageSpace)
+	mux.HandleFunc("/rest/folders/0/folders", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Accellion-Location", "/rest/folders/new-space-1")
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/rest/folders/new-space-1/actions/permanent", func(w http.ResponseWriter, _ *http.Request) {
+		state.permDeleted.Store(true)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/rest/folders/new-space-1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, `{"id":"new-space-1","type":"d","name":"New Space","path":"/New Space","modified":"2024-01-01T00:00:00+0000"}`)
+	})
+	renamed := &atomic.Bool{}
+	mux.HandleFunc("/rest/folders/space-rename-1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			renamed.Store(true)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		name := "Old Space"
+		if renamed.Load() {
+			name = "Renamed Space"
+		}
+		writeJSON(w, `{"id":"space-rename-1","type":"d","name":"`+name+`","path":"/`+name+`","modified":"2024-01-01T00:00:00+0000"}`)
+	})
+	mux.HandleFunc("/rest/folders/space-quota-1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			b, _ := io.ReadAll(r.Body)
+			state.quotaBody.Store(string(b))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		writeJSON(w, `{"id":"space-quota-1","type":"d","name":"Quota Space","path":"/Quota Space","modified":"2024-01-01T00:00:00+0000"}`)
+	})
+
+	// A deleted space that can be recovered. KW only grants folder_recover while
+	// the folder is deleted, and answers 403 when it is not.
+	var restoreState int32 = 1 // 1 = deleted, 0 = active; accessed via atomic ops
+	mux.HandleFunc("/rest/folders/space-restore-1", func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.LoadInt32(&restoreState) == 1 {
+			writeJSON(w, `{"id":"space-restore-1","type":"d","name":"Restorable Space","path":"/Restorable Space","modified":"2024-01-01T00:00:00+0000","deleted":true,"permissions":[{"id":24,"name":"folder_recover","allowed":true}]}`)
+			return
+		}
+		writeJSON(w, `{"id":"space-restore-1","type":"d","name":"Restorable Space","path":"/Restorable Space","modified":"2024-01-01T00:00:00+0000","deleted":false}`)
+	})
+	mux.HandleFunc("/rest/folders/space-restore-1/actions/recover", func(w http.ResponseWriter, _ *http.Request) {
+		if !atomic.CompareAndSwapInt32(&restoreState, 1, 0) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/rest/folders/space-no-recover-1", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `{"id":"space-no-recover-1","type":"d","name":"Locked Down Space","path":"/Locked Down Space","modified":"2024-01-01T00:00:00+0000","deleted":true,"permissions":[{"id":16,"name":"properties_view","allowed":true}]}`)
+	})
+
 	serverError := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"server error"}`))
@@ -184,5 +268,5 @@ func mockKiteworksHandler() http.Handler {
 		http.Error(w, `{"error":"not found","id":"`+id+`"}`, http.StatusNotFound)
 	})
 
-	return mux
+	return mux, state
 }

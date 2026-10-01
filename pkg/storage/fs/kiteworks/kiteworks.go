@@ -3,7 +3,6 @@ package kiteworks
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"sync"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/mitchellh/mapstructure"
 	"github.com/rs/zerolog"
 
@@ -145,44 +143,6 @@ func (d *Driver) Capabilities(_ context.Context) storage.Capabilities {
 // --- Read methods ---
 
 func (d *Driver) Shutdown(_ context.Context) error { return nil }
-
-func (d *Driver) ListStorageSpaces(ctx context.Context, _ []*provider.ListStorageSpacesRequest_Filter, _ bool) ([]*provider.StorageSpace, error) {
-	c := d.client(ctx)
-	dirs, err := c.GetTopFolders()
-	if err != nil {
-		return nil, err
-	}
-
-	u, hasUser := ctxpkg.ContextGetUser(ctx)
-
-	spaces := make([]*provider.StorageSpace, 0, len(dirs.Data))
-	for i := range dirs.Data {
-		fi := &dirs.Data[i]
-		opaque := utils.AppendPlainToOpaque(nil, "spaceAlias", "project/"+fi.Name)
-		if hasUser && u.GetId().GetOpaqueId() != "" {
-			grants := map[string]*provider.ResourcePermissions{
-				u.Id.OpaqueId: spaceRole(fi),
-			}
-			if b, err := json.Marshal(grants); err == nil {
-				opaque.Map["grants"] = &types.OpaqueEntry{Decoder: "json", Value: b}
-			}
-		}
-		spaces = append(spaces, &provider.StorageSpace{
-			Id:        &provider.StorageSpaceId{OpaqueId: fi.ID},
-			Name:      fi.Name,
-			SpaceType: "project",
-			Root: &provider.ResourceId{
-				StorageId: d.storageID,
-				SpaceId:   fi.ID,
-				OpaqueId:  fi.ID,
-			},
-			RootInfo: d.toResourceInfo(fi, fi.ID, fi.Path),
-			Mtime:    utils.TimeToTS(fi.MTime()),
-			Opaque:   opaque,
-		})
-	}
-	return spaces, nil
-}
 
 // resolveRef walks a CS3 reference to the target KW node ID and space ID.
 // If ref.Path is non-empty it resolves each component through ListFolderContents.
@@ -775,24 +735,4 @@ func (d *Driver) Unlock(ctx context.Context, ref *provider.Reference, lock *prov
 	}
 	d.locks.Delete(nodeID)
 	return &storage.UnlockResult{SpaceID: spaceID}, nil
-}
-
-func (d *Driver) CreateStorageSpace(_ context.Context, _ *provider.CreateStorageSpaceRequest) (*provider.CreateStorageSpaceResponse, error) {
-	return nil, errtypes.NotSupported("kiteworks: read-only driver")
-}
-
-func (d *Driver) UpdateStorageSpace(_ context.Context, _ *provider.UpdateStorageSpaceRequest) (*provider.UpdateStorageSpaceResponse, error) {
-	return nil, errtypes.NotSupported("kiteworks: read-only driver")
-}
-
-func (d *Driver) DeleteStorageSpace(_ context.Context, _ *provider.DeleteStorageSpaceRequest) (*storage.DeleteStorageSpaceResult, error) {
-	return nil, errtypes.NotSupported("kiteworks: read-only driver")
-}
-
-func (d *Driver) CreateHome(_ context.Context) error {
-	return errtypes.NotSupported("kiteworks: read-only driver")
-}
-
-func (d *Driver) GetHome(_ context.Context) (string, error) {
-	return "", errtypes.NotSupported("kiteworks: read-only driver")
 }

@@ -529,7 +529,11 @@ func (s *Service) CreateStorageSpace(ctx context.Context, req *provider.CreateSt
 			// if trying to create a user home fall back to CreateHome
 			if u, ok := ctxpkg.ContextGetUser(ctx); ok && req.Type == "personal" && utils.UserEqual(req.GetOwner().Id, u.Id) {
 				if err := s.Storage.CreateHome(ctx); err != nil {
-					st = status.NewInternal(ctx, "error creating home")
+					if _, ok := err.(errtypes.IsNotSupported); ok {
+						st = status.NewUnimplemented(ctx, err, "not implemented")
+					} else {
+						st = status.NewInternal(ctx, "error creating home")
+					}
 				} else {
 					st = status.NewOK(ctx)
 					// TODO we cannot return a space, but the gateway currently does not expect one...
