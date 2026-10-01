@@ -236,6 +236,12 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provi
 		session.Cleanup(ctx, true, true)
 		return nil, err
 	}
+	// Read before the node exists, so bad request metadata has no node to undo either.
+	info, err := uploadInfo(session)
+	if err != nil {
+		session.Cleanup(ctx, true, true)
+		return nil, err
+	}
 	if err := c.touchNode(ctx, session); err != nil {
 		return nil, err
 	}
@@ -245,7 +251,7 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provi
 
 	metrics.UploadSessionsBytesReceived.Inc()
 
-	if err := c.prepare(ctx, session); err != nil {
+	if err := c.prepare(ctx, session, info); err != nil {
 		return nil, err
 	}
 
@@ -359,14 +365,8 @@ func (c *coordinator) deleteTouchedNode(ctx context.Context, session Session, re
 
 // prepare has the driver write the node metadata and snapshot the previous
 // version, ahead of the commit that writes the bytes.
-func (c *coordinator) prepare(ctx context.Context, session Session) error {
+func (c *coordinator) prepare(ctx context.Context, session Session, info storage.UploadInfo) error {
 	ref := session.Reference()
-
-	info, err := uploadInfo(session)
-	if err != nil {
-		c.rollbackMarked(ctx, session)
-		return err
-	}
 
 	// A failed PrepareUpload has already undone its own writes.
 	prepared, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), info)

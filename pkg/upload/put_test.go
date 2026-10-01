@@ -514,7 +514,7 @@ var _ = Describe("the finish path", func() {
 			_, err := c.finishUpload(ctx, session)
 
 			Expect(err).To(BeAssignableToTypeOf(errtypes.BadRequest("")))
-			Expect(fs.calls).To(ContainElement("MarkProcessing(false)"))
+			Expect(fs.calls).To(BeEmpty())
 		})
 
 		It("rejects an if-unmodified-since it cannot parse", func() {
@@ -525,6 +525,20 @@ var _ = Describe("the finish path", func() {
 			_, err := c.finishUpload(ctx, session)
 
 			Expect(err).To(BeAssignableToTypeOf(errtypes.BadRequest("")))
+			Expect(fs.calls).To(BeEmpty())
+		})
+
+		It("rejects bad metadata on a new file before the node is created", func() {
+			session := stagedSession(ctx, store, false)
+			session.SetMetadata("mtime", "not-a-time")
+			Expect(session.Persist(ctx)).To(Succeed())
+
+			_, err := c.finishUpload(ctx, session)
+
+			Expect(err).To(BeAssignableToTypeOf(errtypes.BadRequest("")))
+			Expect(fs.calls).To(BeEmpty())
+			_, statErr := os.Stat(session.BinPath())
+			Expect(os.IsNotExist(statErr)).To(BeTrue(), "staged bytes were kept")
 		})
 	})
 
