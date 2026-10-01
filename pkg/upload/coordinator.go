@@ -242,7 +242,11 @@ func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provi
 		session.Cleanup(ctx, true, true)
 		return nil, err
 	}
-	if err := c.touchNode(ctx, session); err != nil {
+	// A driver whose PrepareUpload creates a new file's node is told where it goes,
+	// under the id minted at initiate. Any other is handed one TouchFile created.
+	if !session.NodeExists() && c.prepareCreatesNode() {
+		info.ParentID, info.Name = session.NodeParentID(), session.Filename()
+	} else if err := c.touchNode(ctx, session); err != nil {
 		return nil, err
 	}
 
@@ -288,6 +292,13 @@ func (c *coordinator) publishBytesReceived(ctx context.Context, session Session)
 		Filesize:          uint64(session.Size()),
 		ImpersonatingUser: impersonatingUser(ctx),
 	})
+}
+
+// prepareCreatesNode reports whether the driver's PrepareUpload creates a new
+// file's node, sparing the extra metadata write a TouchFile costs.
+func (c *coordinator) prepareCreatesNode() bool {
+	nc, ok := c.fs.(storage.NodeCreator)
+	return ok && nc.PrepareCreatesNode()
 }
 
 // touchNode creates the node a new file's upload writes to.
@@ -337,6 +348,10 @@ func (c *coordinator) prepare(ctx context.Context, session Session, info storage
 	prepared, err := c.fs.PrepareUpload(ctx, &ref, session.ID(), info)
 	if err != nil {
 		session.Cleanup(ctx, true, true)
+		if _, ok := err.(errtypes.IsNotFound); ok && info.ParentID != "" {
+			// The parent went away, or the share was revoked, while bytes were in flight.
+			return errtypes.PreconditionFailed(err.Error())
+		}
 		return err
 	}
 	metrics.UploadProcessing.Inc()

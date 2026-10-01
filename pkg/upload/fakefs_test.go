@@ -290,6 +290,17 @@ func (s *brokenStore) List(ctx context.Context) ([]Session, error) {
 	return s.SessionStore.List(ctx)
 }
 
+// fakeCreatorFS is a fakeFS that also implements storage.NodeCreator, as
+// decomposedfs does. fakeFS deliberately does not, so the specs cover the drivers
+// that create a new file's node in TouchFile.
+type fakeCreatorFS struct {
+	*fakeFS
+}
+
+func (f *fakeCreatorFS) PrepareCreatesNode() bool {
+	return true
+}
+
 // fakeOrphanFS is a fakeFS that also implements storage.OrphanChecker. fakeFS
 // deliberately does not, so the specs can cover a driver that cannot answer.
 type fakeOrphanFS struct {

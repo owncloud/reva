@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
@@ -134,6 +135,110 @@ var _ = Describe("coordinator", func() {
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(fs.touchSkippedPropagation).To(BeTrue())
+			})
+
+			// TouchFile has created the node, so PrepareUpload must not create another.
+			It("does not tell PrepareUpload where the file goes", func() {
+				session := newSession(false)
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(fs.prepareInfo.ParentID).To(BeEmpty())
+				Expect(fs.prepareInfo.Name).To(BeEmpty())
+			})
+		})
+
+		Context("for a new file on a driver whose PrepareUpload creates it", func() {
+			BeforeEach(func() {
+				c = NewCoordinator(&fakeCreatorFS{fakeFS: fs}, store, "", nil)
+			})
+
+			It("prepares and commits without a TouchFile", func() {
+				session := newSession(false)
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(fs.calls).To(Equal([]string{
+					"PrepareUpload(size=17)",
+					"CommitUpload(length=17)",
+					"MarkProcessing(false)",
+					"GetMD()",
+				}))
+			})
+
+			It("tells PrepareUpload where the file goes", func() {
+				session := newSession(false)
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(fs.prepareInfo.ParentID).To(Equal(parentID))
+				Expect(fs.prepareInfo.Name).To(Equal("report.docx"))
+			})
+
+			// The driver creates the node under the placeholder, which so becomes its id,
+			// and there is no TouchFile to report the space owner. The commit may run in
+			// another process, which only has the saved session.
+			It("saves the node id minted at initiate and the space owner PrepareUpload reported", func() {
+				session := newSession(false)
+				c.async = true
+				c.pub = &fakePublisher{}
+				fs.prepared = &storage.PrepareUploadResult{
+					SizeDiff:   bodyLen,
+					SpaceOwner: &userpb.UserId{OpaqueId: "manager-1", Idp: "idp.example.com", Type: userpb.UserType_USER_TYPE_PRIMARY},
+				}
+
+				_, err := c.finishUpload(ctx, session)
+				Expect(err).ToNot(HaveOccurred())
+
+				saved, err := store.Get(ctx, session.ID())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(saved.NodeID()).To(Equal(nodeID))
+				Expect(saved.SpaceOwner().GetOpaqueId()).To(Equal("manager-1"))
+			})
+
+			// The parent went away, or the share was revoked, while bytes were in flight.
+			It("reports a missing parent as a failed precondition", func() {
+				session := newSession(false)
+				fs.prepareErr = errtypes.NotFound("parent-1")
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).To(BeAssignableToTypeOf(errtypes.PreconditionFailed("")))
+				Expect(fs.calls).To(Equal([]string{"PrepareUpload(size=17)"}))
+				_, err = os.Stat(session.BinPath())
+				Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
+			})
+
+			It("passes any other failure through", func() {
+				session := newSession(false)
+				fs.prepareErr = errtypes.InsufficientStorage("quota exceeded")
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).To(BeAssignableToTypeOf(errtypes.InsufficientStorage("")))
+			})
+
+			It("does not tell PrepareUpload where an overwrite goes", func() {
+				session := newSession(true)
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(fs.prepareInfo.ParentID).To(BeEmpty())
+				Expect(fs.prepareInfo.Name).To(BeEmpty())
+			})
+
+			// The node itself went away: that is not the parent's precondition.
+			It("leaves an overwrite's missing node not found", func() {
+				session := newSession(true)
+				fs.prepareErr = errtypes.NotFound("node-1")
+
+				_, err := c.finishUpload(ctx, session)
+
+				Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
 			})
 		})
 
