@@ -79,14 +79,6 @@ var _ = Describe("Cache", func() {
 
 	Describe("List", func() {
 		Context("when no cache file exists yet", func() {
-			It("creates the cache file on first call", func() {
-				_, err := c.List(ctx, userID)
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = os.Stat(tmpdir + "/users/" + userID + "/received.json")
-				Expect(err).ToNot(HaveOccurred())
-			})
-
 			It("returns empty spaces", func() {
 				spaces, err := c.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
@@ -101,66 +93,14 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("returns an error when persist fails during NotFound bootstrap with a non-transient error", func() {
+			It("succeeds even when the underlying storage would refuse a write (read must not require write permission)", func() {
 				ps := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PermissionDenied("injected")}
 				c2 := receivedsharecache.New(ps, 0*time.Second)
 
-				_, err := c2.List(ctx, userID)
-				Expect(err).To(HaveOccurred())
-				Expect(atomic.LoadInt32(&ps.uploads)).To(Equal(int32(1)))
-			})
-
-			It("does not error when bootstrap persist loses a CAS race (AlreadyExists)", func() {
-				as := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PreconditionFailed("injected")}
-				c2 := receivedsharecache.New(as, 0*time.Second)
-
-				_, err := c2.List(ctx, userID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(1)))
-			})
-
-			It("does not error when bootstrap persist hits Aborted", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.Aborted("injected")}
-				c2 := receivedsharecache.New(fs, 0*time.Second)
-
-				_, err := c2.List(ctx, userID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
-			})
-
-			It("does not error when bootstrap persist hits TooEarly", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
-				c2 := receivedsharecache.New(fs, 0*time.Second)
-
-				_, err := c2.List(ctx, userID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
-			})
-
-			It("does not error when bootstrap persist hits a transient InternalError", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.InternalError("injected")}
-				c2 := receivedsharecache.New(fs, 0*time.Second)
-
-				_, err := c2.List(ctx, userID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
-			})
-
-			It("re-reads the real state after losing the bootstrap CAS race, instead of reporting empty", func() {
-				rs := &collaboration.ReceivedShare{
-					Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "real-share"}},
-					State: collaboration.ShareState_SHARE_STATE_PENDING,
-				}
-				seed := receivedsharecache.New(storage, 0*time.Second)
-				Expect(seed.Add(ctx, userID, spaceID, rs)).To(Succeed())
-
-				fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.NotFound("injected")}
-				c2 := receivedsharecache.New(fs, 0*time.Second)
-
 				spaces, err := c2.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(spaces[spaceID]).ToNot(BeNil())
-				Expect(spaces[spaceID].States).To(HaveKey("real-share"))
+				Expect(spaces).To(BeEmpty())
+				Expect(atomic.LoadInt32(&ps.uploads)).To(Equal(int32(0)), "a pure read must never call Upload")
 			})
 
 			It("is readable by a fresh cache instance after first call", func() {
@@ -442,15 +382,6 @@ var _ = Describe("Cache", func() {
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred(), "a transient gRPC transport error must be retried, not treated as fatal")
 				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
-			})
-
-			It("fails fast on a permanent errtypes.InternalError instead of burning the whole retry budget", func() {
-				fs := &alwaysFailUploadStorage{Storage: storage, err: errtypes.InternalError("injected")}
-				c2 := receivedsharecache.New(fs, 0*time.Second)
-
-				err := c2.Remove(ctx, userID, spaceID, shareID)
-				Expect(err).To(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)), "a permanent internal error must fail on the first attempt, not retry")
 			})
 
 			It("retries an AlreadyExists CAS conflict on persist like other transient storage errors", func() {

@@ -93,7 +93,7 @@ func (disk *Disk) SimpleUpload(ctx context.Context, uploadpath string, content [
 }
 
 // Upload stores a file on disk
-func (disk *Disk) Upload(_ context.Context, req UploadRequest) (*UploadResponse, error) {
+func (disk *Disk) Upload(_ context.Context, req UploadRequest) (res *UploadResponse, err error) {
 	p := disk.targetPath(req.Path)
 
 	// Serialize check+write across processes to eliminate the TOCTOU race.
@@ -102,7 +102,12 @@ func (disk *Disk) Upload(_ context.Context, req UploadRequest) (*UploadResponse,
 		// transient under high write fan-in; classify so callers retry instead of aborting
 		return nil, errtypes.InternalError(fmt.Sprintf("acquiring write lock: %s", err))
 	}
-	defer filelocks.ReleaseLock(lock)
+	defer func() {
+		rerr := filelocks.ReleaseLock(lock)
+		if err == nil {
+			err = rerr
+		}
+	}()
 
 	if req.IfMatchEtag != "" {
 		info, err := os.Stat(p)
@@ -144,7 +149,7 @@ func (disk *Disk) Upload(_ context.Context, req UploadRequest) (*UploadResponse,
 	if err != nil {
 		return nil, err
 	}
-	res := &UploadResponse{}
+	res = &UploadResponse{}
 	res.Etag, err = calcEtag(info.ModTime(), info.Size())
 	if err != nil {
 		return nil, err

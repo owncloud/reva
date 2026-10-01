@@ -83,9 +83,11 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 
 	AfterEach(func() {
 		for _, r := range revads {
-			r.Cleanup(CurrentSpecReport().Failed()) //nolint:errcheck
+			Expect(r.Cleanup(CurrentSpecReport().Failed())).To(Succeed())
 		}
-		pool.RemoveSelector("StorageProviderSelector" + revads["storage"].GrpcAddress)
+		if r, ok := revads["storage"]; ok {
+			pool.RemoveSelector("StorageProviderSelector" + r.GrpcAddress)
+		}
 	})
 
 	It("preserves all shares when 2 replicas write concurrently (OCISDEV-855)", func() {
