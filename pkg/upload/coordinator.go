@@ -231,14 +231,15 @@ func (c *coordinator) Upload(ctx context.Context, req storage.UploadRequest, uff
 // finishUpload creates the node, validates the staged bytes and commits them, or
 // hands them to postprocessing.
 func (c *coordinator) finishUpload(ctx context.Context, session Session) (*provider.ResourceInfo, error) {
+	// Only the staged bytes are read, so a mismatch has no node to undo.
+	if err := verifyAndStoreChecksums(ctx, session); err != nil {
+		session.Cleanup(ctx, true, true)
+		return nil, err
+	}
 	if err := c.touchNode(ctx, session); err != nil {
 		return nil, err
 	}
 	if err := c.markProcessing(ctx, session); err != nil {
-		return nil, err
-	}
-	if err := verifyAndStoreChecksums(ctx, session); err != nil {
-		c.rollbackMarked(ctx, session)
 		return nil, err
 	}
 

@@ -238,7 +238,7 @@ var _ = Describe("coordinator", func() {
 		})
 
 		Context("when the announced checksum does not match", func() {
-			It("rolls back before the driver writes anything", func() {
+			It("rejects the upload before the driver is called", func() {
 				session := newSession(false)
 				session.SetMetadata("checksum", "sha1 "+strings.Repeat("0", 40))
 				Expect(session.Persist(ctx)).To(Succeed())
@@ -246,12 +246,21 @@ var _ = Describe("coordinator", func() {
 				_, err := c.finishUpload(ctx, session)
 
 				Expect(err).To(HaveOccurred())
-				Expect(fs.calls).To(Equal([]string{
-					"TouchFile(markprocessing=false)",
-					"MarkProcessing(true)",
-					"RollbackUpload(nodeExisted=false,sizeDiff=0)",
-					"MarkProcessing(false)",
-				}))
+				Expect(fs.calls).To(BeEmpty())
+			})
+
+			It("removes the staged files", func() {
+				session := newSession(false)
+				session.SetMetadata("checksum", "sha1 "+strings.Repeat("0", 40))
+				Expect(session.Persist(ctx)).To(Succeed())
+
+				_, err := c.finishUpload(ctx, session)
+				Expect(err).To(HaveOccurred())
+
+				_, err = os.Stat(session.BinPath())
+				Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
+				_, err = store.Get(ctx, session.ID())
+				Expect(err).To(HaveOccurred())
 			})
 		})
 

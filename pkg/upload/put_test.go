@@ -475,7 +475,7 @@ var _ = Describe("the finish path", func() {
 			_, err := c.finishUpload(ctx, session)
 
 			Expect(err).To(MatchError("session file unreadable"))
-			Expect(fs.calls).To(ContainElement("MarkProcessing(false)"))
+			Expect(fs.calls).To(BeEmpty())
 		})
 
 		// Computed once here, so the driver does not have to re-read the staged file.
