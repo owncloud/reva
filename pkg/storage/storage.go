@@ -83,6 +83,10 @@ type UploadInfo struct {
 	IfMatch           string
 	IfNoneMatch       string
 	IfUnmodifiedSince time.Time
+	// Where a new file goes, for a driver whose PrepareUpload creates it. Empty
+	// leaves a missing node NotFound.
+	ParentID string
+	Name     string
 }
 
 type PrepareUploadResult struct {

@@ -6,8 +6,10 @@ import (
 	"time"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/aspects"
@@ -109,6 +111,173 @@ var _ = Describe("PrepareUpload", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result.SpaceOwner.GetOpaqueId()).To(Equal(env.Owner.GetId().GetOpaqueId()))
+		})
+	})
+
+	// Nothing has created the node: PrepareUpload does, under the id minted at initiate.
+	Context("new file nothing has created yet", func() {
+		var (
+			perms       *provider.ResourcePermissions
+			placeholder string
+			createRef   *provider.Reference
+			info        storage.UploadInfo
+			parent      *node.Node
+		)
+
+		BeforeEach(func() {
+			perms = &provider.ResourcePermissions{InitiateFileUpload: true, Stat: true}
+		})
+
+		JustBeforeEach(func() {
+			env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(perms, nil)
+
+			var err error
+			parent, err = env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{ResourceId: env.SpaceRootRes, Path: "/dir1"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(parent.Exists).To(BeTrue())
+
+			placeholder = uuid.New().String()
+			createRef = &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: env.SpaceRootRes.SpaceId, OpaqueId: placeholder}}
+			info = storage.UploadInfo{
+				NodeExisted: false,
+				Size:        42,
+				ParentID:    parent.ID,
+				Name:        "upload-target.txt",
+			}
+		})
+
+		byID := func() *node.Node {
+			n, err := env.Lookup.NodeFromID(env.Ctx, createRef.ResourceId)
+			Expect(err).ToNot(HaveOccurred())
+			return n
+		}
+		byName := func() *node.Node {
+			n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			return n
+		}
+		expectNothingCreated := func() {
+			Expect(byID().Exists).To(BeFalse(), "a node was left under the placeholder id")
+			Expect(byName().Exists).To(BeFalse(), "a file was left listed in its folder")
+		}
+
+		It("creates the node under the placeholder id with all its metadata", func() {
+			result, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.SizeDiff).To(Equal(int64(42)))
+			Expect(result.VersionCreated).To(BeFalse())
+			Expect(result.SpaceOwner.GetOpaqueId()).To(Equal(env.Owner.GetId().GetOpaqueId()))
+
+			n := byID()
+			Expect(n.Exists).To(BeTrue())
+			Expect(n.ParentID).To(Equal(parent.ID))
+			Expect(n.Name).To(Equal("upload-target.txt"))
+			Expect(n.BlobID).To(Equal("session-new"))
+			Expect(n.Blobsize).To(Equal(int64(42)))
+			id, err := n.ProcessingID(env.Ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(id).To(Equal("session-new"))
+
+			Expect(byName().ID).To(Equal(placeholder))
+		})
+
+		It("checks the quota once", func() {
+			calls := 0
+			original := node.CheckQuota
+			node.CheckQuota = func(ctx context.Context, spaceRoot *node.Node, overwrite bool, oldSize, newSize uint64) (bool, error) {
+				calls++
+				return original(ctx, spaceRoot, overwrite, oldSize, newSize)
+			}
+			defer func() { node.CheckQuota = original }()
+
+			_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(calls).To(Equal(1))
+		})
+
+		It("leaves a missing node NotFound when not told where it goes", func() {
+			info.ParentID, info.Name = "", ""
+
+			_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+			Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
+			expectNothingCreated()
+		})
+
+		Context("when the parent went away", func() {
+			It("returns NotFound and creates nothing", func() {
+				info.ParentID = uuid.New().String()
+
+				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
+				expectNothingCreated()
+			})
+		})
+
+		Context("when the user may no longer upload into the parent", func() {
+			BeforeEach(func() {
+				perms = &provider.ResourcePermissions{Stat: true}
+			})
+
+			It("returns PermissionDenied and creates nothing", func() {
+				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.PermissionDenied("")))
+				expectNothingCreated()
+			})
+		})
+
+		Context("when the user can no longer see the parent", func() {
+			BeforeEach(func() {
+				perms = &provider.ResourcePermissions{}
+			})
+
+			It("returns NotFound and creates nothing", func() {
+				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
+				expectNothingCreated()
+			})
+		})
+
+		Context("when another upload took the name meanwhile", func() {
+			It("returns AlreadyExists and leaves the other file alone", func() {
+				_, err := env.Fs.TouchFile(env.Ctx, ref, false, "")
+				Expect(err).ToNot(HaveOccurred())
+				other := byName()
+
+				_, err = env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.AlreadyExists("")))
+
+				Expect(byID().Exists).To(BeFalse())
+				kept := byName()
+				Expect(kept.Exists).To(BeTrue())
+				Expect(kept.ID).To(Equal(other.ID))
+			})
+		})
+
+		Context("when the quota is exceeded", func() {
+			It("returns InsufficientStorage and creates nothing", func() {
+				original := node.CheckQuota
+				node.CheckQuota = func(context.Context, *node.Node, bool, uint64, uint64) (bool, error) {
+					return false, errtypes.InsufficientStorage("quota exceeded")
+				}
+				defer func() { node.CheckQuota = original }()
+
+				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.InsufficientStorage("")))
+				expectNothingCreated()
+			})
+		})
+
+		// The lock is checked once the node exists, so this fails after the create.
+		Context("when it fails after creating the node", func() {
+			It("purges the node it created", func() {
+				ctx := ctxpkg.ContextSetLockID(env.Ctx, "a-lock-the-new-file-cannot-have")
+
+				_, err := env.Fs.PrepareUpload(ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.Aborted("")))
+				expectNothingCreated()
+				_, err = os.Stat(env.Lookup.InternalPath(env.SpaceRootRes.SpaceId, placeholder))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "the node file was left on disk")
+			})
 		})
 	})
 
