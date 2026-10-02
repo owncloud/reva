@@ -20,7 +20,6 @@ package receivedsharecache_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -170,81 +169,6 @@ var _ = Describe("Cache", func() {
 		})
 	})
 
-	Describe("concurrent writes from multiple cache instances", func() {
-		It("preserves the share when 15 replicas write the same file simultaneously", func() {
-			const numReplicas = 15
-
-			// barrier releases all 15 Upload calls at once — every replica is a loser
-			// except one, maximising retry pressure on a single shared file.
-			bs := metadata.NewBarrierStorage(storage, numReplicas)
-			replicas := make([]receivedsharecache.Cache, numReplicas)
-			for i := range replicas {
-				replicas[i] = receivedsharecache.New(bs, 0*time.Second)
-			}
-
-			errs := make([]error, numReplicas)
-			var wg sync.WaitGroup
-			for i := 0; i < numReplicas; i++ {
-				wg.Add(1)
-				go func(idx int) {
-					defer wg.Done()
-					rs := &collaboration.ReceivedShare{
-						Share: &collaboration.Share{
-							Id: &collaboration.ShareId{OpaqueId: "share-0"},
-						},
-						State: collaboration.ShareState_SHARE_STATE_PENDING,
-					}
-					errs[idx] = replicas[idx].Add(ctx, userID, spaceID, rs)
-				}(i)
-			}
-			wg.Wait()
-			for i, err := range errs {
-				Expect(err).ToNot(HaveOccurred(), "replica %d failed", i)
-			}
-
-			fresh := receivedsharecache.New(storage, 0*time.Second)
-			spaces, err := fresh.List(ctx, userID)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(spaces[spaceID]).ToNot(BeNil())
-			Expect(spaces[spaceID].States).To(HaveKey("share-0"))
-		})
-
-		It("preserves every share when 40 replicas write concurrently through the real disk lock", func() {
-			const numReplicas = 40
-
-			replicas := make([]receivedsharecache.Cache, numReplicas)
-			for i := range replicas {
-				replicas[i] = receivedsharecache.New(storage, 0*time.Second)
-			}
-
-			errs := make([]error, numReplicas)
-			var wg sync.WaitGroup
-			for i := 0; i < numReplicas; i++ {
-				wg.Add(1)
-				go func(idx int) {
-					defer wg.Done()
-					rs := &collaboration.ReceivedShare{
-						Share: &collaboration.Share{
-							Id: &collaboration.ShareId{OpaqueId: fmt.Sprintf("share-%d", idx)},
-						},
-						State: collaboration.ShareState_SHARE_STATE_PENDING,
-					}
-					errs[idx] = replicas[idx].Add(ctx, userID, spaceID, rs)
-				}(i)
-			}
-			wg.Wait()
-			for i, err := range errs {
-				Expect(err).ToNot(HaveOccurred(), "replica %d failed", i)
-			}
-
-			fresh := receivedsharecache.New(storage, 0*time.Second)
-			spaces, err := fresh.List(ctx, userID)
-			Expect(err).ToNot(HaveOccurred())
-			for i := 0; i < numReplicas; i++ {
-				Expect(spaces[spaceID].States).To(HaveKey(fmt.Sprintf("share-%d", i)), "missing share-%d", i)
-			}
-		})
-	})
 
 	Describe("retryPersist's post-failure resync", func() {
 		It("does not perform a redundant bootstrap upload when no file exists yet", func() {

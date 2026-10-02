@@ -100,9 +100,6 @@ func acquireLock(file string, write bool) (*flock.Flock, error) {
 
 	var flock *flock.Flock
 	for i := 1; i <= _lockCyclesValue; i++ {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
 		if flock = getMutexedFlock(n); flock != nil {
 			break
 		}
@@ -116,10 +113,6 @@ func acquireLock(file string, write bool) (*flock.Flock, error) {
 
 	var ok bool
 	for i := 1; i <= _lockCyclesValue; i++ {
-		if ctx.Err() != nil {
-			releaseMutexedFlock(n)
-			return nil, ctx.Err()
-		}
 		if write {
 			ok, err = flock.TryLock()
 		} else {
