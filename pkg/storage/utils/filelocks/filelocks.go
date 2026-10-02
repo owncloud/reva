@@ -65,16 +65,14 @@ func SetLockCycleDurationFactor(v int) {
 // mehtod.
 func getMutexedFlock(file string) *flock.Flock {
 
-	// Is there lock already?
-	if _, ok := _localLocks.Load(file); ok {
+	// Atomically claim the slot for this file; LoadOrStore closes the TOCTOU
+	// window a separate Load+Store would leave between two concurrent callers.
+	actual, loaded := _localLocks.LoadOrStore(file, flock.New(file))
+	if loaded {
 		// There is already a lock for this file, another can not be acquired
 		return nil
 	}
-
-	// Acquire the write log on the target node first.
-	l := flock.New(file)
-	_localLocks.Store(file, l)
-	return l
+	return actual.(*flock.Flock)
 
 }
 
