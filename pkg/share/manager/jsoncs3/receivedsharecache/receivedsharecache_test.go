@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -329,6 +330,47 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				c = receivedsharecache.New(storage, 0*time.Second)
+				s, err := c.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).To(BeNil())
+			})
+
+			It("recovers when the backing file was deleted externally (space reprovisioned)", func() {
+				// c already holds stale state from the BeforeEach Add.
+				// Simulate an admin/backup wiping received.json out from under it.
+				Expect(os.Remove(filepath.Join(tmpdir, "users", userID, "received.json"))).To(Succeed())
+
+				err := c.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred(), "sync's NotFound must discard the stale snapshot so persist can bootstrap-recreate the file")
+			})
+
+			It("does not resurrect other shares that existed before the backing file was deleted", func() {
+				other := &collaboration.ReceivedShare{
+					Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "other-share"}},
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				}
+				Expect(c.Add(ctx, userID, spaceID, other)).To(Succeed())
+
+				Expect(os.Remove(filepath.Join(tmpdir, "users", userID, "received.json"))).To(Succeed())
+
+				Expect(c.Remove(ctx, userID, spaceID, shareID)).To(Succeed())
+
+				fresh := receivedsharecache.New(storage, 0*time.Second)
+				spaces, err := fresh.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				if spaces[spaceID] != nil {
+					Expect(spaces[spaceID].States).ToNot(HaveKey("other-share"),
+						"stale pre-wipe share resurrected after the backing file was externally deleted")
+				}
+			})
+
+			It("keeps List/Get usable on the same instance right after the backing file is found missing", func() {
+				Expect(os.Remove(filepath.Join(tmpdir, "users", userID, "received.json"))).To(Succeed())
+
+				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(BeEmpty())
+
 				s, err := c.Get(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil())
