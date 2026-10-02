@@ -103,10 +103,8 @@ func (disk *Disk) Upload(_ context.Context, req UploadRequest) (res *UploadRespo
 		return nil, errtypes.InternalError(fmt.Sprintf("acquiring write lock: %s", err))
 	}
 	defer func() {
-		rerr := filelocks.ReleaseLock(lock)
-		if err == nil {
-			err = rerr
-		}
+		// Don't let a cleanup-only error override an already-successful write.
+		_ = filelocks.ReleaseLock(lock)
 	}()
 
 	if req.IfMatchEtag != "" {

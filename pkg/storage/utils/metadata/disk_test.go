@@ -3,13 +3,18 @@ package metadata_test
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/filelocks"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDisk(t *testing.T) {
@@ -83,3 +88,55 @@ var _ = Describe("Disk", func() {
 		})
 	})
 })
+
+// TestUpload_ReleaseErrorDoesNotClobberSuccessfulWrite proves a cleanup-only
+// ReleaseLock error can't turn an already-successful write into a failure.
+func TestUpload_ReleaseErrorDoesNotClobberSuccessfulWrite(t *testing.T) {
+	const outerAttempts = 50
+
+	for attempt := 0; attempt < outerAttempts; attempt++ {
+		dir := t.TempDir()
+		storage, err := metadata.NewDiskStorage(dir)
+		require.NoError(t, err)
+		require.NoError(t, storage.Init(context.Background(), "test"))
+
+		contentPath := filepath.Join(dir, "f")
+		lockPath := contentPath + filelocks.LockFileSuffix
+		trapDir := filepath.Join(dir, "trap")
+		require.NoError(t, os.Mkdir(trapDir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(trapDir, "x"), []byte("x"), 0644))
+
+		var stop atomic.Bool
+		var hammered atomic.Int64
+		go func() {
+			for !stop.Load() {
+				// Swap the lock path for the trap dir, then back, on repeat.
+				_ = os.RemoveAll(lockPath)
+				_ = os.Rename(trapDir, lockPath)
+				hammered.Add(1)
+
+				_ = os.RemoveAll(trapDir)
+				require.NoError(t, os.Mkdir(trapDir, 0755))
+				require.NoError(t, os.WriteFile(filepath.Join(trapDir, "x"), []byte("x"), 0644))
+
+				_ = os.RemoveAll(lockPath)
+			}
+		}()
+
+		_, uploadErr := storage.Upload(context.Background(), metadata.UploadRequest{
+			Path:    "f",
+			Content: []byte("v1"),
+		})
+		stop.Store(true)
+
+		if uploadErr != nil {
+			content, readErr := os.ReadFile(contentPath)
+			if readErr == nil && string(content) == "v1" {
+				t.Fatalf("Upload reported failure (%v) on outer attempt %d after %d hammer cycles, "+
+					"but the content it reported on had already been written successfully to disk -- "+
+					"a cleanup-only error clobbered a successful write", uploadErr, attempt, hammered.Load())
+			}
+			// else: acquisition itself failed, unrelated -- retry.
+		}
+	}
+}

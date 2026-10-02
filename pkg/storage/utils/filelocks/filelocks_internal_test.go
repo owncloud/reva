@@ -20,11 +20,49 @@ package filelocks
 
 import (
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 )
+
+// TestGetMutexedFlock_Exclusive proves getMutexedFlock never admits two
+// concurrent holders for the same path.
+func TestGetMutexedFlock_Exclusive(t *testing.T) {
+	const (
+		goroutines = 100
+		iterations = 200
+	)
+	path := "mutexed-flock-exclusivity-probe"
+
+	var held int32
+	var overlapSeen int32
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				var l *flock.Flock
+				for l == nil {
+					l = getMutexedFlock(path)
+				}
+
+				if atomic.AddInt32(&held, 1) > 1 {
+					atomic.StoreInt32(&overlapSeen, 1)
+				}
+
+				atomic.AddInt32(&held, -1)
+				releaseMutexedFlock(path)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(0), overlapSeen, "two goroutines held the local gate for %q at the same time", path)
+}
 
 func TestAcquireReadLock_Errors(t *testing.T) {
 	l1, err := acquireLock("", false)
