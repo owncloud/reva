@@ -550,4 +550,24 @@ var _ = Describe("Tree", func() {
 			Expect(d).To(Not(BeNil()))
 		})
 	})
+
+	Describe("InitNewNode", func() {
+		It("marks the node as processing before returning, closing the window where a concurrent reader could see it as not-processing", func() {
+			parentRef := &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "/initnewnodetestdir",
+			}
+			parentNode, err := env.CreateTestDir("initnewnodetestdir", parentRef)
+			Expect(err).ToNot(HaveOccurred())
+
+			fileNode := node.New(parentNode.SpaceID, uuid.New().String(), parentNode.ID, "newfile", 0, "", provider.ResourceType_RESOURCE_TYPE_FILE, nil, env.Lookup)
+			fileNode.SpaceRoot = parentNode.SpaceRoot
+
+			unlock, err := t.InitNewNode(env.Ctx, fileNode, 0)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = unlock() }()
+
+			Expect(fileNode.IsProcessing(env.Ctx)).To(BeTrue(), "InitNewNode must set the processing xattr before returning")
+		})
+	})
 })

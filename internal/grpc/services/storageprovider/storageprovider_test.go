@@ -35,6 +35,7 @@ func TestInitiateFileUpload_LostCASRaceStatusMapping(t *testing.T) {
 	}{
 		{"Aborted (lost CAS race)", errtypes.Aborted("parent already has a child"), rpc.Code_CODE_ABORTED},
 		{"AlreadyExists (concurrent create)", errtypes.AlreadyExists("child already exists"), rpc.Code_CODE_ALREADY_EXISTS},
+		{"TooEarly (lock-acquire timeout)", errtypes.TooEarly("acquiring write lock: timeout"), rpc.Code_CODE_TOO_EARLY},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

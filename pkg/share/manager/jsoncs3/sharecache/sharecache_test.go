@@ -21,11 +21,13 @@ package sharecache_test
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/sharecache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
@@ -82,4 +84,29 @@ var _ = Describe("Sharecache", func() {
 			})
 		})
 	})
+
+	Describe("Add", func() {
+		It("retries a TooEarly CAS conflict on persist instead of aborting", func() {
+			fs := &errOnceUploadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+
+			err := c2.Add(ctx, userid, shareID)
+			Expect(err).ToNot(HaveOccurred(), "TooEarly from write-lock contention should be retried, not treated as fatal")
+			Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+		})
+	})
 })
+
+// errOnceUploadStorage fails Upload once with a configured error, then delegates.
+type errOnceUploadStorage struct {
+	metadata.Storage
+	err     error
+	uploads int32
+}
+
+func (e *errOnceUploadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if atomic.AddInt32(&e.uploads, 1) == 1 {
+		return nil, e.err
+	}
+	return e.Storage.Upload(ctx, req)
+}

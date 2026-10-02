@@ -90,6 +90,21 @@ func (disk *Disk) SimpleUpload(ctx context.Context, uploadpath string, content [
 	return err
 }
 
+// statOrPreconditionFailed stats p, translating a missing file into a
+// PreconditionFailed carrying notExistMsg -- RFC 9110 requires a precondition
+// comparing against the current representation to fail when there is none.
+func statOrPreconditionFailed(p, notExistMsg string) (os.FileInfo, error) {
+	info, err := os.Stat(p)
+	switch {
+	case err != nil && errors.Is(err, os.ErrNotExist):
+		return nil, errtypes.PreconditionFailed(notExistMsg)
+	case err != nil:
+		return nil, err
+	default:
+		return info, nil
+	}
+}
+
 // Upload stores a file on disk
 func (disk *Disk) Upload(_ context.Context, req UploadRequest) (*UploadResponse, error) {
 	p := disk.targetPath(req.Path)
@@ -108,13 +123,12 @@ func (disk *Disk) Upload(_ context.Context, req UploadRequest) (*UploadResponse,
 		}
 	}
 	if req.IfUnmodifiedSince != (time.Time{}) {
-		info, err := os.Stat(p)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		info, err := statOrPreconditionFailed(p, "resource does not exist")
+		if err != nil {
 			return nil, err
-		} else if err == nil {
-			if info.ModTime().After(req.IfUnmodifiedSince) {
-				return nil, errtypes.PreconditionFailed(fmt.Sprintf("resource has been modified, mtime: %s > since %s", info.ModTime(), req.IfUnmodifiedSince))
-			}
+		}
+		if info.ModTime().After(req.IfUnmodifiedSince) {
+			return nil, errtypes.PreconditionFailed(fmt.Sprintf("resource has been modified, mtime: %s > since %s", info.ModTime(), req.IfUnmodifiedSince))
 		}
 	}
 	err := os.WriteFile(p, req.Content, 0644)

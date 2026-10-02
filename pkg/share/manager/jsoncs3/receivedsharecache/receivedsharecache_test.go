@@ -94,6 +94,15 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
+			It("fails fast on a permanent InternalError on cold-start sync instead of burning the retry budget", func() {
+				fs := &alwaysFailDownloadStorage{Storage: storage, downloadErr: errtypes.InternalError("http 401: unauthorized")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				_, err := c2.List(ctx, userID)
+				Expect(err).To(HaveOccurred())
+				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(1)), "a permanent error must not be retried, mirroring retryPersist's own InternalError handling")
+			})
+
 			It("succeeds even when the underlying storage would refuse a write (read must not require write permission)", func() {
 				ps := &alwaysFailUploadStorage{Storage: storage, err: errtypes.PermissionDenied("injected")}
 				c2 := receivedsharecache.New(ps, 0*time.Second)
@@ -496,6 +505,22 @@ var _ = Describe("Cache", func() {
 				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
 				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(3)))
 			})
+
+			It("gives up an endlessly-flaky resync on its own bounded budget, independent of persistAttempts", func() {
+				fs := &alwaysFailDownloadStorage{Storage: storage, downloadErr: errtypes.TooEarly("injected"), uploadErr: errtypes.Aborted("injected")}
+				c2 := receivedsharecache.New(fs, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).To(HaveOccurred())
+				// persistFunc/Upload is only ever called once: the single real persist
+				// attempt that set needsResync. You cannot safely retry a CAS write
+				// against state you can't refresh, so persistAttempts correctly stays
+				// at 1 -- but the resync itself must give up on its own
+				// maxResyncAttemptsPerFailure budget (20) rather than consuming the
+				// old shared maxIterations budget (which used to let this run to 39).
+				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(1)))
+				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(20)), "resync retries must be bounded by maxResyncAttemptsPerFailure, not the old shared iteration budget")
+			})
 		})
 	})
 })
@@ -614,7 +639,30 @@ func (f *flakyDownloadStorage) Download(ctx context.Context, req metadata.Downlo
 	f.mu.Unlock()
 	atomic.AddInt32(&f.downloads, 1)
 	if atomic.AddInt32(&f.downloadFailures, -1) >= 0 {
-		return nil, errtypes.InternalError("injected")
+		return nil, errtypes.TooEarly("injected")
 	}
 	return f.Storage.Download(ctx, req)
+}
+
+// alwaysFailDownloadStorage fails every Download with downloadErr, never delegating.
+// If uploadErr is also set, Upload fails with that too; otherwise Upload delegates normally.
+type alwaysFailDownloadStorage struct {
+	metadata.Storage
+	downloadErr error
+	uploadErr   error
+	downloads   int32
+	uploads     int32
+}
+
+func (a *alwaysFailDownloadStorage) Download(_ context.Context, _ metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	atomic.AddInt32(&a.downloads, 1)
+	return nil, a.downloadErr
+}
+
+func (a *alwaysFailDownloadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if a.uploadErr == nil {
+		return a.Storage.Upload(ctx, req)
+	}
+	atomic.AddInt32(&a.uploads, 1)
+	return nil, a.uploadErr
 }

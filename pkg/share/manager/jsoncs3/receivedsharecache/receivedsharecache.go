@@ -227,8 +227,7 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 
 func isSyncTransient(err error) bool {
 	_, isTooEarly := err.(errtypes.IsTooEarly)
-	_, isInternal := err.(errtypes.IsInternalError)
-	return isTooEarly || isInternal || isTransientGRPCStatus(err)
+	return isTooEarly || isTransientGRPCStatus(err)
 }
 
 // isTransientGRPCStatus catches raw gRPC transport errors that metadata.CS3 never wraps in errtypes.
@@ -258,12 +257,15 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 	bo.MaxInterval = 50 * time.Millisecond
 
 	const maxPersistAttempts = 20
-	const maxIterations = 2 * maxPersistAttempts
+	// bounds resync retries independently of persistAttempts, so a flaky
+	// resync can never starve the persist budget of its full attempt count
+	const maxResyncAttemptsPerFailure = maxPersistAttempts
 
 	var err error
 	needsResync := false
 	persistAttempts := 0
-	for iter := 0; iter < maxIterations && persistAttempts < maxPersistAttempts; iter++ {
+	resyncAttempts := 0
+	for persistAttempts < maxPersistAttempts {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -277,16 +279,22 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			serr := c.sync(ctx, userID)
 			if serr == nil {
 				needsResync = false
+				resyncAttempts = 0
 				continue // fresh state is in memory; retry persistFunc next attempt, no need to wait
 			}
 			// keep err at its last real (persist or resync) failure; never let a
 			// budget-exhausting resync success clobber it into a false nil return
 			err = serr
 			if !isSyncTransient(serr) {
-				log.Error().Int("attempt", iter).Err(serr).Msg("lost update: re-read failed, aborting")
+				log.Error().Err(serr).Msg("lost update: re-read failed, aborting")
 				return serr
 			}
-			log.Warn().Int("attempt", iter).Err(serr).Msg("lost update: re-read before retry")
+			resyncAttempts++
+			if resyncAttempts >= maxResyncAttemptsPerFailure {
+				log.Error().Err(serr).Msg("lost update: resync would not stabilize, giving up")
+				return serr
+			}
+			log.Warn().Err(serr).Msg("lost update: re-read before retry")
 		} else {
 			persistAttempts++
 			err = persistFunc()
@@ -294,28 +302,28 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 			case err == nil:
 				return nil
 			case isTransientGRPCStatus(err):
-				log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: transient gRPC error, retrying")
+				log.Debug().Err(err).Msg("persist failed: transient gRPC error, retrying")
 			default:
 				switch err.(type) {
 				case errtypes.Aborted:
 					// expected when the if-match etag check fails; on some branches TooEarly also surfaces as Aborted
 					// continue with sync below
-					log.Debug().Int("attempt", iter).Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
+					log.Debug().Msg("CAS failed: Aborted (etag changed or upload in progress), retrying")
 				case errtypes.PreconditionFailed:
 					// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
 					// continue with sync below
-					log.Debug().Int("attempt", iter).Msg("CAS failed: PreconditionFailed (etag changed), retrying")
+					log.Debug().Msg("CAS failed: PreconditionFailed (etag changed), retrying")
 				case errtypes.AlreadyExists:
 					// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
 					// Thas happens when the cache thinks there is no file.
 					// continue with sync below
-					log.Debug().Int("attempt", iter).Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
+					log.Debug().Msg("CAS failed: AlreadyExists (file created concurrently), retrying")
 				case errtypes.TooEarly:
 					// storage-system has an upload in progress for this node; wait for it to finish
 					// continue with sync below
-					log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
+					log.Debug().Msg("CAS failed: TooEarly (upload in progress), retrying")
 				default:
-					log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
+					log.Error().Err(err).Msg("persisting received share failed, giving up")
 					return err
 				}
 			}
