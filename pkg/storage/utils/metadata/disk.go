@@ -93,11 +93,11 @@ func (disk *Disk) SimpleUpload(ctx context.Context, uploadpath string, content [
 }
 
 // Upload stores a file on disk
-func (disk *Disk) Upload(_ context.Context, req UploadRequest) (res *UploadResponse, err error) {
+func (disk *Disk) Upload(ctx context.Context, req UploadRequest) (res *UploadResponse, err error) {
 	p := disk.targetPath(req.Path)
 
 	// Serialize check+write across processes to eliminate the TOCTOU race.
-	lock, err := filelocks.AcquireWriteLock(p)
+	lock, err := filelocks.AcquireWriteLock(ctx, p)
 	if err != nil {
 		// transient under high write fan-in; classify so callers retry instead of aborting
 		return nil, errtypes.TooEarly(fmt.Sprintf("acquiring write lock: %s", err))

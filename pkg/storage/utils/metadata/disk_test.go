@@ -8,12 +8,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/gofrs/flock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/filelocks"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,4 +142,35 @@ func TestUpload_ReleaseErrorDoesNotClobberSuccessfulWrite(t *testing.T) {
 			// else: acquisition itself failed, unrelated -- retry.
 		}
 	}
+}
+
+// TestUpload_IgnoresContextDuringLockAcquireWait proves AcquireWriteLock's
+// blocking wait ignores ctx -- Upload's ctx param is unused (`_`), so a
+// canceled/expired context doesn't shorten the wait under contention.
+func TestUpload_IgnoresContextDuringLockAcquireWait(t *testing.T) {
+	filelocks.SetMaxLockCycles(5)
+	filelocks.SetLockCycleDurationFactor(10)
+
+	dir := t.TempDir()
+	storage, err := metadata.NewDiskStorage(dir)
+	require.NoError(t, err)
+	require.NoError(t, storage.Init(context.Background(), "test"))
+
+	lockPath := filepath.Join(dir, "f") + filelocks.LockFileSuffix
+	external := flock.New(lockPath)
+	ok, lockErr := external.TryLock()
+	require.NoError(t, lockErr)
+	require.True(t, ok)
+	defer external.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, uploadErr := storage.Upload(ctx, metadata.UploadRequest{Path: "f", Content: []byte("v1")})
+	elapsed := time.Since(start)
+
+	assert.Error(t, uploadErr)
+	assert.Less(t, elapsed, 50*time.Millisecond,
+		"Upload blocked %s despite a 10ms context deadline -- lock-acquire wait ignores ctx", elapsed)
 }

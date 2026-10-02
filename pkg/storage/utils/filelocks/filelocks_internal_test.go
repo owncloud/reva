@@ -65,18 +65,18 @@ func TestGetMutexedFlock_Exclusive(t *testing.T) {
 }
 
 func TestAcquireReadLock_Errors(t *testing.T) {
-	l1, err := acquireLock("", false)
+	l1, err := acquireLock(t.Context(), "", false)
 	assert.Nil(t, l1)
 	assert.Equal(t, err, ErrPathEmpty)
 
 	file, fin, _ := FileFactory()
 	defer fin()
 
-	l2, err := acquireLock(file, false)
+	l2, err := acquireLock(t.Context(), file, false)
 	assert.NotNil(t, l2)
 	assert.Nil(t, err)
 
-	l3, err := acquireLock(file, false)
+	l3, err := acquireLock(t.Context(), file, false)
 	assert.Nil(t, l3)
 	assert.Equal(t, err, ErrAcquireLockFailed)
 }
@@ -98,7 +98,7 @@ func TestAcquireWriteLock_DoesNotWedgeAfterExternalContentionClears(t *testing.T
 	assert.Nil(t, err)
 
 	// contended: must fail while the external holder is locked.
-	l1, err := acquireLock(file, true)
+	l1, err := acquireLock(t.Context(), file, true)
 	assert.Nil(t, l1)
 	assert.Equal(t, ErrAcquireLockFailed, err)
 
@@ -108,7 +108,7 @@ func TestAcquireWriteLock_DoesNotWedgeAfterExternalContentionClears(t *testing.T
 	// must now succeed, since no one holds the real lock. If this fails,
 	// acquireLock's earlier failed attempt leaked its entry in _localLocks
 	// and every subsequent call for this path is permanently wedged.
-	l2, err := acquireLock(file, true)
+	l2, err := acquireLock(t.Context(), file, true)
 	assert.NotNil(t, l2, "acquireLock is permanently wedged after a transient external lock cleared")
 	assert.Nil(t, err)
 }

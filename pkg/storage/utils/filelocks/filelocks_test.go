@@ -40,7 +40,7 @@ func TestAcquireWriteLock(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			l, err := filelocks.AcquireWriteLock(file)
+			l, err := filelocks.AcquireWriteLock(t.Context(), file)
 			assert.Nil(t, err)
 			require.NotNil(t, l)
 
@@ -70,7 +70,7 @@ func TestAcquireReadLock(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			l, err := filelocks.AcquireReadLock(file)
+			l, err := filelocks.AcquireReadLock(t.Context(), file)
 			assert.Nil(t, err)
 			require.NotNil(t, l)
 
@@ -104,7 +104,7 @@ func TestAcquireReadLockFail(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			l, err := filelocks.AcquireReadLock(file)
+			l, err := filelocks.AcquireReadLock(t.Context(), file)
 			if err != nil {
 				// collect the error in a channel
 				errors <- err
@@ -126,7 +126,7 @@ func TestReleaseLock(t *testing.T) {
 	file, fin, _ := filelocks.FileFactory()
 	defer fin()
 
-	l1, err := filelocks.AcquireWriteLock(file)
+	l1, err := filelocks.AcquireWriteLock(t.Context(), file)
 	assert.Equal(t, true, l1.Locked())
 	assert.Nil(t, err)
 

@@ -19,6 +19,7 @@
 package filelocks
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -87,7 +88,7 @@ func releaseMutexedFlock(file string) {
 // acquireWriteLog acquires a lock on a file or directory.
 // if the parameter write is true, it gets an exclusive write lock, otherwise a shared read lock.
 // The function returns a Flock object, unlocking has to be done in the calling function.
-func acquireLock(file string, write bool) (*flock.Flock, error) {
+func acquireLock(ctx context.Context, file string, write bool) (*flock.Flock, error) {
 	var err error
 
 	// Create a file to carry the log
@@ -103,7 +104,11 @@ func acquireLock(file string, write bool) (*flock.Flock, error) {
 		}
 		w := time.Duration(i*_lockCycleDurationFactor) * time.Millisecond
 
-		time.Sleep(w)
+		select {
+		case <-time.After(w):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	if flock == nil {
 		return nil, ErrAcquireLockFailed
@@ -121,7 +126,12 @@ func acquireLock(file string, write bool) (*flock.Flock, error) {
 			break
 		}
 
-		time.Sleep(time.Duration(i*_lockCycleDurationFactor) * time.Millisecond)
+		select {
+		case <-time.After(time.Duration(i*_lockCycleDurationFactor) * time.Millisecond):
+		case <-ctx.Done():
+			releaseMutexedFlock(n)
+			return nil, ctx.Err()
+		}
 	}
 
 	if !ok {
@@ -152,16 +162,16 @@ func FlockFile(file string) string {
 // file and returns a lock object or an error accordingly.
 // Call with the file to lock. This function creates .lock file next
 // to it.
-func AcquireReadLock(file string) (*flock.Flock, error) {
-	return acquireLock(file, false)
+func AcquireReadLock(ctx context.Context, file string) (*flock.Flock, error) {
+	return acquireLock(ctx, file, false)
 }
 
 // AcquireWriteLock tries to acquire a shared lock to write from the
 // file and returns a lock object or an error accordingly.
 // Call with the file to lock. This function creates an extra .lock
 // file next to it.
-func AcquireWriteLock(file string) (*flock.Flock, error) {
-	return acquireLock(file, true)
+func AcquireWriteLock(ctx context.Context, file string) (*flock.Flock, error) {
+	return acquireLock(ctx, file, true)
 }
 
 // ReleaseLock releases a lock from a file that was previously created
