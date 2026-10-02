@@ -48,7 +48,7 @@ func (n *Node) SetLock(ctx context.Context, lock *provider.Lock) error {
 	}
 
 	// get file lock, so that nobody can create the lock in the meantime
-	fileLock, err := filelocks.AcquireWriteLock(n.InternalPath())
+	fileLock, err := filelocks.AcquireWriteLock(ctx, n.InternalPath())
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (n Node) ReadLock(ctx context.Context, skipFileLock bool) (*provider.Lock, 
 	// the caller of ReadLock already may hold a file lock
 	if !skipFileLock {
 		_, subspan := tracer.Start(ctx, "filelocks.AcquireReadLock")
-		fileLock, err := filelocks.AcquireReadLock(n.InternalPath())
+		fileLock, err := filelocks.AcquireReadLock(ctx, n.InternalPath())
 		subspan.End()
 
 		if err != nil {
@@ -167,7 +167,7 @@ func (n *Node) RefreshLock(ctx context.Context, lock *provider.Lock, existingLoc
 	if err := os.MkdirAll(filepath.Dir(n.InternalPath()), 0700); err != nil {
 		return errors.Wrap(err, "Decomposedfs: error creating parent folder for lock")
 	}
-	fileLock, err := filelocks.AcquireWriteLock(n.InternalPath())
+	fileLock, err := filelocks.AcquireWriteLock(ctx, n.InternalPath())
 
 	if err != nil {
 		return err
@@ -231,7 +231,7 @@ func (n *Node) Unlock(ctx context.Context, lock *provider.Lock) error {
 	if err := os.MkdirAll(filepath.Dir(n.InternalPath()), 0700); err != nil {
 		return errors.Wrap(err, "Decomposedfs: error creating parent folder for lock")
 	}
-	fileLock, err := filelocks.AcquireWriteLock(n.InternalPath())
+	fileLock, err := filelocks.AcquireWriteLock(ctx, n.InternalPath())
 
 	if err != nil {
 		return err
