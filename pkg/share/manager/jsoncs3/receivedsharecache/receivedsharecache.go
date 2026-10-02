@@ -314,11 +314,6 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 					// storage-system has an upload in progress for this node; wait for it to finish
 					// continue with sync below
 					log.Debug().Int("attempt", iter).Msg("CAS failed: TooEarly (upload in progress), retrying")
-				case errtypes.InternalError:
-					// transient backend error (e.g. disk.go's flock contention under write fan-in);
-					// CAS conflicts no longer masquerade as this since storageprovider.go's Aborted/
-					// AlreadyExists mapping fix (b1a5804ec)
-					log.Debug().Int("attempt", iter).Err(err).Msg("persist failed: InternalError (transient), retrying")
 				default:
 					log.Error().Int("attempt", iter).Err(err).Msg("persisting received share failed, giving up")
 					return err

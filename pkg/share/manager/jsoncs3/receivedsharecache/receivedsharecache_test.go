@@ -366,6 +366,18 @@ var _ = Describe("Cache", func() {
 				Expect(err).To(HaveOccurred(), "persist never succeeded; retryPersist must not report success")
 			})
 
+			It("fails fast on a permanent InternalError instead of burning the retry budget", func() {
+				// errtypes.InternalError is NewErrtypeFromHTTPStatusCode's catch-all
+				// (errtypes.go default arm) for e.g. 401/500/502 -- permanent failures,
+				// not just disk.go's transient flock contention.
+				as := &alwaysFailUploadStorage{Storage: storage, err: errtypes.InternalError("http 401: unauthorized")}
+				c2 := receivedsharecache.New(as, 0*time.Second)
+
+				err := c2.Remove(ctx, userID, spaceID, shareID)
+				Expect(err).To(HaveOccurred())
+				Expect(atomic.LoadInt32(&as.uploads)).To(Equal(int32(1)), "a permanent error must not be retried")
+			})
+
 			It("succeeds within budget when contention needs more than 10 real persist attempts", func() {
 				fs := &flakyAbortedStorage{Storage: storage, failures: 14}
 				c2 := receivedsharecache.New(fs, 0*time.Second)

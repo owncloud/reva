@@ -100,7 +100,7 @@ func (disk *Disk) Upload(_ context.Context, req UploadRequest) (res *UploadRespo
 	lock, err := filelocks.AcquireWriteLock(p)
 	if err != nil {
 		// transient under high write fan-in; classify so callers retry instead of aborting
-		return nil, errtypes.InternalError(fmt.Sprintf("acquiring write lock: %s", err))
+		return nil, errtypes.TooEarly(fmt.Sprintf("acquiring write lock: %s", err))
 	}
 	defer func() {
 		// Don't let a cleanup-only error override an already-successful write.
