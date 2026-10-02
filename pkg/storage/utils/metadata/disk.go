@@ -109,9 +109,12 @@ func (disk *Disk) Upload(ctx context.Context, req UploadRequest) (res *UploadRes
 
 	if req.IfMatchEtag != "" {
 		info, err := os.Stat(p)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		switch {
+		case err != nil && errors.Is(err, os.ErrNotExist):
+			return nil, errtypes.PreconditionFailed("etag mismatch: resource does not exist")
+		case err != nil:
 			return nil, err
-		} else if err == nil {
+		default:
 			etag, err := calcEtag(info.ModTime(), info.Size())
 			if err != nil {
 				return nil, err

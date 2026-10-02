@@ -52,6 +52,17 @@ var _ = Describe("Disk", func() {
 			Expect(ok).To(BeTrue())
 		})
 
+		It("fails IfMatch on a target that doesn't exist, per RFC 9110, instead of writing", func() {
+			_, err := storage.Upload(ctx, metadata.UploadRequest{
+				Path:        "f",
+				Content:     []byte("v1"),
+				IfMatchEtag: "stale-etag-for-a-file-that-does-not-exist",
+			})
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.PreconditionFailed)
+			Expect(ok).To(BeTrue())
+		})
+
 		It("never produces a torn write under concurrent unconditional uploads", func() {
 			const n = 15
 			const size = 4096
