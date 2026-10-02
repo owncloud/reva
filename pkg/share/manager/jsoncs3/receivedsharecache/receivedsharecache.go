@@ -389,6 +389,7 @@ func (c *Cache) sync(ctx context.Context, userID string) error {
 	case nil:
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
+		c.ReceivedSpaces.Store(userID, &Spaces{Spaces: map[string]*Space{}})
 		span.SetStatus(codes.Ok, "")
 		return nil
 	case errtypes.NotModified:
