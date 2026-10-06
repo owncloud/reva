@@ -267,13 +267,35 @@ var _ = Describe("PrepareUpload", func() {
 			})
 		})
 
-		// The lock is checked once the node exists, so this fails after the create.
-		Context("when it fails after creating the node", func() {
-			It("purges the node it created", func() {
+		// A new node cannot hold a lock, so a lock id is refused before anything is made.
+		Context("when the request carries a lock id", func() {
+			It("returns Aborted without creating the node", func() {
+				created := false
+				original := node.CheckQuota
+				node.CheckQuota = func(ctx context.Context, spaceRoot *node.Node, overwrite bool, oldSize, newSize uint64) (bool, error) {
+					created = true // InitNewNode checks the quota once it has made the node file
+					return original(ctx, spaceRoot, overwrite, oldSize, newSize)
+				}
+				defer func() { node.CheckQuota = original }()
 				ctx := ctxpkg.ContextSetLockID(env.Ctx, "a-lock-the-new-file-cannot-have")
 
 				_, err := env.Fs.PrepareUpload(ctx, createRef, "session-new", info)
 				Expect(err).To(BeAssignableToTypeOf(errtypes.Aborted("")))
+				Expect(created).To(BeFalse(), "the node was created before the lock id was refused")
+				expectNothingCreated()
+			})
+		})
+
+		// The parent-folder update runs after the node and its metadata are written.
+		Context("when it fails after creating the node", func() {
+			It("purges the node it created", func() {
+				// A directory where the parent's lock file goes fails the propagation.
+				lockPath := env.Lookup.MetadataBackend().LockfilePath(parent.InternalPath())
+				Expect(os.RemoveAll(lockPath)).To(Succeed())
+				Expect(os.Mkdir(lockPath, 0700)).To(Succeed())
+
+				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(MatchError(ContainSubstring("could not propagate")))
 				expectNothingCreated()
 				_, err = os.Stat(env.Lookup.InternalPath(env.SpaceRootRes.SpaceId, placeholder))
 				Expect(os.IsNotExist(err)).To(BeTrue(), "the node file was left on disk")

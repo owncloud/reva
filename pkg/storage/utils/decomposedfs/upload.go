@@ -466,8 +466,9 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 	purge := !info.NodeExisted && !create
 	// This upload created the node, so a failure must not leave it behind as an
 	// empty file. Purge, not trash: it never had content, and Purge needs no
-	// Delete permission. Registered before the lock is taken, so it runs after the
-	// lock is released: Purge removes the lock file too.
+	// Delete permission. Registered before the lock is taken, so it runs once the
+	// lock is released. Purge leaves the lock file alone: InitNewNode's unlock
+	// removes it, a plain lockedfile's does not.
 	defer func() {
 		if committed || !purge {
 			return
@@ -482,11 +483,14 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 		return nil, err
 	}
 
-	// A node still to be created has no path yet on posix, so it is checked once created.
-	if !create {
-		if err := n.CheckLock(ctx); err != nil {
-			return nil, err
+	if create {
+		// A node still to be created holds no lock, so any lock id is a mismatch, the
+		// answer CheckLock would give, here without creating the node first.
+		if lockID, _ := ctxpkg.ContextGetLockID(ctx); lockID != "" {
+			return nil, errtypes.Aborted("not locked")
 		}
+	} else if err := n.CheckLock(ctx); err != nil {
+		return nil, err
 	}
 
 	// scope to space owner GID for posix deployments; no-op with NullMapper
@@ -526,12 +530,6 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 			appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not close lock")
 		}
 	}()
-
-	if create {
-		if err := n.CheckLock(ctx); err != nil {
-			return nil, err
-		}
-	}
 
 	var (
 		sizeDiff       int64
