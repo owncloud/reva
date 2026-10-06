@@ -559,6 +559,13 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 			if err := n.SetXattrsWithContext(ctx, oldAttrs, false); err != nil {
 				appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not restore node xattrs during rollback")
 			}
+			// Restoring only rewrites the old keys, so the mark this upload added would
+			// stay, and with the session discarded nothing else would ever remove it.
+			if _, ok := oldAttrs[prefixes.StatusPrefix]; !ok {
+				if err := n.RemoveXattr(ctx, prefixes.StatusPrefix, false); err != nil {
+					appctx.GetLogger(ctx).Error().Err(err).Str("nodeid", n.ID).Msg("could not remove processing mark during rollback")
+				}
+			}
 		}
 	}()
 

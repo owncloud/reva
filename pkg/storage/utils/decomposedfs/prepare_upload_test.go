@@ -326,6 +326,28 @@ var _ = Describe("PrepareUpload", func() {
 			Expect(id).To(Equal("session-2"))
 		})
 
+		// The mark is written with the metadata, ahead of the parent-folder update, and
+		// the coordinator discards the session on failure: nothing else would unmark it.
+		It("does not leave the node marked when the parent-folder update fails", func() {
+			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-1", storage.UploadInfo{NodeExisted: false, Size: 10})
+			Expect(err).ToNot(HaveOccurred())
+			n, err := env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.UnmarkProcessing(env.Ctx, "session-1")).To(Succeed())
+
+			// A directory where the parent's lock file goes fails the propagation.
+			lockPath := env.Lookup.MetadataBackend().LockfilePath(n.ParentPath())
+			Expect(os.RemoveAll(lockPath)).To(Succeed())
+			Expect(os.Mkdir(lockPath, 0700)).To(Succeed())
+
+			_, err = env.Fs.PrepareUpload(env.Ctx, ref, "session-2", storage.UploadInfo{NodeExisted: true, Size: 20})
+			Expect(err).To(MatchError(ContainSubstring("could not propagate")))
+
+			n, err = env.Lookup.NodeFromResource(env.Ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.IsProcessing(env.Ctx)).To(BeFalse(), "the failed upload left the file marked as processing")
+		})
+
 		// The coordinator already resolved an existing file's owner at initiate.
 		It("leaves the space owner to the coordinator", func() {
 			_, err := env.Fs.PrepareUpload(env.Ctx, ref, "session-1", storage.UploadInfo{NodeExisted: false, Size: 10})
