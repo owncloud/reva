@@ -407,6 +407,42 @@ var _ = Describe("coordinator", func() {
 			Expect(fs.calls).To(ContainElement("CommitUpload(length=17)"))
 		})
 
+		// An async finish keeps the session for postprocessing, so a PUT can reach it again.
+		It("refuses a session whose bytes were already received", func() {
+			c.async = true
+			c.pub = &fakePublisher{}
+			session := store.New(ctx)
+			session.SetMetadata("providerID", mountID)
+			session.SetMetadata("filename", "report.docx")
+			session.SetStorageValue("SpaceRoot", spaceRoot)
+			session.SetStorageValue("NodeId", nodeID)
+			session.SetStorageValue("NodeParentId", parentID)
+			session.SetExecutant(&userpb.User{Id: &userpb.UserId{OpaqueId: "alice"}})
+			session.SetSize(bodyLen)
+			Expect(session.TouchBin()).To(Succeed())
+			Expect(session.Persist(ctx)).To(Succeed())
+			put := func() error {
+				_, err := c.Upload(ctx, storage.UploadRequest{
+					Ref:    &provider.Reference{Path: "/" + session.ID()},
+					Body:   io.NopCloser(strings.NewReader(body)),
+					Length: bodyLen,
+				}, nil)
+				return err
+			}
+			Expect(put()).To(Succeed())
+			calls := len(fs.calls)
+
+			Expect(put()).To(BeAssignableToTypeOf(errtypes.Aborted("")))
+
+			Expect(fs.calls).To(HaveLen(calls), "the repeated PUT reached the driver")
+			saved, err := store.Get(ctx, session.ID())
+			Expect(err).ToNot(HaveOccurred(), "the session postprocessing needs was discarded")
+			Expect(saved.Offset()).To(Equal(bodyLen))
+			staged, err := os.Stat(session.BinPath())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(staged.Size()).To(Equal(bodyLen), "the repeated PUT appended to the staged bytes")
+		})
+
 		It("rejects a body shorter than the declared length", func() {
 			session := store.New(ctx)
 			session.SetMetadata("providerID", mountID)
