@@ -706,6 +706,7 @@ var _ = Describe("Tree", func() {
 			It("returns AlreadyExists and leaves the file alone", func() {
 				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
 				Expect(err).To(BeAssignableToTypeOf(errtypes.AlreadyExists("")))
+				Expect(err.Error()).ToNot(ContainSubstring(env.Root), "the error exposes the storage path")
 
 				Expect(os.ReadFile(nodePath)).To(Equal([]byte("existing")))
 				Expect(idAtPath()).To(Equal(existingID))
