@@ -35,9 +35,9 @@ import (
 	apppb "github.com/cs3org/go-cs3apis/cs3/auth/applications/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	typespb "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/gdexlab/go-render/render"
 	"github.com/google/go-cmp/cmp"
+	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/sethvargo/go-password/password"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -60,7 +60,7 @@ func TestNewManager(t *testing.T) {
 	hashToken, _ := bcrypt.GenerateFromPassword([]byte("1234"), 10)
 
 	dummyData := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken): {
 				Password:   string(hashToken),
 				TokenScope: nil,
@@ -168,7 +168,7 @@ func TestGenerateAppPassword(t *testing.T) {
 	hashToken1234, _ := bcrypt.GenerateFromPassword([]byte(token), 11)
 
 	dummyData := map[string]map[string]*apppb.AppPassword{
-		userpb.User{Id: &userpb.UserId{Idp: "1"}, Username: "Test User1"}.Id.String(): {
+		userKey((&userpb.User{Id: &userpb.UserId{Idp: "1"}, Username: "Test User1"}).GetId()): {
 			string(hashTokenXXXX): {
 				Password: string(hashTokenXXXX),
 				Label:    "",
@@ -200,7 +200,7 @@ func TestGenerateAppPassword(t *testing.T) {
 				Utime:      now,
 			},
 			expectedState: map[string]map[string]*apppb.AppPassword{
-				userTest.GetId().String(): {
+				userKey(userTest.GetId()): {
 					string(hashToken1234): {
 						Password:   string(hashToken1234),
 						TokenScope: nil,
@@ -226,7 +226,7 @@ func TestGenerateAppPassword(t *testing.T) {
 				Utime:      now,
 			},
 			expectedState: concatMaps(map[string]map[string]*apppb.AppPassword{
-				userTest.GetId().String(): {
+				userKey(userTest.GetId()): {
 					string(hashToken1234): {
 						Password:   string(hashToken1234),
 						TokenScope: nil,
@@ -307,7 +307,7 @@ func TestListAppPasswords(t *testing.T) {
 	token := "hash:1234"
 
 	dummyDataUser0 := map[string]map[string]*apppb.AppPassword{
-		user0Test.GetId().String(): {
+		userKey(user0Test.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -320,7 +320,7 @@ func TestListAppPasswords(t *testing.T) {
 		}}
 
 	dummyDataUserExpired := map[string]map[string]*apppb.AppPassword{
-		user0Test.GetId().String(): {
+		userKey(user0Test.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -338,7 +338,7 @@ func TestListAppPasswords(t *testing.T) {
 	dummyDataUserExpiredJSON, _ := json.Marshal(dummyDataUserExpired)
 
 	dummyDataUser1 := map[string]map[string]*apppb.AppPassword{
-		user1Test.GetId().String(): {
+		userKey(user1Test.GetId()): {
 			"XXXX": {
 				Password:   "XXXX",
 				TokenScope: nil,
@@ -371,7 +371,7 @@ func TestListAppPasswords(t *testing.T) {
 			description: "ListAppPasswords with not empty state (only one user)",
 			stateJSON:   string(dummyDataUser0JSON),
 			expectedState: []*apppb.AppPassword{
-				dummyDataUser0[user0Test.GetId().String()][token],
+				dummyDataUser0[userKey(user0Test.GetId())][token],
 			},
 		},
 		{
@@ -383,7 +383,7 @@ func TestListAppPasswords(t *testing.T) {
 			description: "ListAppPasswords with not empty state (different users)",
 			stateJSON:   string(dummyDataTwoUsersJSON),
 			expectedState: []*apppb.AppPassword{
-				dummyDataUser0[user0Test.GetId().String()][token],
+				dummyDataUser0[userKey(user0Test.GetId())][token],
 			},
 		},
 	}
@@ -433,7 +433,7 @@ func TestInvalidateAppPassword(t *testing.T) {
 	token := "hash:1234"
 
 	dummyDataUser1Token := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -448,7 +448,7 @@ func TestInvalidateAppPassword(t *testing.T) {
 	dummyDataUser1TokenJSON, _ := json.Marshal(dummyDataUser1Token)
 
 	dummyDataUser2Token := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -500,7 +500,7 @@ func TestInvalidateAppPassword(t *testing.T) {
 			stateJSON:   string(dummyDataUser2TokenJSON),
 			password:    token,
 			expectedState: map[string]map[string]*apppb.AppPassword{
-				userTest.GetId().String(): {
+				userKey(userTest.GetId()): {
 					"hash:XXXX": {
 						Password:   "hash:XXXX",
 						TokenScope: nil,
@@ -570,7 +570,7 @@ func TestGetAppPassword(t *testing.T) {
 	hashToken1234, _ := bcrypt.GenerateFromPassword([]byte(token), 11)
 
 	dummyDataUser1Token := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken1234): {
 				Password:   string(hashToken1234),
 				TokenScope: nil,
@@ -583,7 +583,7 @@ func TestGetAppPassword(t *testing.T) {
 		}}
 
 	dummyDataUserExpired := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken1234): {
 				Password:   string(hashToken1234),
 				TokenScope: nil,
@@ -598,7 +598,7 @@ func TestGetAppPassword(t *testing.T) {
 		}}
 
 	dummyDataUserFutureExpiration := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken1234): {
 				Password:   string(hashToken1234),
 				TokenScope: nil,
@@ -653,7 +653,7 @@ func TestGetAppPassword(t *testing.T) {
 			description:   "GetAppPassword with token with expiration set in the future",
 			stateJSON:     string(dummyDataUserFutureExpirationJSON),
 			password:      "1234",
-			expectedState: dummyDataUserFutureExpiration[userTest.GetId().String()][string(hashToken1234)],
+			expectedState: dummyDataUserFutureExpiration[userKey(userTest.GetId())][string(hashToken1234)],
 		},
 		{
 			description:   "GetAppPassword with token that exists but different user",
@@ -665,7 +665,7 @@ func TestGetAppPassword(t *testing.T) {
 			description:   "GetAppPassword with token that exists owned by user",
 			stateJSON:     string(dummyDataUser1TokenJSON),
 			password:      "1234",
-			expectedState: dummyDataUser1Token[userTest.GetId().String()][string(hashToken1234)],
+			expectedState: dummyDataUser1Token[userKey(userTest.GetId())][string(hashToken1234)],
 		},
 	}
 
@@ -735,4 +735,92 @@ func comparePasswords(t *testing.T, expected, got map[string]map[string]*apppb.A
 	if !cmp.Equal(expected, got, protocmp.Transform()) {
 		t.Fatalf("passwords differ: expected=%v got=%v", expected, got)
 	}
+}
+
+func TestLegacyKeysAreMigrated(t *testing.T) {
+	// Older versions keyed each user's bucket by UserId.String(), the protobuf
+	// text format, whose whitespace protobuf-go varies between binaries. A
+	// state file written by two different builds therefore holds the same user
+	// under two keys, and neither matches what the running build would compute.
+	user := &userpb.User{Id: &userpb.UserId{Idp: "https://idp.example", OpaqueId: "u1", Type: userpb.UserType_USER_TYPE_PRIMARY}}
+	ctx := ctxpkg.ContextSetUser(context.Background(), user)
+
+	tempDir := createTempDir(t, "jsonappauth_legacy_test")
+	defer os.RemoveAll(tempDir)
+	stateFile := createTempFile(t, tempDir, "legacy.json")
+	defer stateFile.Close()
+
+	hash1234, _ := bcrypt.GenerateFromPassword([]byte("1234"), 4)
+	hash5678, _ := bcrypt.GenerateFromPassword([]byte("5678"), 4)
+	hash9999, _ := bcrypt.GenerateFromPassword([]byte("9999"), 4)
+	token := func(hash []byte, label string) *apppb.AppPassword {
+		return &apppb.AppPassword{Password: string(hash), Label: label, User: user.GetId(), Ctime: &typespb.Timestamp{Seconds: 1}, Utime: &typespb.Timestamp{Seconds: 1}}
+	}
+	oneSpace := `idp:"https://idp.example" opaque_id:"u1" type:USER_TYPE_PRIMARY`
+	twoSpaces := `idp:"https://idp.example"  opaque_id:"u1"  type:USER_TYPE_PRIMARY`
+	legacyState := map[string]map[string]*apppb.AppPassword{
+		oneSpace:         {string(hash1234): token(hash1234, "from build A")},
+		twoSpaces:        {string(hash5678): token(hash5678, "from build B")},
+		userKey(user.Id): {string(hash9999): token(hash9999, "already stable")},
+	}
+	legacyJSON, _ := json.Marshal(legacyState)
+	fill(t, stateFile, string(legacyJSON))
+
+	manager, err := New(map[string]interface{}{"file": stateFile.Name(), "token_strength": 10, "password_hash_cost": 4})
+	if err != nil {
+		t.Fatalf("unexpected error creating the manager: %v", err)
+	}
+	mgr := manager.(*jsonManager)
+
+	if _, ok := mgr.passwords[oneSpace]; ok {
+		t.Fatalf("legacy one-space key still present after load")
+	}
+	if _, ok := mgr.passwords[twoSpaces]; ok {
+		t.Fatalf("legacy two-space key still present after load")
+	}
+	if got := len(mgr.passwords[userKey(user.Id)]); got != 3 {
+		t.Fatalf("expected the three tokens merged under the stable key, got %d", got)
+	}
+
+	for _, pw := range []string{"1234", "5678", "9999"} {
+		if _, err := manager.GetAppPassword(ctx, user.GetId(), pw); err != nil {
+			t.Fatalf("token %q stored under a legacy key is not usable after migration: %v", pw, err)
+		}
+	}
+	listed, err := manager.ListAppPasswords(ctx)
+	if err != nil || len(listed) != 3 {
+		t.Fatalf("expected 3 listed app passwords, got %d (err=%v)", len(listed), err)
+	}
+
+	// The migration is persisted: a second load finds only the stable key.
+	data, err := os.ReadFile(stateFile.Name())
+	if err != nil {
+		t.Fatalf("reading state file: %v", err)
+	}
+	onDisk := map[string]map[string]*apppb.AppPassword{}
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		t.Fatalf("parsing state file: %v", err)
+	}
+	if len(onDisk) != 1 {
+		t.Fatalf("expected exactly one bucket on disk after migration, got %d keys: %v", len(onDisk), keysOf(onDisk))
+	}
+	if _, ok := onDisk[userKey(user.Id)]; !ok {
+		t.Fatalf("stable key missing on disk after migration")
+	}
+
+	// New tokens go under the stable key as well.
+	if _, err := manager.GenerateAppPassword(ctx, nil, "new", nil); err != nil {
+		t.Fatalf("generating a new app password: %v", err)
+	}
+	if got := len(mgr.passwords[userKey(user.Id)]); got != 4 {
+		t.Fatalf("expected 4 tokens under the stable key after generating one, got %d", got)
+	}
+}
+
+func keysOf(m map[string]map[string]*apppb.AppPassword) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
