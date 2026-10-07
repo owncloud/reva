@@ -96,6 +96,30 @@ var _ = Describe("Decomposed", func() {
 			_, ok := err.(errtypes.IsTooEarly)
 			Expect(ok).To(BeTrue(), "expected an IsTooEarly error, got %T: %v", err, err)
 		})
+
+		It("preserves NotFound typing when the blob disappears after the node is resolved", func() {
+			_, err := env.CreateTestFile("file2", "blobid2", env.SpaceRootRes.OpaqueId, env.SpaceRootRes.SpaceId, 10)
+			Expect(err).ToNot(HaveOccurred())
+			// node is fully written, not processing - exercises the TOCTOU window
+			// the IsProcessing guard does not cover.
+
+			env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(&provider.ResourcePermissions{
+				Stat:                 true,
+				InitiateFileDownload: true,
+			}, nil).Times(1)
+			// simulates a concurrent writer deleting/replacing the blob between
+			// node resolution and this ReadBlob call.
+			env.Blobstore.On("Download", mock.Anything).Return(nil, errtypes.NotFound("blobid2"))
+
+			_, _, err = env.Fs.Download(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "/file2",
+			}, func(*provider.ResourceInfo) bool { return true })
+
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsNotFound)
+			Expect(ok).To(BeTrue(), "expected NotFound typing to survive Download(), got %T: %v -- this is what makes handleError's type switch in rhttp/datatx/utils/download/download.go fall through to 500 instead of 404", err, err)
+		})
 	})
 
 	Describe("CreateDir", func() {

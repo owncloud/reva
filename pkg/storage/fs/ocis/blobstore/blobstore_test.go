@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/ocis/blobstore"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/tests/helpers"
@@ -69,6 +70,15 @@ var _ = Describe("Blobstore", func() {
 	It("creates the root directory if it doesn't exist", func() {
 		_, err := os.Stat(path.Join(tmpRoot))
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	Describe("Download", func() {
+		It("returns a typed NotFound when the blob is missing", func() {
+			_, err := bs.Download(blobNode)
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsNotFound)
+			Expect(ok).To(BeTrue(), "expected errtypes.NotFound, got %T: %v", err, err)
+		})
 	})
 
 	Context("Blob upload", func() {
