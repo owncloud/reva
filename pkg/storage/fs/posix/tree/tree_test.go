@@ -1,18 +1,25 @@
 package tree_test
 
 import (
+	"context"
 	"crypto/rand"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/google/uuid"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/storage"
 	helpers "github.com/owncloud/reva/v2/pkg/storage/fs/posix/testhelpers"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/shirou/gopsutil/process"
+	"github.com/stretchr/testify/mock"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -527,5 +534,185 @@ var _ = Describe("Tree", func() {
 			}).Should(Succeed())
 		})
 
+	})
+
+	Describe("InitNewNode", func() {
+		var (
+			nodePath string
+			newNode  *node.Node
+		)
+
+		BeforeEach(func() {
+			parent, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       subtree,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			newNode = node.New(parent.SpaceID, uuid.New().String(), parent.ID, "new.txt", 0, "", provider.ResourceType_RESOURCE_TYPE_FILE, nil, env.Lookup)
+			newNode.SpaceRoot = parent.SpaceRoot
+			nodePath = filepath.Join(root, "new.txt")
+		})
+
+		cachedPath := func(nodeID string) (string, bool) {
+			return env.Lookup.IDCache.Get(env.Ctx, newNode.SpaceID, nodeID)
+		}
+
+		It("creates the file and caches its id", func() {
+			unlock, err := env.Tree.InitNewNode(env.Ctx, newNode, 0)
+			Expect(err).ToNot(HaveOccurred())
+			// Checked under the lock: once released, the assimilation may claim the file,
+			// as nothing writes its id attribute here.
+			defer func() { Expect(unlock()).To(Succeed()) }()
+
+			Expect(nodePath).To(BeAnExistingFile())
+			p, ok := cachedPath(newNode.ID)
+			Expect(ok).To(BeTrue())
+			Expect(p).To(Equal(nodePath))
+		})
+
+		Context("when the name is taken", func() {
+			var existingID string
+
+			BeforeEach(func() {
+				Expect(os.WriteFile(nodePath, []byte("existing"), 0600)).To(Succeed())
+				Eventually(func(g Gomega) {
+					n, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+						ResourceId: env.SpaceRootRes,
+						Path:       subtree + "/new.txt",
+					})
+					g.Expect(err).ToNot(HaveOccurred())
+					g.Expect(n.Exists).To(BeTrue())
+					existingID = n.ID
+				}).Should(Succeed())
+			})
+
+			It("leaves the file and its cache entry alone, and releases the lock", func() {
+				unlock, err := env.Tree.InitNewNode(env.Ctx, newNode, 0)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.AlreadyExists("")))
+				Expect(unlock).To(BeNil())
+
+				Expect(os.ReadFile(nodePath)).To(Equal([]byte("existing")))
+				_, id, ok := env.Lookup.IDCache.GetByPath(env.Ctx, nodePath)
+				Expect(ok).To(BeTrue())
+				Expect(id).To(Equal(existingID))
+				_, ok = cachedPath(newNode.ID)
+				Expect(ok).To(BeFalse())
+				Expect(env.Lookup.MetadataBackend().LockfilePath(nodePath)).ToNot(BeAnExistingFile())
+			})
+		})
+
+		Context("when the quota is exceeded", func() {
+			var originalCheckQuota = node.CheckQuota
+
+			BeforeEach(func() {
+				node.CheckQuota = func(context.Context, *node.Node, bool, uint64, uint64) (bool, error) {
+					return false, errtypes.InsufficientStorage("quota exceeded")
+				}
+			})
+			AfterEach(func() {
+				node.CheckQuota = originalCheckQuota
+			})
+
+			It("removes the file and its cache entry, and releases the lock", func() {
+				unlock, err := env.Tree.InitNewNode(env.Ctx, newNode, 1)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.InsufficientStorage("")))
+				Expect(unlock).To(BeNil())
+
+				Expect(nodePath).ToNot(BeAnExistingFile())
+				_, ok := cachedPath(newNode.ID)
+				Expect(ok).To(BeFalse())
+				_, _, ok = env.Lookup.IDCache.GetByPath(env.Ctx, nodePath)
+				Expect(ok).To(BeFalse())
+				Expect(env.Lookup.MetadataBackend().LockfilePath(nodePath)).ToNot(BeAnExistingFile())
+			})
+		})
+	})
+
+	// Nothing has created the file: PrepareUpload does, under the id minted at initiate.
+	Describe("PrepareUpload of a new file", func() {
+		var (
+			nodePath    string
+			placeholder string
+			createRef   *provider.Reference
+			info        storage.UploadInfo
+		)
+
+		BeforeEach(func() {
+			parent, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       subtree,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			placeholder = uuid.New().String()
+			createRef = &provider.Reference{ResourceId: &provider.ResourceId{SpaceId: parent.SpaceID, OpaqueId: placeholder}}
+			info = storage.UploadInfo{NodeExisted: false, Size: 42, ParentID: parent.ID, Name: "new.txt"}
+			nodePath = filepath.Join(root, "new.txt")
+
+			env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).
+				Return(&provider.ResourcePermissions{InitiateFileUpload: true, Stat: true}, nil).Once()
+		})
+
+		idAtPath := func() string {
+			n, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       subtree + "/new.txt",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.Exists).To(BeTrue())
+			return n.ID
+		}
+
+		It("creates the file under the placeholder id, and the assimilation keeps it", func() {
+			_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(nodePath).To(BeAnExistingFile())
+			n, err := env.Lookup.NodeFromID(env.Ctx, createRef.ResourceId)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.Exists).To(BeTrue())
+			Expect(n.Name).To(Equal("new.txt"))
+			Expect(n.ParentID).To(Equal(info.ParentID))
+			// posix reports no blob id (the file is the blob), so the batch shows in the mark.
+			id, err := n.ProcessingID(env.Ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(id).To(Equal("session-new"))
+
+			// The watcher sees the create too: it must adopt our id, not mint its own. Our
+			// batch would overwrite a minted id on disk, so the cache is where one shows.
+			Consistently(func(g Gomega) {
+				g.Expect(idAtPath()).To(Equal(placeholder))
+				_, cachedID, ok := env.Lookup.IDCache.GetByPath(env.Ctx, nodePath)
+				g.Expect(ok).To(BeTrue())
+				g.Expect(cachedID).To(Equal(placeholder))
+			}, 3*time.Second, 200*time.Millisecond).Should(Succeed())
+		})
+
+		Context("when the name is taken", func() {
+			var existingID string
+
+			BeforeEach(func() {
+				Expect(os.WriteFile(nodePath, []byte("existing"), 0600)).To(Succeed())
+				Eventually(func(g Gomega) {
+					n, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+						ResourceId: env.SpaceRootRes,
+						Path:       subtree + "/new.txt",
+					})
+					g.Expect(err).ToNot(HaveOccurred())
+					g.Expect(n.Exists).To(BeTrue())
+					existingID = n.ID
+				}).Should(Succeed())
+			})
+
+			It("returns AlreadyExists and leaves the file alone", func() {
+				_, err := env.Fs.PrepareUpload(env.Ctx, createRef, "session-new", info)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.AlreadyExists("")))
+				Expect(err.Error()).ToNot(ContainSubstring(env.Root), "the error exposes the storage path")
+
+				Expect(os.ReadFile(nodePath)).To(Equal([]byte("existing")))
+				Expect(idAtPath()).To(Equal(existingID))
+				_, ok := env.Lookup.IDCache.Get(env.Ctx, createRef.ResourceId.SpaceId, placeholder)
+				Expect(ok).To(BeFalse())
+			})
+		})
 	})
 })
