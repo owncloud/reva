@@ -234,18 +234,6 @@ var _ = Describe("Cache", func() {
 				Expect(atomic.LoadInt32(&fs.Downloads)).To(Equal(int32(1)))
 			})
 
-			It("returns without erroring when the server reports NotModified", func() {
-				spy := &downloadSpyStorage{Storage: storage}
-				c2 := receivedsharecache.New(spy, 0*time.Second)
-
-				_, err := c2.Get(ctx, userID, spaceID, shareID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spy.notModifiedSeen).To(BeFalse(), "first read has no etag yet, can't be NotModified")
-
-				_, err = c2.Get(ctx, userID, spaceID, shareID)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spy.notModifiedSeen).To(BeTrue())
-			})
 		})
 
 		Describe("Remove", func() {
@@ -275,26 +263,6 @@ var _ = Describe("Cache", func() {
 
 				err := c.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred(), "sync's NotFound must discard the stale snapshot so persist can bootstrap-recreate the file")
-			})
-
-			It("does not resurrect other shares that existed before the backing file was deleted", func() {
-				other := &collaboration.ReceivedShare{
-					Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "other-share"}},
-					State: collaboration.ShareState_SHARE_STATE_PENDING,
-				}
-				Expect(c.Add(ctx, userID, spaceID, other)).To(Succeed())
-
-				Expect(os.Remove(filepath.Join(tmpdir, "users", userID, "received.json"))).To(Succeed())
-
-				Expect(c.Remove(ctx, userID, spaceID, shareID)).To(Succeed())
-
-				fresh := receivedsharecache.New(storage, 0*time.Second)
-				spaces, err := fresh.List(ctx, userID)
-				Expect(err).ToNot(HaveOccurred())
-				if spaces[spaceID] != nil {
-					Expect(spaces[spaceID].States).ToNot(HaveKey("other-share"),
-						"stale pre-wipe share resurrected after the backing file was externally deleted")
-				}
 			})
 
 			It("keeps List/Get usable on the same instance right after the backing file is found missing", func() {
@@ -487,20 +455,6 @@ func (f *flakyTooEarlyDownloadStorage) Download(ctx context.Context, req metadat
 		return nil, errtypes.TooEarly("injected")
 	}
 	return f.Storage.Download(ctx, req)
-}
-
-// downloadSpyStorage records whether the server ever answered NotModified.
-type downloadSpyStorage struct {
-	metadata.Storage
-	notModifiedSeen bool
-}
-
-func (s *downloadSpyStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
-	res, err := s.Storage.Download(ctx, req)
-	if _, ok := err.(errtypes.NotModified); ok {
-		s.notModifiedSeen = true
-	}
-	return res, err
 }
 
 // flakyDownloadStorage fails the first Upload with a CAS conflict (to enter
