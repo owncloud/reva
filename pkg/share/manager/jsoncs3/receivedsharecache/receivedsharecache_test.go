@@ -29,6 +29,7 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
+	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -169,16 +170,15 @@ var _ = Describe("Cache", func() {
 		})
 	})
 
-
 	Describe("retryPersist's post-failure resync", func() {
 		It("does not perform a redundant bootstrap upload when no file exists yet", func() {
-			fs := &errOnceUploadStorage{Storage: storage, err: errtypes.Aborted("injected")}
+			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.Aborted("injected")}
 			c2 := receivedsharecache.New(fs, 0*time.Second)
 
 			err := c2.Remove(ctx, userID, spaceID, shareID)
 			Expect(err).ToNot(HaveOccurred())
 			// 1 forced failure + 1 real write; no extra bootstrap upload from the resync in between.
-			Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+			Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 		})
 	})
 
@@ -363,57 +363,57 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("retries a raw gRPC Unavailable error the way CS3's Upload actually returns it", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.Unavailable, "backend temporarily unavailable")}
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: status.Error(codes.Unavailable, "backend temporarily unavailable")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred(), "a transient gRPC transport error must be retried, not treated as fatal")
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 			})
 
 			It("retries an AlreadyExists CAS conflict on persist like other transient storage errors", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.AlreadyExists("injected")}
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.AlreadyExists("injected")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 			})
 
 			It("retries a TooEarly CAS conflict on persist like other transient storage errors", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 			})
 
 			It("retries a raw gRPC DeadlineExceeded error on persist", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.DeadlineExceeded, "deadline exceeded")}
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: status.Error(codes.DeadlineExceeded, "deadline exceeded")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 			})
 
 			It("retries a raw gRPC Canceled error on persist", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.Canceled, "canceled")}
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: status.Error(codes.Canceled, "canceled")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 			})
 
 			It("retries a raw gRPC ResourceExhausted error on persist", func() {
-				fs := &errOnceUploadStorage{Storage: storage, err: status.Error(codes.ResourceExhausted, "resource exhausted")}
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: status.Error(codes.ResourceExhausted, "resource exhausted")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				err := c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.uploads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 			})
 
 			It("does not reuse stale state when the post-failure resync itself fails transiently", func() {
@@ -487,20 +487,6 @@ func (f *flakyTooEarlyDownloadStorage) Download(ctx context.Context, req metadat
 		return nil, errtypes.TooEarly("injected")
 	}
 	return f.Storage.Download(ctx, req)
-}
-
-// errOnceUploadStorage fails Upload once with a configured error, then delegates.
-type errOnceUploadStorage struct {
-	metadata.Storage
-	err     error
-	uploads int32
-}
-
-func (e *errOnceUploadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	if atomic.AddInt32(&e.uploads, 1) == 1 {
-		return nil, e.err
-	}
-	return e.Storage.Upload(ctx, req)
 }
 
 // errOnceDownloadStorage fails Download once with a configured error, then delegates.
