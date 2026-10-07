@@ -217,21 +217,21 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("retries a raw gRPC transient error on the resync path like it does on persist", func() {
-				fs := &errOnceDownloadStorage{Storage: storage, err: status.Error(codes.Unavailable, "backend temporarily unavailable")}
+				fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: status.Error(codes.Unavailable, "backend temporarily unavailable")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				_, err := c2.Get(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(2)))
+				Expect(atomic.LoadInt32(&fs.Downloads)).To(Equal(int32(2)))
 			})
 
 			It("fails fast on a non-transient Download error instead of retrying", func() {
-				fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.PermissionDenied("injected")}
+				fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.PermissionDenied("injected")}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
 
 				_, err := c2.Get(ctx, userID, spaceID, shareID)
 				Expect(err).To(HaveOccurred())
-				Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(1)))
+				Expect(atomic.LoadInt32(&fs.Downloads)).To(Equal(int32(1)))
 			})
 
 			It("returns without erroring when the server reports NotModified", func() {
@@ -487,20 +487,6 @@ func (f *flakyTooEarlyDownloadStorage) Download(ctx context.Context, req metadat
 		return nil, errtypes.TooEarly("injected")
 	}
 	return f.Storage.Download(ctx, req)
-}
-
-// errOnceDownloadStorage fails Download once with a configured error, then delegates.
-type errOnceDownloadStorage struct {
-	metadata.Storage
-	err       error
-	downloads int32
-}
-
-func (e *errOnceDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
-	if atomic.AddInt32(&e.downloads, 1) == 1 {
-		return nil, e.err
-	}
-	return e.Storage.Download(ctx, req)
 }
 
 // downloadSpyStorage records whether the server ever answered NotModified.

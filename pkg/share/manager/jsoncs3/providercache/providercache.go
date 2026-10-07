@@ -191,41 +191,22 @@ func (c *Cache) Add(ctx context.Context, storageID, spaceID, shareID string, sha
 		return c.Persist(ctx, storageID, spaceID)
 	}
 
-	bo := cas.NewBackoff()
-
-	for retries := 100; retries > 0; retries-- {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err = persistFunc()
-		switch {
-		case err == nil:
-			span.SetStatus(codes.Ok, "")
-			return nil
-		case cas.IsConflict(err):
-			log.Debug().Err(err).Msg("CAS conflict persisting added provider share, retrying...")
-		default:
+	err = cas.RetryPersist(ctx, 100, persistFunc,
+		func() error { return c.resyncAfterConflict(ctx, storageID, spaceID) },
+		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting added provider share, retrying...") },
+		func(err error) {
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting added provider share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting added provider share failed")
-			return err
-		}
-		if err := c.resyncAfterConflict(ctx, storageID, spaceID); err != nil {
+		},
+		func(err error) {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			log.Error().Err(err).Msg("persisting added provider share failed. giving up.")
-			return err
-		}
-		timer := time.NewTimer(bo.NextBackOff())
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
+		},
+	)
+	if err == nil {
+		span.SetStatus(codes.Ok, "")
 	}
-
 	return err
 }
 
@@ -266,40 +247,21 @@ func (c *Cache) Remove(ctx context.Context, storageID, spaceID, shareID string) 
 		Str("spaceID", spaceID).
 		Str("shareID", shareID).Logger()
 
-	bo := cas.NewBackoff()
-
-	var err error
-	for retries := 100; retries > 0; retries-- {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err = persistFunc()
-		switch {
-		case err == nil:
-			span.SetStatus(codes.Ok, "")
-			return nil
-		case cas.IsConflict(err):
-			log.Debug().Err(err).Msg("CAS conflict persisting removed provider share, retrying...")
-		default:
+	err := cas.RetryPersist(ctx, 100, persistFunc,
+		func() error { return c.resyncAfterConflict(ctx, storageID, spaceID) },
+		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting removed provider share, retrying...") },
+		func(err error) {
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting removed provider share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting removed provider share failed")
-			return err
-		}
-		if err := c.resyncAfterConflict(ctx, storageID, spaceID); err != nil {
+		},
+		func(err error) {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			log.Error().Err(err).Msg("persisting removed provider share failed. giving up.")
-			return err
-		}
-		timer := time.NewTimer(bo.NextBackOff())
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
+		},
+	)
+	if err == nil {
+		span.SetStatus(codes.Ok, "")
 	}
 	return err
 }
@@ -528,20 +490,14 @@ func (c *Cache) doSync(ctx context.Context, storageID, spaceID string, resetOnNo
 	case nil:
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
-		// No prior etag means this is a bootstrap race, not a lost update -- safe to reset.
-		if !resetOnNotFound && space.Etag != "" {
+		if reset, trashed := cas.DecideNotFoundReset(ctx, c.storage, dlreq.Path, resetOnNotFound, space.Etag != "", log); !reset {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
-			return err
-		}
-		// Ask the backend if this was trashed instead of guessing; fails open on error or no trash support.
-		if trashed, terr := c.storage.WasRecentlyDeleted(ctx, dlreq.Path); terr != nil {
-			log.Warn().Err(terr).Msg("could not check trash state, assuming not deleted")
-		} else if trashed {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file was recently trashed")
+			if trashed {
+				log.Error().Err(err).Msg("lost update: backing file was recently trashed")
+			} else {
+				log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
+			}
 			return err
 		}
 		spaces.Spaces.Store(spaceID, &Shares{Shares: map[string]*collaboration.Share{}})

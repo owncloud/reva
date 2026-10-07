@@ -2,10 +2,13 @@
 package cas
 
 import (
+	"context"
 	"time"
 
 	backoff "github.com/cenkalti/backoff/v5"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/rs/zerolog"
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -58,4 +61,60 @@ func IsTransientGRPCStatus(err error) bool {
 	default:
 		return false
 	}
+}
+
+// RetryPersist retries persistFunc on a CAS conflict, calling resyncFunc between attempts to
+// refresh in-memory state before the next persist, up to maxRetries times with this package's
+// shared backoff. onConflict/onPersistFailed/onResyncFailed let the caller record its own
+// span/log side effects for each outcome without this package depending on otel/zerolog.
+func RetryPersist(ctx context.Context, maxRetries int, persistFunc, resyncFunc func() error,
+	onConflict, onPersistFailed, onResyncFailed func(err error)) error {
+	bo := NewBackoff()
+	var err error
+	for retries := maxRetries; retries > 0; retries-- {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		err = persistFunc()
+		switch {
+		case err == nil:
+			return nil
+		case IsConflict(err):
+			onConflict(err)
+		default:
+			onPersistFailed(err)
+			return err
+		}
+		if rerr := resyncFunc(); rerr != nil {
+			onResyncFailed(rerr)
+			return rerr
+		}
+		timer := time.NewTimer(bo.NextBackOff())
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+// DecideNotFoundReset reports whether a NotFound download result should be treated as a
+// legitimately empty resource (reset) rather than a lost update (error). A resync with a
+// prior etag never resets silently; otherwise the backend's trash state decides, failing
+// open (reset=true) when the backend can't tell (e.g. Disk). trashed is only meaningful
+// when reset is false, to pick the right log reason.
+func DecideNotFoundReset(ctx context.Context, storage metadata.Storage, path string, resetOnNotFound, hadPriorEtag bool, log zerolog.Logger) (reset, trashed bool) {
+	if !resetOnNotFound && hadPriorEtag {
+		return false, false
+	}
+	trashed, terr := storage.WasRecentlyDeleted(ctx, path)
+	if terr != nil {
+		log.Warn().Err(terr).Msg("could not check trash state, assuming not deleted")
+		return true, false
+	}
+	return !trashed, trashed
 }

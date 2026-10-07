@@ -350,18 +350,13 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	case nil:
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
-		// No prior etag means this is a bootstrap race, not a lost update -- safe to reset.
-		if !resetOnNotFound && rss.etag != "" {
+		if reset, trashed := cas.DecideNotFoundReset(ctx, c.storage, jsonPath, resetOnNotFound, rss.etag != "", log); !reset {
 			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
-			return err
-		}
-		// Ask the backend if this was trashed instead of guessing; fails open on error or no trash support.
-		if trashed, terr := c.storage.WasRecentlyDeleted(ctx, jsonPath); terr != nil {
-			log.Warn().Err(terr).Msg("could not check trash state, assuming not deleted")
-		} else if trashed {
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file was recently trashed")
+			if trashed {
+				log.Error().Err(err).Msg("lost update: backing file was recently trashed")
+			} else {
+				log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
+			}
 			return err
 		}
 		c.ReceivedSpaces.Store(userID, &Spaces{Spaces: map[string]*Space{}})

@@ -126,40 +126,21 @@ func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
 		Str("userID", userid).
 		Str("shareID", shareID).Logger()
 
-	bo := cas.NewBackoff()
-
-	var err error
-	for retries := 100; retries > 0; retries-- {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err = persistFunc()
-		switch {
-		case err == nil:
-			span.SetStatus(codes.Ok, "")
-			return nil
-		case cas.IsConflict(err):
-			log.Debug().Err(err).Msg("CAS conflict persisting added share, retrying...")
-		default:
+	err := cas.RetryPersist(ctx, 100, persistFunc,
+		func() error { return c.resyncAfterConflict(ctx, userid) },
+		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting added share, retrying...") },
+		func(err error) {
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting added share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting added share failed")
-			return err
-		}
-		if err := c.resyncAfterConflict(ctx, userid); err != nil {
+		},
+		func(err error) {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			log.Error().Err(err).Msg("persisting added share failed. giving up.")
-			return err
-		}
-		timer := time.NewTimer(bo.NextBackOff())
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
+		},
+	)
+	if err == nil {
+		span.SetStatus(codes.Ok, "")
 	}
 	return err
 }
@@ -204,41 +185,21 @@ func (c *Cache) Remove(ctx context.Context, userid, shareID string) error {
 		Str("userID", userid).
 		Str("shareID", shareID).Logger()
 
-	bo := cas.NewBackoff()
-
-	var err error
-	for retries := 100; retries > 0; retries-- {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err = persistFunc()
-		switch {
-		case err == nil:
-			span.SetStatus(codes.Ok, "")
-			return nil
-		case cas.IsConflict(err):
-			log.Debug().Err(err).Msg("CAS conflict persisting removed share, retrying...")
-		default:
+	err := cas.RetryPersist(ctx, 100, persistFunc,
+		func() error { return c.resyncAfterConflict(ctx, userid) },
+		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting removed share, retrying...") },
+		func(err error) {
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting removed share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting removed share failed")
-			return err
-		}
-		if err := c.resyncAfterConflict(ctx, userid); err != nil {
+		},
+		func(err error) {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-			return err
-		}
-		timer := time.NewTimer(bo.NextBackOff())
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
+		},
+	)
+	if err == nil {
+		span.SetStatus(codes.Ok, "")
 	}
-
 	return err
 }
 
@@ -305,18 +266,13 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	case nil:
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
-		// No prior etag means this is a bootstrap race, not a lost update -- safe to reset.
-		if !resetOnNotFound && hadEtag {
+		if reset, trashed := cas.DecideNotFoundReset(ctx, c.storage, userCreatedPath, resetOnNotFound, hadEtag, log); !reset {
 			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
-			return err
-		}
-		// Ask the backend if this was trashed instead of guessing; fails open on error or no trash support.
-		if trashed, terr := c.storage.WasRecentlyDeleted(ctx, userCreatedPath); terr != nil {
-			log.Warn().Err(terr).Msg("could not check trash state, assuming not deleted")
-		} else if trashed {
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file was recently trashed")
+			if trashed {
+				log.Error().Err(err).Msg("lost update: backing file was recently trashed")
+			} else {
+				log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
+			}
 			return err
 		}
 		c.UserShares.Store(userID, &UserShareCache{UserShares: map[string]*SpaceShareIDs{}})

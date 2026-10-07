@@ -98,16 +98,16 @@ var _ = Describe("Sharecache", func() {
 		})
 
 		It("retries a transient cold-start sync error instead of aborting", func() {
-			fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
+			fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
 			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
 
 			err := c2.Add(ctx, userid, shareID)
 			Expect(err).ToNot(HaveOccurred(), "transient error on cold-start sync should be retried, not treated as fatal")
-			Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(2)))
+			Expect(atomic.LoadInt32(&fs.Downloads)).To(Equal(int32(2)))
 		})
 
 		It("stops retrying once the context is canceled instead of exhausting all 100 attempts", func() {
-			fs := &alwaysAbortedUploadStorage{Storage: storage}
+			fs := &helpers.AlwaysAbortedUploadStorage{Storage: storage}
 			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
 
 			cctx, cancel := context.WithCancel(ctx)
@@ -115,7 +115,7 @@ var _ = Describe("Sharecache", func() {
 
 			err := c2.Add(cctx, userid, shareID)
 			Expect(err).To(HaveOccurred())
-			Expect(atomic.LoadInt32(&fs.uploads)).To(BeNumerically("<", 100),
+			Expect(atomic.LoadInt32(&fs.Uploads)).To(BeNumerically("<", 100),
 				"Add should give up once the context is canceled instead of busy-spinning through all 100 persist attempts")
 		})
 	})
@@ -156,31 +156,6 @@ var _ = Describe("Sharecache", func() {
 		})
 	})
 })
-
-// errOnceDownloadStorage fails Download once with a configured error, then delegates.
-type errOnceDownloadStorage struct {
-	metadata.Storage
-	err       error
-	downloads int32
-}
-
-func (e *errOnceDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
-	if atomic.AddInt32(&e.downloads, 1) == 1 {
-		return nil, e.err
-	}
-	return e.Storage.Download(ctx, req)
-}
-
-// alwaysAbortedUploadStorage fails every Upload with errtypes.Aborted, never delegating.
-type alwaysAbortedUploadStorage struct {
-	metadata.Storage
-	uploads int32
-}
-
-func (a *alwaysAbortedUploadStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	atomic.AddInt32(&a.uploads, 1)
-	return nil, errtypes.Aborted("injected")
-}
 
 // countingStorage counts Upload calls, to prove a cold Remove doesn't waste one.
 type countingStorage struct {

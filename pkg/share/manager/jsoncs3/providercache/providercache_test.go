@@ -122,16 +122,16 @@ var _ = Describe("Cache", func() {
 		})
 
 		It("retries a transient cold-start sync error instead of aborting", func() {
-			fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.TooEarly("injected")}
+			fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
 			c2 := providercache.New(fs, 0*time.Second)
 
 			err := c2.Add(ctx, storageID, spaceID, shareID, share1)
 			Expect(err).ToNot(HaveOccurred(), "transient error on cold-start sync should be retried, not treated as fatal")
-			Expect(atomic.LoadInt32(&fs.downloads)).To(Equal(int32(2)))
+			Expect(atomic.LoadInt32(&fs.Downloads)).To(Equal(int32(2)))
 		})
 
 		It("stops retrying once the context is canceled instead of exhausting all 100 attempts", func() {
-			fs := &alwaysAbortedUploadStorage{Storage: storage}
+			fs := &helpers.AlwaysAbortedUploadStorage{Storage: storage}
 			c2 := providercache.New(fs, 0*time.Second)
 
 			cctx, cancel := context.WithCancel(ctx)
@@ -139,7 +139,7 @@ var _ = Describe("Cache", func() {
 
 			err := c2.Add(cctx, storageID, spaceID, shareID, share1)
 			Expect(err).To(HaveOccurred())
-			Expect(atomic.LoadInt32(&fs.uploads)).To(BeNumerically("<", 100),
+			Expect(atomic.LoadInt32(&fs.Uploads)).To(BeNumerically("<", 100),
 				"Add should give up once the context is canceled instead of busy-spinning through all 100 persist attempts")
 		})
 
@@ -166,7 +166,7 @@ var _ = Describe("Cache", func() {
 		It("[hypothesis, unfixed] a cold-start sync has no way to detect the same race, confirming the gap is structural, not call-site-specific", func() {
 			// Disk's WasRecentlyDeleted always answers false (no trash), so this
 			// documents a known, accepted gap. Diagnosis: DOCS/RESEARCH_OCISDEV-855_IDEAL.md.
-			fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.NotFound("injected: cold sync races a deletion")}
+			fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.NotFound("injected: cold sync races a deletion")}
 			c2 := providercache.New(fs, 0*time.Second)
 
 			newShareID := "storageid$spaceid!cold-share"
@@ -180,7 +180,7 @@ var _ = Describe("Cache", func() {
 			// Closes the gap above for backends that can answer the question
 			// (CS3/decomposedfs, via WasRecentlyDeleted). Disk can't (always
 			// false), so this is backend-specific, not a general fix.
-			base := &errOnceDownloadStorage{Storage: storage, err: errtypes.NotFound("injected: cold sync races a deletion")}
+			base := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.NotFound("injected: cold sync races a deletion")}
 			fs := &trashAwareStorage{Storage: base, trashed: true}
 			c2 := providercache.New(fs, 0*time.Second)
 
@@ -308,7 +308,7 @@ var _ = Describe("Cache", func() {
 
 			It("does not leak the space lock when syncWithLock fails", func() {
 				// outer BeforeEach already persisted via c; c2 just needs to observe it through a failing storage.
-				fs := &errOnceDownloadStorage{Storage: storage, err: errtypes.InternalError("injected")}
+				fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.InternalError("injected")}
 				c2 := providercache.New(fs, 0*time.Second)
 
 				_, err := c2.All(ctx)
@@ -327,30 +327,6 @@ var _ = Describe("Cache", func() {
 	})
 })
 
-// errOnceDownloadStorage fails Download once with a configured error, then delegates.
-type errOnceDownloadStorage struct {
-	metadata.Storage
-	err       error
-	downloads int32
-}
-
-func (e *errOnceDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
-	if atomic.AddInt32(&e.downloads, 1) == 1 {
-		return nil, e.err
-	}
-	return e.Storage.Download(ctx, req)
-}
-
-// alwaysAbortedUploadStorage fails every Upload with errtypes.Aborted, never delegating.
-type alwaysAbortedUploadStorage struct {
-	metadata.Storage
-	uploads int32
-}
-
-func (a *alwaysAbortedUploadStorage) Upload(_ context.Context, _ metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	atomic.AddInt32(&a.uploads, 1)
-	return nil, errtypes.Aborted("injected")
-}
 
 // conflictThenNotFoundStorage returns initialData/initialEtag on the first
 // Download (cold-start sync), fails the first Upload with a CAS conflict,

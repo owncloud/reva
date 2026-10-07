@@ -30,6 +30,7 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		revads    map[string]*Revad
 		ctx       context.Context
 		spaceRoot *provider.ResourceId
+		newCS3    func() *metadata.CS3
 
 		csUser = &userpb.User{
 			Id: &userpb.UserId{
@@ -76,6 +77,12 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		Expect(res.Status.Code.String()).To(Equal("CODE_OK"))
 		spaceRoot = res.StorageSpace.Root
 
+		newCS3 = func() *metadata.CS3 {
+			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
+			cs3.SpaceRoot = spaceRoot
+			return cs3
+		}
+
 		// decomposedfs CreateContainer requires parent to exist; pre-create /users.
 		setup := metadata.NewCS3("", revads["storage"].GrpcAddress)
 		setup.SpaceRoot = spaceRoot
@@ -92,12 +99,6 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 	})
 
 	It("preserves all shares when 2 replicas write concurrently (OCISDEV-855)", func() {
-		newCS3 := func() *metadata.CS3 {
-			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
-			cs3.SpaceRoot = spaceRoot
-			return cs3
-		}
-
 		const numShares = 15
 		replicas := [2]receivedsharecache.Cache{
 			receivedsharecache.New(newCS3(), 0),
@@ -134,12 +135,6 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 	})
 
 	It("both replicas recover when writes are forced simultaneous (OCISDEV-855)", func() {
-		newCS3 := func() *metadata.CS3 {
-			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
-			cs3.SpaceRoot = spaceRoot
-			return cs3
-		}
-
 		bs := metadata.NewBarrierStorage(newCS3(), 2)
 		replicas := [2]receivedsharecache.Cache{
 			receivedsharecache.New(bs, 0),
@@ -174,11 +169,6 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 	})
 
 	It("fails only the write that races the deletion, leaving every other persisted share intact (OCISDEV-855)", func() {
-		newCS3 := func() *metadata.CS3 {
-			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
-			cs3.SpaceRoot = spaceRoot
-			return cs3
-		}
 		receivedJSONPath := fmt.Sprintf("/users/%s/received.json", csUserID)
 
 		// pre-seed shares sequentially via a plain writer, so there is
