@@ -19,11 +19,15 @@
 package decomposedfs_test
 
 import (
+	"os"
+
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/stretchr/testify/mock"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	helpers "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/testhelpers"
 	treemocks "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/tree/mocks"
 
@@ -63,6 +67,58 @@ var _ = Describe("Decomposed", func() {
 				"permissionssvc": "any",
 			}, bs, nil, nil)
 			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("Download", func() {
+		It("returns TooEarly instead of a raw error when the node is still processing", func() {
+			n, err := env.CreateTestFile("file1", "blobid1", env.SpaceRootRes.OpaqueId, env.SpaceRootRes.SpaceId, 10)
+			Expect(err).ToNot(HaveOccurred())
+
+			// simulate a concurrent writer that has created the node but not
+			// yet finished writing its blob - CreateNodeForUpload sets this
+			// same marker before the blob exists on disk.
+			Expect(n.SetXattrString(env.Ctx, prefixes.StatusPrefix, node.ProcessingStatus+"some-upload-id")).To(Succeed())
+
+			env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(&provider.ResourcePermissions{
+				Stat:                 true,
+				InitiateFileDownload: true,
+			}, nil).Times(1)
+			// the blob does not exist on disk yet - matches the real race
+			env.Blobstore.On("Download", mock.Anything).Return(nil, os.ErrNotExist)
+
+			_, _, err = env.Fs.Download(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "/file1",
+			}, func(*provider.ResourceInfo) bool { return true })
+
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsTooEarly)
+			Expect(ok).To(BeTrue(), "expected an IsTooEarly error, got %T: %v", err, err)
+		})
+
+		It("preserves NotFound typing when the blob disappears after the node is resolved", func() {
+			_, err := env.CreateTestFile("file2", "blobid2", env.SpaceRootRes.OpaqueId, env.SpaceRootRes.SpaceId, 10)
+			Expect(err).ToNot(HaveOccurred())
+			// node is fully written, not processing - exercises the TOCTOU window
+			// the IsProcessing guard does not cover.
+
+			env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(&provider.ResourcePermissions{
+				Stat:                 true,
+				InitiateFileDownload: true,
+			}, nil).Times(1)
+			// simulates a concurrent writer deleting/replacing the blob between
+			// node resolution and this ReadBlob call.
+			env.Blobstore.On("Download", mock.Anything).Return(nil, errtypes.NotFound("blobid2"))
+
+			_, _, err = env.Fs.Download(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "/file2",
+			}, func(*provider.ResourceInfo) bool { return true })
+
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsNotFound)
+			Expect(ok).To(BeTrue(), "expected NotFound typing to survive Download(), got %T: %v -- this is what makes handleError's type switch in rhttp/datatx/utils/download/download.go fall through to 500 instead of 404", err, err)
 		})
 	})
 
