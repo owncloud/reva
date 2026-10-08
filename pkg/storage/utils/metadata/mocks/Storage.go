@@ -735,6 +735,63 @@ func (_c *Storage_Upload_Call) RunAndReturn(run func(context.Context, metadata.U
 	return _c
 }
 
+// WasRecentlyDeleted provides a mock function with given fields: ctx, path
+func (_m *Storage) WasRecentlyDeleted(ctx context.Context, path string) (bool, error) {
+	ret := _m.Called(ctx, path)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WasRecentlyDeleted")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) (bool, error)); ok {
+		return rf(ctx, path)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) bool); ok {
+		r0 = rf(ctx, path)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, path)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Storage_WasRecentlyDeleted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WasRecentlyDeleted'
+type Storage_WasRecentlyDeleted_Call struct {
+	*mock.Call
+}
+
+// WasRecentlyDeleted is a helper method to define mock.On call
+//   - ctx context.Context
+//   - path string
+func (_e *Storage_Expecter) WasRecentlyDeleted(ctx interface{}, path interface{}) *Storage_WasRecentlyDeleted_Call {
+	return &Storage_WasRecentlyDeleted_Call{Call: _e.mock.On("WasRecentlyDeleted", ctx, path)}
+}
+
+func (_c *Storage_WasRecentlyDeleted_Call) Run(run func(ctx context.Context, path string)) *Storage_WasRecentlyDeleted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *Storage_WasRecentlyDeleted_Call) Return(_a0 bool, _a1 error) *Storage_WasRecentlyDeleted_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Storage_WasRecentlyDeleted_Call) RunAndReturn(run func(context.Context, string) (bool, error)) *Storage_WasRecentlyDeleted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewStorage creates a new instance of Storage. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewStorage(t interface {
