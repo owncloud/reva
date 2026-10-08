@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/lookup"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
@@ -568,6 +569,36 @@ var _ = Describe("Tree", func() {
 			defer func() { _ = unlock() }()
 
 			Expect(fileNode.IsProcessing(env.Ctx)).To(BeTrue(), "InitNewNode must set the processing xattr before returning")
+		})
+
+		It("returns a typed AlreadyExists instead of a raw OS error when two writers race to create the same new node", func() {
+			parentRef := &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "/initnewnoderacetestdir",
+			}
+			parentNode, err := env.CreateTestDir("initnewnoderacetestdir", parentRef)
+			Expect(err).ToNot(HaveOccurred())
+
+			// same parent, same generated ID, same name -- the exact collision a
+			// second writer hits when it loses the race to create the node first.
+			nodeID := uuid.New().String()
+			winner := node.New(parentNode.SpaceID, nodeID, parentNode.ID, "newfile", 0, "", provider.ResourceType_RESOURCE_TYPE_FILE, nil, env.Lookup)
+			winner.SpaceRoot = parentNode.SpaceRoot
+
+			unlock, err := t.InitNewNode(env.Ctx, winner, 0)
+			Expect(err).ToNot(HaveOccurred(), "the first writer to create the node must succeed")
+			Expect(unlock()).To(Succeed())
+
+			loser := node.New(parentNode.SpaceID, nodeID, parentNode.ID, "newfile", 0, "", provider.ResourceType_RESOURCE_TYPE_FILE, nil, env.Lookup)
+			loser.SpaceRoot = parentNode.SpaceRoot
+
+			loserUnlock, err := t.InitNewNode(env.Ctx, loser, 0)
+			if loserUnlock != nil {
+				defer func() { _ = loserUnlock() }()
+			}
+			Expect(err).To(HaveOccurred())
+			_, ok := err.(errtypes.IsAlreadyExists)
+			Expect(ok).To(BeTrue(), "expected errtypes.AlreadyExists, got %T: %v", err, err)
 		})
 	})
 })
