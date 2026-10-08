@@ -27,7 +27,15 @@ func ValidatorsFromConfig(c *config.Config) []Validator {
 
 // ValidateName will validate a file or folder name, returning an error when it is not accepted
 func ValidateName(name string, validators []Validator) error {
-	return ValidateDestination(name, append(validators, notReserved()))
+	// This function might be used in multiple requests at the same time,
+	// and the validator list usually comes from the ocdav's svc.nameValidators,
+	// which is shared among the requests.
+	// In order to prevent possible data races, instead of append, we'll
+	// copy the validator list into a local var and then add the extra validator.
+	validatorsCopy := make([]Validator, len(validators)+1)
+	copy(validatorsCopy, validators)
+	validatorsCopy[len(validators)] = notReserved()
+	return ValidateDestination(name, validatorsCopy)
 }
 
 // ValidateDestination will validate a file or folder destination name (which can be . or ..), returning an error when it is not accepted
