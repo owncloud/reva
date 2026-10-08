@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"sync/atomic"
 
 	grpcMetadata "google.golang.org/grpc/metadata"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/auth/scope"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
@@ -30,6 +30,7 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		revads    map[string]*Revad
 		ctx       context.Context
 		spaceRoot *provider.ResourceId
+		newCS3    func() *metadata.CS3
 
 		csUser = &userpb.User{
 			Id: &userpb.UserId{
@@ -76,6 +77,12 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		Expect(res.Status.Code.String()).To(Equal("CODE_OK"))
 		spaceRoot = res.StorageSpace.Root
 
+		newCS3 = func() *metadata.CS3 {
+			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
+			cs3.SpaceRoot = spaceRoot
+			return cs3
+		}
+
 		// decomposedfs CreateContainer requires parent to exist; pre-create /users.
 		setup := metadata.NewCS3("", revads["storage"].GrpcAddress)
 		setup.SpaceRoot = spaceRoot
@@ -84,18 +91,14 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 
 	AfterEach(func() {
 		for _, r := range revads {
-			r.Cleanup(CurrentSpecReport().Failed()) //nolint:errcheck
+			Expect(r.Cleanup(CurrentSpecReport().Failed())).To(Succeed())
 		}
-		pool.RemoveSelector("StorageProviderSelector" + revads["storage"].GrpcAddress)
+		if r, ok := revads["storage"]; ok {
+			pool.RemoveSelector("StorageProviderSelector" + r.GrpcAddress)
+		}
 	})
 
 	It("preserves all shares when 2 replicas write concurrently (OCISDEV-855)", func() {
-		newCS3 := func() *metadata.CS3 {
-			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
-			cs3.SpaceRoot = spaceRoot
-			return cs3
-		}
-
 		const numShares = 15
 		replicas := [2]receivedsharecache.Cache{
 			receivedsharecache.New(newCS3(), 0),
@@ -132,13 +135,7 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 	})
 
 	It("both replicas recover when writes are forced simultaneous (OCISDEV-855)", func() {
-		newCS3 := func() *metadata.CS3 {
-			cs3 := metadata.NewCS3("", revads["storage"].GrpcAddress)
-			cs3.SpaceRoot = spaceRoot
-			return cs3
-		}
-
-		bs := newBarrierStorageCS3(newCS3(), 2)
+		bs := metadata.NewBarrierStorage(newCS3(), 2)
 		replicas := [2]receivedsharecache.Cache{
 			receivedsharecache.New(bs, 0),
 			receivedsharecache.New(bs, 0),
@@ -170,26 +167,122 @@ var _ = Describe("receivedsharecache concurrent CS3 writes", func() {
 		Expect(spaces[csSpaceID].States).To(HaveKey("share-0"))
 		Expect(spaces[csSpaceID].States).To(HaveKey("share-1"))
 	})
+
+	It("fails only the write that races the deletion, leaving every other persisted share intact (OCISDEV-855)", func() {
+		receivedJSONPath := fmt.Sprintf("/users/%s/received.json", csUserID)
+
+		// pre-seed shares sequentially via a plain writer, so there is
+		// already-persisted data in the file before the conflict below.
+		preseed := receivedsharecache.New(newCS3(), 0)
+		const numPreseed = 2
+		for i := 0; i < numPreseed; i++ {
+			rs := &collaboration.ReceivedShare{
+				Share: &collaboration.Share{
+					Id: &collaboration.ShareId{OpaqueId: fmt.Sprintf("preseed-%d", i)},
+				},
+				State: collaboration.ShareState_SHARE_STATE_PENDING,
+			}
+			Expect(preseed.Add(ctx, csUserID, csSpaceID, rs)).To(Succeed())
+		}
+
+		// replica A's storage forces its first Upload to fail, deletes the
+		// backing file (simulating an ops repair action landing in that exact
+		// window), then lets every later call through for real. Replica B is
+		// the only other concurrent writer -- two writers, one storage,
+		// matching the race precisely instead of flooding it closed.
+		decorated := &deleteOnConflictStorage{Storage: newCS3(), deleter: newCS3(), path: receivedJSONPath}
+		replicas := [2]receivedsharecache.Cache{
+			receivedsharecache.New(decorated, 0),
+			receivedsharecache.New(newCS3(), 0),
+		}
+
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				rs := &collaboration.ReceivedShare{
+					Share: &collaboration.Share{
+						Id: &collaboration.ShareId{OpaqueId: fmt.Sprintf("share-%d", idx)},
+					},
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				}
+				errs[idx] = replicas[idx].Add(ctx, csUserID, csSpaceID, rs)
+			}(i)
+		}
+		wg.Wait()
+
+		// Either replica can legitimately land in the deletion window and
+		// correctly fail -- the decorator only controls when the file gets
+		// deleted, not which concurrent reader notices it gone. A failure
+		// here is the fix working as intended, not a bug: assert
+		// self-consistency (fail -> absent, succeed -> present) rather than
+		// which specific replica wins the race.
+		anySucceeded := false
+		expectedCount := numPreseed
+		for _, err := range errs {
+			if err == nil {
+				anySucceeded = true
+				expectedCount++
+			}
+		}
+
+		fresh := receivedsharecache.New(newCS3(), 0)
+		spaces, err := fresh.List(ctx, csUserID)
+		Expect(err).ToNot(HaveOccurred())
+
+		if !anySucceeded {
+			// both writes raced the deletion and correctly refused to write;
+			// nothing ever came back to re-persist anything, so the file
+			// (including preseed) legitimately stays gone -- not evidence of
+			// the bug, since nothing silently claimed success while losing data.
+			return
+		}
+
+		Expect(spaces[csSpaceID]).ToNot(BeNil())
+
+		// the one invariant that must hold whenever at least one write
+		// succeeded: data persisted before the race is never silently
+		// dropped by a write that reports success.
+		for i := 0; i < numPreseed; i++ {
+			Expect(spaces[csSpaceID].States).To(HaveKey(fmt.Sprintf("preseed-%d", i)),
+				"a share successfully persisted before the conflict must survive a later successful write")
+		}
+		for i, err := range errs {
+			shareKey := fmt.Sprintf("share-%d", i)
+			if err != nil {
+				Expect(spaces[csSpaceID].States).ToNot(HaveKey(shareKey),
+					"a write that returned an error must not appear in the final state")
+			} else {
+				Expect(spaces[csSpaceID].States).To(HaveKey(shareKey),
+					"a write that returned success must appear in the final state")
+			}
+		}
+		Expect(spaces[csSpaceID].States).To(HaveLen(expectedCount),
+			"every Add call that returned success must be reflected in the final state -- none silently dropped, and a failed call must not silently succeed either")
+	})
 })
 
-// barrierStorageCS3 holds Upload calls until n goroutines have arrived, then
-// releases all simultaneously — forcing the concurrent-write race deterministically.
-type barrierStorageCS3 struct {
+// deleteOnConflictStorage forces exactly one Upload through it to fail, then
+// deletes the backing file via a second real client before returning the
+// error -- simulating an ops repair action landing in the exact window
+// between a CAS conflict and that writer's post-conflict resync.
+type deleteOnConflictStorage struct {
 	metadata.Storage
-	arrived   int32
-	n         int32
-	ready     chan struct{}
-	closeOnce sync.Once
+	deleter metadata.Storage
+	path    string
+	once    sync.Once
 }
 
-func newBarrierStorageCS3(s metadata.Storage, n int) *barrierStorageCS3 {
-	return &barrierStorageCS3{Storage: s, n: int32(n), ready: make(chan struct{})}
-}
-
-func (b *barrierStorageCS3) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
-	if atomic.AddInt32(&b.arrived, 1) >= b.n {
-		b.closeOnce.Do(func() { close(b.ready) })
+func (d *deleteOnConflictStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	triggered := false
+	d.once.Do(func() {
+		triggered = true
+		_ = d.deleter.Delete(ctx, d.path)
+	})
+	if triggered {
+		return nil, errtypes.Aborted("injected: simulated conflict")
 	}
-	<-b.ready
-	return b.Storage.Upload(ctx, req)
+	return d.Storage.Upload(ctx, req)
 }
