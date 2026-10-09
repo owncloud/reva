@@ -39,12 +39,6 @@ func SkipTouchPropagation(ctx context.Context) bool {
 	return skip
 }
 
-// UploadSessionLister defines the interface for FS implementations that allow listing and purging upload sessions
-type UploadSessionLister interface {
-	// ListUploadSessions returns the upload sessions matching the given filter
-	ListUploadSessions(ctx context.Context, filter UploadSessionFilter) ([]UploadSession, error)
-}
-
 // OrphanChecker defines the interface for FS implementations that can resolve a resource's metadata.
 type OrphanChecker interface {
 	// IsOrphaned reports whether the referenced resource exists but its metadata is unreadable.

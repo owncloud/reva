@@ -48,11 +48,6 @@ func NewFS(next storage.FS, hooks ...Hook) *FS {
 	}
 }
 
-// ListUploadSessions returns the upload sessions matching the given filter
-func (f *FS) ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
-	return f.next.(storage.UploadSessionLister).ListUploadSessions(ctx, filter)
-}
-
 // IsOrphaned reports whether the referenced resource exists but its metadata is unreadable.
 func (f *FS) IsOrphaned(ctx context.Context, ref *provider.Reference) bool {
 	return f.next.(storage.OrphanChecker).IsOrphaned(ctx, ref)

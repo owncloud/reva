@@ -32,10 +32,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
-func (d *driver) ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
-	return []storage.UploadSession{}, nil
-}
-
 // MarkProcessing is a no-op: the file lives on the remote instance, so there is no
 // local node to flag while postprocessing runs.
 func (d *driver) MarkProcessing(ctx context.Context, ref *provider.Reference, processing bool, sessionID string) error {

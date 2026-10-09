@@ -178,11 +178,6 @@ func New(m map[string]interface{}, stream events.Stream, log *zerolog.Logger) (s
 	return fs, nil
 }
 
-// ListUploadSessions returns the upload sessions matching the given filter
-func (fs *posixFS) ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
-	return fs.FS.(storage.UploadSessionLister).ListUploadSessions(ctx, filter)
-}
-
 // IsOrphaned reports whether the referenced resource exists but its metadata is unreadable.
 func (fs *posixFS) IsOrphaned(ctx context.Context, ref *provider.Reference) bool {
 	return fs.FS.(storage.OrphanChecker).IsOrphaned(ctx, ref)

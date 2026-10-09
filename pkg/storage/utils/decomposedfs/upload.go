@@ -38,7 +38,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
-	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/upload"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
@@ -544,56 +543,6 @@ func validateChecksums(ctx context.Context, lu node.PathLookup, n *node.Node, ve
 		}
 	}
 	return nil
-}
-
-// ListUploadSessions returns the upload sessions for the given filter
-func (fs *Decomposedfs) ListUploadSessions(ctx context.Context, filter storage.UploadSessionFilter) ([]storage.UploadSession, error) {
-	var sessions []*upload.OcisSession
-	if filter.ID != nil && *filter.ID != "" {
-		session, err := fs.sessionStore.Get(ctx, *filter.ID)
-		if err != nil {
-			return nil, err
-		}
-		sessions = []*upload.OcisSession{session}
-	} else {
-		var err error
-		sessions, err = fs.sessionStore.List(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-	filteredSessions := []storage.UploadSession{}
-	now := time.Now()
-	for _, session := range sessions {
-		if filter.Processing != nil && *filter.Processing != session.IsProcessing() {
-			continue
-		}
-		if filter.Expired != nil {
-			if *filter.Expired {
-				if now.Before(session.Expires()) {
-					continue
-				}
-			} else {
-				if now.After(session.Expires()) {
-					continue
-				}
-			}
-		}
-		if filter.HasVirus != nil {
-			sr, _ := session.ScanData()
-			infected := sr != ""
-			if *filter.HasVirus != infected {
-				continue
-			}
-		}
-		// evaluated last: unlike the other filters this reads the node metadata
-		// from disk, so it is only done for sessions that passed all other filters
-		if filter.Orphaned != nil && *filter.Orphaned != session.IsOrphaned(ctx) {
-			continue
-		}
-		filteredSessions = append(filteredSessions, session)
-	}
-	return filteredSessions, nil
 }
 
 // IsOrphaned reports whether the referenced resource exists but its metadata is unreadable.
