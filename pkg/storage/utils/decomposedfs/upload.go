@@ -21,8 +21,6 @@ package decomposedfs
 import (
 	"context"
 	"fmt"
-	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
-	"github.com/owncloud/reva/v2/pkg/storagespace"
 	iofs "io/fs"
 	"os"
 	"path/filepath"
@@ -35,9 +33,11 @@ import (
 	"github.com/rogpeppe/go-internal/lockedfile"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
+	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
+	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 

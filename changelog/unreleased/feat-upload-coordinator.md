@@ -2,9 +2,9 @@ Enhancement: Extract the upload state machine into a driver-agnostic coordinator
 
 The upload state machine (TUS session management, postprocessing event loop,
 antivirus integration, and restart safety) has been extracted from decomposedfs
-into a new coordinator in `pkg/upload`. Every storage driver now inherits TUS
-chunked uploads, postprocessing, and AV scanning without reimplementing any of
-it.
+into a new coordinator in `pkg/upload`. Drivers that implement the methods below
+get TUS chunked uploads, postprocessing, and AV scanning without reimplementing
+any of it.
 
 Drivers integrate by implementing four new methods on the storage interface:
 
