@@ -24,6 +24,7 @@ package posix_test
 import (
 	"os"
 
+	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storage/fs/posix"
 	"github.com/owncloud/reva/v2/tests/helpers"
 	"github.com/rs/zerolog"
@@ -62,6 +63,16 @@ var _ = Describe("Posix", func() {
 		It("returns a new instance", func() {
 			_, err := posix.New(options, nil, &zerolog.Logger{})
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// Through both wrappers, so an upload skips the TouchFile.
+		It("creates a new file's node in PrepareUpload", func() {
+			fs, err := posix.New(options, nil, &zerolog.Logger{})
+			Expect(err).ToNot(HaveOccurred())
+
+			nc, ok := fs.(storage.NodeCreator)
+			Expect(ok).To(BeTrue())
+			Expect(nc.PrepareCreatesNode()).To(BeTrue())
 		})
 	})
 })

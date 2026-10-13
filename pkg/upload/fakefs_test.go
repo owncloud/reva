@@ -31,28 +31,23 @@ type fakeFS struct {
 	mdErr error
 	tree  map[string]*provider.ResourceInfo
 	// mdErrs fails one path in the tree, for the errors that are not not-found.
-	mdErrs       map[string]error
-	quota        uint64
-	quotaErr     error
-	lock         *provider.Lock
-	lockErr      error
-	pathByID     string
-	pathByIDErr  error
-	touched      *provider.ResourceId
-	touchedOwner *userpb.UserId
-	touchErr     error
-	markErr      error
-	prepared     *storage.PrepareUploadResult
-	prepareErr   error
+	mdErrs         map[string]error
+	quota          uint64
+	quotaErr       error
+	lock           *provider.Lock
+	lockErr        error
+	pathByID       string
+	pathByIDErr    error
+	touched        *provider.ResourceId
+	touchedOwner   *userpb.UserId
+	touchErr       error
+	markErr        error
+	prepared       *storage.PrepareUploadResult
+	prepareErr     error
 	commitErr      error
 	commitErrCount int // return commitErr for the first N calls, then succeed
 	commitCalls    int
 	rollbackErr    error
-	deleteErr    error
-
-	// markErrAfter applies markErr only from the nth MarkProcessing call on.
-	markErrAfter int
-	markCalls    int
 
 	// what the driver was handed, for the arguments the call list does not carry.
 	committed   storage.UploadSource
@@ -60,6 +55,8 @@ type fakeFS struct {
 	rolledBack  storage.RollbackInfo
 	touchRef    *provider.Reference
 	touchMtime  string
+
+	touchSkippedPropagation bool
 
 	// hooks fire inside a driver call, to make the coordinator's next step fail.
 	afterMark, afterPrepare func()
@@ -102,9 +99,10 @@ func (f *fakeFS) GetPathByID(_ context.Context, _ *provider.ResourceId) (string,
 	return f.pathByID, f.pathByIDErr
 }
 
-func (f *fakeFS) TouchFile(_ context.Context, ref *provider.Reference, markprocessing bool, mtime string) (*storage.TouchFileResult, error) {
+func (f *fakeFS) TouchFile(ctx context.Context, ref *provider.Reference, markprocessing bool, mtime string) (*storage.TouchFileResult, error) {
 	f.record("TouchFile(markprocessing=%v)", markprocessing)
 	f.touchRef, f.touchMtime = ref, mtime
+	f.touchSkippedPropagation = storage.SkipTouchPropagation(ctx)
 	if f.touchErr != nil {
 		return nil, f.touchErr
 	}
@@ -117,8 +115,7 @@ func (f *fakeFS) TouchFile(_ context.Context, ref *provider.Reference, markproce
 
 func (f *fakeFS) MarkProcessing(_ context.Context, _ *provider.Reference, processing bool, _ string) error {
 	f.record("MarkProcessing(%v)", processing)
-	f.markCalls++
-	if f.markErr != nil && f.markCalls > f.markErrAfter {
+	if f.markErr != nil {
 		return f.markErr
 	}
 	if f.afterMark != nil {
@@ -163,7 +160,7 @@ func (f *fakeFS) RollbackUpload(_ context.Context, _ *provider.Reference, _ stri
 
 func (f *fakeFS) Delete(_ context.Context, _ *provider.Reference) (*storage.DeleteResult, error) {
 	f.record("Delete")
-	return nil, f.deleteErr
+	return nil, nil
 }
 
 // fakePublisher is an events.Publisher test double keeping the published events.
@@ -300,6 +297,17 @@ func (s *brokenStore) List(ctx context.Context) ([]Session, error) {
 		return nil, s.listErr
 	}
 	return s.SessionStore.List(ctx)
+}
+
+// fakeCreatorFS is a fakeFS that also implements storage.NodeCreator, as
+// decomposedfs does. fakeFS deliberately does not, so the specs cover the drivers
+// that create a new file's node in TouchFile.
+type fakeCreatorFS struct {
+	*fakeFS
+}
+
+func (f *fakeCreatorFS) PrepareCreatesNode() bool {
+	return true
 }
 
 // fakeOrphanFS is a fakeFS that also implements storage.OrphanChecker. fakeFS
