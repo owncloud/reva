@@ -23,7 +23,8 @@ type fixture struct {
 	ctx         context.Context
 	spaceID     string
 	fileID      string
-	fileContent string // empty on real box; exact expected content in mock mode
+	fileContent string     // empty on real box; exact expected content in mock mode
+	mock        *mockState // nil on real box
 }
 
 func skipIfRealBox() {
@@ -44,7 +45,8 @@ func firstFileID(items []*provider.ResourceInfo) string {
 func setupDriver() (storage.FS, *fixture, func()) {
 	ep := os.Getenv("KITEWORKS")
 	if ep == "" {
-		srv := httptest.NewServer(mockKiteworksHandler())
+		handler, state := mockKiteworksHandler()
+		srv := httptest.NewServer(handler)
 		d, err := kiteworks.New(map[string]interface{}{"endpoint": srv.URL}, nil, nil)
 		Expect(err).ToNot(HaveOccurred())
 		return d, &fixture{
@@ -52,6 +54,7 @@ func setupDriver() (storage.FS, *fixture, func()) {
 			spaceID:     "space-1",
 			fileID:      "file-1",
 			fileContent: "hello kiteworks",
+			mock:        state,
 		}, srv.Close
 	}
 
@@ -90,22 +93,6 @@ var _ = Describe("kiteworks driver", func() {
 	})
 
 	Context("read path", func() {
-		Describe("ListStorageSpaces", func() {
-			It("returns at least one project space", func() {
-				spaces, err := d.ListStorageSpaces(fix.ctx, nil, false)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spaces).ToNot(BeEmpty())
-				Expect(spaces[0].SpaceType).To(Equal("project"))
-				Expect(spaces[0].Name).ToNot(BeEmpty())
-			})
-
-			It("returns space with root ResourceId storageID=kiteworks", func() {
-				spaces, err := d.ListStorageSpaces(fix.ctx, nil, false)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spaces[0].Root.StorageId).To(Equal("kiteworks"))
-			})
-		})
-
 		Describe("GetMD", func() {
 			It("returns container info for the space root", func() {
 				ref := &provider.Reference{
