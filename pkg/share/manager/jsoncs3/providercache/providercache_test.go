@@ -20,15 +20,19 @@ package providercache_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/providercache"
+	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
 
@@ -150,11 +154,39 @@ var _ = Describe("Cache", func() {
 			Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
 			Expect(space.Etag).ToNot(Equal(old))
 		})
+
+		It("fails instead of dropping other shares when the post-conflict resync finds the file gone", func() {
+			otherShareID := "storageid$spaceid!other-share"
+			otherShare := &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "other-share"}}
+			initial := providercache.Shares{Shares: map[string]*collaboration.Share{
+				shareID:      share1,
+				otherShareID: otherShare,
+			}}
+			initialBytes, err := json.Marshal(initial)
+			Expect(err).ToNot(HaveOccurred())
+
+			fs := &helpers.ConflictThenNotFoundStorage{InitialData: initialBytes, InitialEtag: "etag1"}
+			c2 := providercache.New(fs, 0*time.Second)
+
+			newShareID := "storageid$spaceid!share3"
+			addErr := c2.Add(ctx, storageID, spaceID, newShareID, &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share3"}})
+			Expect(addErr).To(HaveOccurred(), "a backing file that vanished mid-retry must surface as an error, not a partial write")
+			Expect(fs.UploadedContent()).To(BeNil(), "no write should ever reach the storage once the resync reports NotFound")
+		})
 	})
 
 	Context("with an existing entry", func() {
 		BeforeEach(func() {
 			Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
+		})
+
+		It("retries a TooEarly CAS conflict on persist instead of aborting", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
+			c2 := providercache.New(fs, 0*time.Second)
+
+			err := c2.Add(ctx, storageID, spaceID, "storageid$spaceid!share2", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share2"}})
+			Expect(err).ToNot(HaveOccurred(), "TooEarly from write-lock contention should be retried, not treated as fatal")
+			Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
 		})
 
 		Describe("Get", func() {
@@ -245,3 +277,4 @@ var _ = Describe("Cache", func() {
 		})
 	})
 })
+
