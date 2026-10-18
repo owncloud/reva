@@ -737,63 +737,58 @@ func comparePasswords(t *testing.T, expected, got map[string]map[string]*apppb.A
 	}
 }
 
-func TestLegacyKeysAreMigrated(t *testing.T) {
-	// Older versions keyed each user's bucket by UserId.String(), the protobuf
-	// text format, whose whitespace protobuf-go varies between binaries. A
-	// state file written by two different builds therefore holds the same user
-	// under two keys, and neither matches what the running build would compute.
+// Older versions keyed each user's bucket by UserId.String(), the protobuf
+// text format, whose whitespace protobuf-go varies between binaries. A state
+// file written by two different builds therefore holds the same user under two
+// keys, and neither matches what the running build would compute.
+const (
+	legacyOneSpace  = `idp:"https://idp.example" opaque_id:"u1" type:USER_TYPE_PRIMARY`
+	legacyTwoSpaces = `idp:"https://idp.example"  opaque_id:"u1"  type:USER_TYPE_PRIMARY`
+	legacyOtherUser = `idp:"https://idp.example" opaque_id:"u2" type:USER_TYPE_PRIMARY`
+)
+
+// newLegacyManager returns a manager over a state file holding user u1's
+// tokens 1234 (build A) and 5678 (build B) under legacy keys and 9999 under the
+// stable key, plus user u2's token 2222 under a legacy key.
+func newLegacyManager(t *testing.T) (*jsonManager, context.Context, *userpb.User, string) {
+	t.Helper()
 	user := &userpb.User{Id: &userpb.UserId{Idp: "https://idp.example", OpaqueId: "u1", Type: userpb.UserType_USER_TYPE_PRIMARY}}
-	ctx := ctxpkg.ContextSetUser(context.Background(), user)
+	other := &userpb.UserId{Idp: "https://idp.example", OpaqueId: "u2", Type: userpb.UserType_USER_TYPE_PRIMARY}
 
 	tempDir := createTempDir(t, "jsonappauth_legacy_test")
-	defer os.RemoveAll(tempDir)
+	t.Cleanup(func() { os.RemoveAll(tempDir) })
 	stateFile := createTempFile(t, tempDir, "legacy.json")
-	defer stateFile.Close()
+	t.Cleanup(func() { stateFile.Close() })
 
-	hash1234, _ := bcrypt.GenerateFromPassword([]byte("1234"), 4)
-	hash5678, _ := bcrypt.GenerateFromPassword([]byte("5678"), 4)
-	hash9999, _ := bcrypt.GenerateFromPassword([]byte("9999"), 4)
-	token := func(hash []byte, label string) *apppb.AppPassword {
-		return &apppb.AppPassword{Password: string(hash), Label: label, User: user.GetId(), Ctime: &typespb.Timestamp{Seconds: 1}, Utime: &typespb.Timestamp{Seconds: 1}}
+	token := func(pw, label string, owner *userpb.UserId) (string, *apppb.AppPassword) {
+		hash, _ := bcrypt.GenerateFromPassword([]byte(pw), 4)
+		return string(hash), &apppb.AppPassword{Password: string(hash), Label: label, User: owner, Ctime: &typespb.Timestamp{Seconds: 1}, Utime: &typespb.Timestamp{Seconds: 1}}
 	}
-	oneSpace := `idp:"https://idp.example" opaque_id:"u1" type:USER_TYPE_PRIMARY`
-	twoSpaces := `idp:"https://idp.example"  opaque_id:"u1"  type:USER_TYPE_PRIMARY`
-	legacyState := map[string]map[string]*apppb.AppPassword{
-		oneSpace:         {string(hash1234): token(hash1234, "from build A")},
-		twoSpaces:        {string(hash5678): token(hash5678, "from build B")},
-		userKey(user.Id): {string(hash9999): token(hash9999, "already stable")},
+	state := map[string]map[string]*apppb.AppPassword{}
+	add := func(key, pw, label string, owner *userpb.UserId) {
+		if state[key] == nil {
+			state[key] = map[string]*apppb.AppPassword{}
+		}
+		hash, tok := token(pw, label, owner)
+		state[key][hash] = tok
 	}
-	legacyJSON, _ := json.Marshal(legacyState)
-	fill(t, stateFile, string(legacyJSON))
+	add(legacyOneSpace, "1234", "from build A", user.Id)
+	add(legacyTwoSpaces, "5678", "from build B", user.Id)
+	add(userKey(user.Id), "9999", "already stable", user.Id)
+	add(legacyOtherUser, "2222", "other user", other)
+	data, _ := json.Marshal(state)
+	fill(t, stateFile, string(data))
 
 	manager, err := New(map[string]interface{}{"file": stateFile.Name(), "token_strength": 10, "password_hash_cost": 4})
 	if err != nil {
 		t.Fatalf("unexpected error creating the manager: %v", err)
 	}
-	mgr := manager.(*jsonManager)
+	return manager.(*jsonManager), ctxpkg.ContextSetUser(context.Background(), user), user, stateFile.Name()
+}
 
-	if _, ok := mgr.passwords[oneSpace]; ok {
-		t.Fatalf("legacy one-space key still present after load")
-	}
-	if _, ok := mgr.passwords[twoSpaces]; ok {
-		t.Fatalf("legacy two-space key still present after load")
-	}
-	if got := len(mgr.passwords[userKey(user.Id)]); got != 3 {
-		t.Fatalf("expected the three tokens merged under the stable key, got %d", got)
-	}
-
-	for _, pw := range []string{"1234", "5678", "9999"} {
-		if _, err := manager.GetAppPassword(ctx, user.GetId(), pw); err != nil {
-			t.Fatalf("token %q stored under a legacy key is not usable after migration: %v", pw, err)
-		}
-	}
-	listed, err := manager.ListAppPasswords(ctx)
-	if err != nil || len(listed) != 3 {
-		t.Fatalf("expected 3 listed app passwords, got %d (err=%v)", len(listed), err)
-	}
-
-	// The migration is persisted: a second load finds only the stable key.
-	data, err := os.ReadFile(stateFile.Name())
+func readState(t *testing.T, file string) map[string]map[string]*apppb.AppPassword {
+	t.Helper()
+	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatalf("reading state file: %v", err)
 	}
@@ -801,20 +796,101 @@ func TestLegacyKeysAreMigrated(t *testing.T) {
 	if err := json.Unmarshal(data, &onDisk); err != nil {
 		t.Fatalf("parsing state file: %v", err)
 	}
-	if len(onDisk) != 1 {
-		t.Fatalf("expected exactly one bucket on disk after migration, got %d keys: %v", len(onDisk), keysOf(onDisk))
-	}
-	if _, ok := onDisk[userKey(user.Id)]; !ok {
-		t.Fatalf("stable key missing on disk after migration")
-	}
+	return onDisk
+}
 
-	// New tokens go under the stable key as well.
-	if _, err := manager.GenerateAppPassword(ctx, nil, "new", nil); err != nil {
+// assertAdopted checks that u1's three tokens sit under the stable key, in
+// memory and on disk, and that u2's legacy bucket was left alone.
+func assertAdopted(t *testing.T, mgr *jsonManager, user *userpb.User, file string, want int) {
+	t.Helper()
+	for name, state := range map[string]map[string]map[string]*apppb.AppPassword{"memory": mgr.passwords, "disk": readState(t, file)} {
+		if _, ok := state[legacyOneSpace]; ok {
+			t.Errorf("%s: legacy one-space key still present", name)
+		}
+		if _, ok := state[legacyTwoSpaces]; ok {
+			t.Errorf("%s: legacy two-space key still present", name)
+		}
+		if got := len(state[userKey(user.Id)]); got != want {
+			t.Errorf("%s: expected %d tokens under the stable key, got %d (keys: %v)", name, want, got, keysOf(state))
+		}
+		if _, ok := state[legacyOtherUser]; !ok {
+			t.Errorf("%s: another user's legacy bucket was touched", name)
+		}
+	}
+}
+
+func TestLegacyKeysAreNotRewrittenOnLoad(t *testing.T) {
+	mgr, _, _, file := newLegacyManager(t)
+	for _, key := range []string{legacyOneSpace, legacyTwoSpaces, legacyOtherUser} {
+		if _, ok := mgr.passwords[key]; !ok {
+			t.Errorf("legacy key %q was rewritten on load", key)
+		}
+		if _, ok := readState(t, file)[key]; !ok {
+			t.Errorf("legacy key %q was rewritten on disk on load", key)
+		}
+	}
+}
+
+func TestLegacyKeysAdoptedOnGet(t *testing.T) {
+	mgr, ctx, user, file := newLegacyManager(t)
+	// A token under a legacy key still authenticates, and the first use moves
+	// all of the user's legacy buckets under the stable key.
+	if _, err := mgr.GetAppPassword(ctx, user.GetId(), "1234"); err != nil {
+		t.Fatalf("token stored under a legacy key is not usable: %v", err)
+	}
+	assertAdopted(t, mgr, user, file, 3)
+	for _, pw := range []string{"1234", "5678", "9999"} {
+		if _, err := mgr.GetAppPassword(ctx, user.GetId(), pw); err != nil {
+			t.Fatalf("token %q not usable after adoption: %v", pw, err)
+		}
+	}
+}
+
+func TestLegacyKeysWrongPassword(t *testing.T) {
+	mgr, ctx, user, _ := newLegacyManager(t)
+	if _, err := mgr.GetAppPassword(ctx, user.GetId(), "0000"); err == nil {
+		t.Fatal("a wrong password was accepted")
+	}
+	// A failed check changes nothing.
+	if _, ok := mgr.passwords[legacyOneSpace]; !ok {
+		t.Error("a failed check moved legacy buckets")
+	}
+	// Another user's token never authenticates this user.
+	if _, err := mgr.GetAppPassword(ctx, user.GetId(), "2222"); err == nil {
+		t.Fatal("another user's legacy token authenticated this user")
+	}
+}
+
+func TestLegacyKeysAdoptedOnList(t *testing.T) {
+	mgr, ctx, user, file := newLegacyManager(t)
+	listed, err := mgr.ListAppPasswords(ctx)
+	if err != nil || len(listed) != 3 {
+		t.Fatalf("expected 3 listed app passwords, got %d (err=%v)", len(listed), err)
+	}
+	assertAdopted(t, mgr, user, file, 3)
+}
+
+func TestLegacyKeysAdoptedOnInvalidate(t *testing.T) {
+	mgr, ctx, user, file := newLegacyManager(t)
+	var legacyHash string
+	for hash := range mgr.passwords[legacyTwoSpaces] {
+		legacyHash = hash
+	}
+	if err := mgr.InvalidateAppPassword(ctx, legacyHash); err != nil {
+		t.Fatalf("invalidating a token stored under a legacy key: %v", err)
+	}
+	assertAdopted(t, mgr, user, file, 2)
+	if _, err := mgr.GetAppPassword(ctx, user.GetId(), "5678"); err == nil {
+		t.Fatal("an invalidated legacy token still authenticates")
+	}
+}
+
+func TestLegacyKeysAdoptedOnGenerate(t *testing.T) {
+	mgr, ctx, user, file := newLegacyManager(t)
+	if _, err := mgr.GenerateAppPassword(ctx, nil, "new", nil); err != nil {
 		t.Fatalf("generating a new app password: %v", err)
 	}
-	if got := len(mgr.passwords[userKey(user.Id)]); got != 4 {
-		t.Fatalf("expected 4 tokens under the stable key after generating one, got %d", got)
-	}
+	assertAdopted(t, mgr, user, file, 4)
 }
 
 func keysOf(m map[string]map[string]*apppb.AppPassword) []string {

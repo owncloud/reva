@@ -9,8 +9,11 @@ stopped working with "password not found", although it was still in the file
 and not expired. State files written by several builds held the same user
 under several keys.
 
-Buckets are now keyed by `<idp>|<opaque id>`. On load, buckets stored under
-the old text-format keys are parsed, re-keyed and merged, and the file is
-rewritten, so existing app passwords keep working across upgrades.
+New app passwords are now always stored under `<idp>|<opaque id>`. Buckets
+stored under the old text-format keys are matched by parsing the key back into
+a user id, and the first time a user generates, lists, invalidates or uses an
+app password their old buckets are moved under the new key and merged. Nothing
+is rewritten on startup, a lookup under the new key never consults the old
+ones, and existing app passwords keep working across upgrades.
 
 https://github.com/owncloud/reva/pull/755

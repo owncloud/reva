@@ -79,14 +79,10 @@ func New(m map[string]interface{}) (appauth.Manager, error) {
 
 	manager.config = c
 
-	// Both steps run before the manager is shared, so no lock is needed.
-	// Re-key buckets written by older versions under UserId.String(), then
-	// purge expired tokens so they don't accumulate over time.
-	migrated := manager.migrateLegacyKeys()
+	// Purge expired tokens on startup so they don't accumulate over time.
+	// This runs before the manager is shared, so no lock is needed.
 	if !c.KeepExpiredTokensOnLoad {
 		manager.purgeExpiredTokens()
-	}
-	if migrated || !c.KeepExpiredTokensOnLoad {
 		_ = manager.save()
 	}
 
@@ -104,35 +100,58 @@ func userKey(id *userpb.UserId) string {
 	return id.GetIdp() + "|" + id.GetOpaqueId()
 }
 
-// migrateLegacyKeys re-keys buckets stored under the protobuf text form of the
-// user id (what UserId.String() produced) onto userKey, merging buckets that
-// differ only in whitespace. It reports whether anything changed.
-func (mgr *jsonManager) migrateLegacyKeys() bool {
-	migrated := false
-	for key, tokens := range mgr.passwords {
-		if !strings.Contains(key, "opaque_id:") && !strings.Contains(key, "idp:") {
+// Buckets written by older versions are keyed by UserId.String(). That text
+// cannot be recomputed (its whitespace varies between builds), so a legacy key
+// is matched by parsing it back into a user id. New passwords are always
+// stored under userKey; a user's legacy buckets are moved there the first time
+// that user generates, lists, invalidates or uses an app password, so nothing
+// runs on startup and a lookup under the stable key never pays for this.
+
+// legacyKeys returns the keys of id's buckets that were stored under the
+// protobuf text form of the user id. Must be called while holding a lock.
+func (mgr *jsonManager) legacyKeys(id *userpb.UserId) []string {
+	stable := userKey(id)
+	var keys []string
+	for key := range mgr.passwords {
+		if key == stable || (!strings.Contains(key, "opaque_id:") && !strings.Contains(key, "idp:")) {
 			continue
 		}
-		id := &userpb.UserId{}
-		if err := prototext.Unmarshal([]byte(key), id); err != nil {
+		parsed := &userpb.UserId{}
+		if err := prototext.Unmarshal([]byte(key), parsed); err != nil {
 			continue
 		}
-		newKey := userKey(id)
-		if newKey == key {
-			continue
+		if userKey(parsed) == stable {
+			keys = append(keys, key)
 		}
-		if mgr.passwords[newKey] == nil {
-			mgr.passwords[newKey] = make(map[string]*apppb.AppPassword)
-		}
-		for hash, pw := range tokens {
-			if _, exists := mgr.passwords[newKey][hash]; !exists {
-				mgr.passwords[newKey][hash] = pw
+	}
+	return keys
+}
+
+// adoptLegacyKeys moves id's legacy buckets under userKey(id), merging buckets
+// that differ only in whitespace, and reports whether anything moved. Must be
+// called while holding the write lock.
+func (mgr *jsonManager) adoptLegacyKeys(id *userpb.UserId) bool {
+	keys := mgr.legacyKeys(id)
+	if len(keys) == 0 {
+		return false
+	}
+	stable := userKey(id)
+	merged := make(map[string]*apppb.AppPassword, len(mgr.passwords[stable]))
+	for hash, pw := range mgr.passwords[stable] {
+		merged[hash] = pw
+	}
+	for _, key := range keys {
+		for hash, pw := range mgr.passwords[key] {
+			if _, exists := merged[hash]; !exists {
+				merged[hash] = pw
 			}
 		}
-		delete(mgr.passwords, key)
-		migrated = true
 	}
-	return migrated
+	for _, key := range keys {
+		delete(mgr.passwords, key)
+	}
+	mgr.passwords[stable] = merged
+	return true
 }
 
 func (c *config) init() {
@@ -216,14 +235,16 @@ func (mgr *jsonManager) GenerateAppPassword(ctx context.Context, scope map[strin
 	mgr.Lock()
 	defer mgr.Unlock()
 
-	mgr.purgeExpiredUserTokens(userKey(userID))
+	uKey := userKey(userID)
+	mgr.adoptLegacyKeys(userID)
+	mgr.purgeExpiredUserTokens(uKey)
 
 	// check if user has some previous password
-	if _, ok := mgr.passwords[userKey(userID)]; !ok {
-		mgr.passwords[userKey(userID)] = make(map[string]*apppb.AppPassword)
+	if _, ok := mgr.passwords[uKey]; !ok {
+		mgr.passwords[uKey] = make(map[string]*apppb.AppPassword)
 	}
 
-	mgr.passwords[userKey(userID)][password] = appPass
+	mgr.passwords[uKey][password] = appPass
 
 	err = mgr.save()
 	if err != nil {
@@ -237,6 +258,9 @@ func (mgr *jsonManager) GenerateAppPassword(ctx context.Context, scope map[strin
 
 func (mgr *jsonManager) ListAppPasswords(ctx context.Context) ([]*apppb.AppPassword, error) {
 	userID := ctxpkg.ContextMustGetUser(ctx).GetId()
+	if err := mgr.adoptLegacyKeysAndSave(userID); err != nil {
+		return nil, err
+	}
 	mgr.RLock()
 	defer mgr.RUnlock()
 	appPasswords := []*apppb.AppPassword{}
@@ -248,23 +272,26 @@ func (mgr *jsonManager) ListAppPasswords(ctx context.Context) ([]*apppb.AppPassw
 
 func (mgr *jsonManager) InvalidateAppPassword(ctx context.Context, password string) error {
 	userID := ctxpkg.ContextMustGetUser(ctx).GetId()
+	uKey := userKey(userID)
 	mgr.Lock()
 	defer mgr.Unlock()
 
+	adopted := mgr.adoptLegacyKeys(userID)
+
 	// see if user has a list of passwords
-	appPasswords, ok := mgr.passwords[userKey(userID)]
+	appPasswords, ok := mgr.passwords[uKey]
 	if !ok || len(appPasswords) == 0 {
-		return errtypes.NotFound("password not found")
+		return mgr.saveIf(adopted, errtypes.NotFound("password not found"))
 	}
 
 	if _, ok := appPasswords[password]; !ok {
-		return errtypes.NotFound("password not found")
+		return mgr.saveIf(adopted, errtypes.NotFound("password not found"))
 	}
-	delete(mgr.passwords[userKey(userID)], password)
+	delete(mgr.passwords[uKey], password)
 
 	// if user has 0 passwords, delete user key from state map
-	if len(mgr.passwords[userKey(userID)]) == 0 {
-		delete(mgr.passwords, userKey(userID))
+	if len(mgr.passwords[uKey]) == 0 {
+		delete(mgr.passwords, uKey)
 	}
 
 	return mgr.save()
@@ -275,24 +302,17 @@ func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserI
 	// Expired tokens are skipped before the expensive bcrypt comparison so
 	// that accumulated expired tokens do not slow down authentication.
 	// A read lock allows concurrent GetAppPassword calls.
-	mgr.RLock()
-	appPasswords, ok := mgr.passwords[userKey(userID)]
-	if !ok {
-		mgr.RUnlock()
-		return nil, errtypes.NotFound("password not found")
-	}
-
+	// The stable key is checked first, so a correct password under it never
+	// looks at legacy keys; only a miss falls back to them.
+	uKey := userKey(userID)
 	nowSec := uint64(time.Now().Unix())
-	var matchedHash string
-	var matchedPw *apppb.AppPassword
-	for hash, pw := range appPasswords {
-		if isExpired(pw, nowSec) {
-			continue
-		}
-		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err == nil {
-			matchedHash = hash
-			matchedPw = pw
-			break
+	mgr.RLock()
+	matchedHash, matchedPw := findPassword(mgr.passwords[uKey], password, nowSec)
+	if matchedPw == nil {
+		for _, key := range mgr.legacyKeys(userID) {
+			if matchedHash, matchedPw = findPassword(mgr.passwords[key], password, nowSec); matchedPw != nil {
+				break
+			}
 		}
 	}
 	mgr.RUnlock()
@@ -301,13 +321,15 @@ func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserI
 		return nil, errtypes.NotFound("password not found")
 	}
 
-	// Phase 2: update last-used time under a write lock.
+	// Phase 2: update last-used time under a write lock, moving the user's
+	// legacy buckets under the stable key if the match was found in one.
 	// Between RUnlock and Lock, the token could have been invalidated by
 	// another goroutine, so re-check that it still exists.
 	mgr.Lock()
 	defer mgr.Unlock()
 
-	if current, ok := mgr.passwords[userKey(userID)][matchedHash]; ok {
+	mgr.adoptLegacyKeys(userID)
+	if current, ok := mgr.passwords[uKey][matchedHash]; ok {
 		current.Utime = now()
 		if err := mgr.save(); err != nil {
 			return nil, errors.Wrap(err, "error saving file")
@@ -316,6 +338,47 @@ func (mgr *jsonManager) GetAppPassword(ctx context.Context, userID *userpb.UserI
 	}
 
 	return nil, errtypes.NotFound("password not found")
+}
+
+// findPassword returns the bucket entry whose hash matches password, skipping
+// expired tokens before the expensive bcrypt comparison so that accumulated
+// expired tokens do not slow down authentication.
+func findPassword(appPasswords map[string]*apppb.AppPassword, password string, nowSec uint64) (string, *apppb.AppPassword) {
+	for hash, pw := range appPasswords {
+		if isExpired(pw, nowSec) {
+			continue
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err == nil {
+			return hash, pw
+		}
+	}
+	return "", nil
+}
+
+// adoptLegacyKeysAndSave takes the write lock only when id has legacy buckets
+// to move, so that listing stays a read-locked operation once a user is moved.
+func (mgr *jsonManager) adoptLegacyKeysAndSave(id *userpb.UserId) error {
+	mgr.RLock()
+	pending := len(mgr.legacyKeys(id)) > 0
+	mgr.RUnlock()
+	if !pending {
+		return nil
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	return mgr.saveIf(mgr.adoptLegacyKeys(id), nil)
+}
+
+// saveIf saves the state when changed is true and returns err otherwise
+// unchanged; a failed save takes precedence. Must be called while holding the
+// write lock.
+func (mgr *jsonManager) saveIf(changed bool, err error) error {
+	if changed {
+		if saveErr := mgr.save(); saveErr != nil {
+			return errors.Wrap(saveErr, "error saving file")
+		}
+	}
+	return err
 }
 
 func now() *typespb.Timestamp {
