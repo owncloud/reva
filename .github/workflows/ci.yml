@@ -109,29 +109,6 @@ jobs:
 
   # TODO: acceptance-tests-s3ng skipped — blocked on Ceph networking — follow-up PR
 
-  acceptance-tests-posixfs:
-    needs: [unit-tests]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [1, 2]  # TODO: parts 3,4 blocked on chunked Transfer-Encoding revad bug — follow-up PR
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
-        with:
-          php-version: "8.4"
-      - run: sudo apt-get update && sudo apt-get install -y inotify-tools
-      - run: python3 tests/acceptance/run-acceptance.py --storage posixfs --total-parts 4 --run-part ${{ matrix.part }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with:
-          name: acceptance-posixfs-part-${{ matrix.part }}
-          path: tmp/testrunner/tests/acceptance/output/
-
   ci-ok:
     if: always()
     needs:
@@ -142,7 +119,6 @@ jobs:
       - litmus
       - cs3api-validator
       - acceptance-tests-ocis
-      - acceptance-tests-posixfs
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -154,7 +130,6 @@ jobs:
             "${{ needs.litmus.result }}"
             "${{ needs.cs3api-validator.result }}"
             "${{ needs.acceptance-tests-ocis.result }}"
-            "${{ needs.acceptance-tests-posixfs.result }}"
           )
           for r in "${results[@]}"; do
             if [[ "$r" != "success" && "$r" != "skipped" ]]; then

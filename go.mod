@@ -64,7 +64,6 @@ require (
 	github.com/onsi/ginkgo/v2 v2.33.0
 	github.com/onsi/gomega v1.44.0
 	github.com/owncloud/ocis/v2 v2.0.1-0.20250122072425-665072d86d1a
-	github.com/pablodz/inotifywaitgo v0.0.12
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/xattr v0.4.12
 	github.com/prometheus/alertmanager v0.34.1
@@ -72,11 +71,9 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0
 	github.com/rs/cors v1.11.1
 	github.com/rs/zerolog v1.35.1
-	github.com/segmentio/kafka-go v0.4.51
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/sethvargo/go-password v0.4.0
 	github.com/shamaton/msgpack/v2 v2.4.2
-	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/stretchr/testify v1.12.1
 	github.com/studio-b12/gowebdav v0.9.0
 	github.com/test-go/testify v1.1.4
@@ -142,7 +139,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-micro/plugins/v4/logger/zerolog v1.2.0 // indirect
 	github.com/go-micro/plugins/v4/registry/memory v1.2.0 // indirect
-	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-openapi/errors v0.22.8 // indirect
 	github.com/go-openapi/strfmt v0.27.0 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
@@ -182,7 +178,6 @@ require (
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/term v1.2.0-beta.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -196,12 +191,9 @@ require (
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
-	github.com/tklauser/go-sysconf v0.3.14 // indirect
-	github.com/tklauser/numcpus v0.8.0 // indirect
 	github.com/urfave/cli/v2 v2.27.5 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
-	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.etcd.io/etcd/api/v3 v3.7.2 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.7.2 // indirect
