@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/conversions"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	helpers "github.com/owncloud/reva/v2/pkg/storage/fs/posix/testhelpers"
 
@@ -91,18 +92,13 @@ var _ = Describe("Trashbin", func() {
 
 	Context("when the user is a viewer", func() {
 		BeforeEach(func() {
-			// a space viewer may browse the trash but not change it,
-			// see conversions.NewSpaceViewerRole()
-			grantTrashPermissions(env, &provider.ResourcePermissions{
-				Stat:        true,
-				ListRecycle: true,
-			})
+			// a space viewer may see the space but not its trash
+			grantTrashPermissions(env, conversions.NewSpaceViewerRole().CS3ResourcePermissions())
 		})
 
-		It("allows listing the trash", func() {
-			items, err := env.Fs.ListRecycle(env.Ctx, ref, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items).To(BeEmpty())
+		It("denies listing the trash", func() {
+			_, err := env.Fs.ListRecycle(env.Ctx, ref, "", "")
+			Expect(err).To(BeAssignableToTypeOf(errtypes.PermissionDenied("")))
 		})
 
 		It("denies restoring", func() {
