@@ -162,3 +162,41 @@ func TestRoleFromResourcePermissions_WithoutTrashbinRolesAreWritable(t *testing.
 			"expected W in WebDAV permissions for role %s", role.Name)
 	}
 }
+
+func TestNewSpaceViewerRole(t *testing.T) {
+	p := NewSpaceViewerRole().CS3ResourcePermissions()
+
+	assert.True(t, p.InitiateFileDownload)
+
+	// should not have trashbin permissions
+	assert.False(t, p.ListRecycle)
+	assert.False(t, p.RestoreRecycleItem)
+	assert.False(t, p.PurgeRecycle)
+}
+
+func TestRoleFromResourcePermissions_SpaceViewerIsNotSecureViewer(t *testing.T) {
+	got := RoleFromResourcePermissions(NewSpaceViewerRole().CS3ResourcePermissions(), false)
+	assert.Equal(t, PermissionRead, got.OCSPermissions())
+	assert.NotEqual(t, RoleSecureViewer, got.Name)
+	// an X would make the Web frontend hide the download action
+	assert.Empty(t, got.WebDAVPermissions(false, false, false, false))
+	assert.Empty(t, got.WebDAVPermissions(true, false, false, false))
+}
+
+func TestRoleFromResourcePermissions_WithoutTrashbinRolesAreReadable(t *testing.T) {
+	for _, constructor := range []func() *Role{
+		NewSpaceEditorWithoutTrashbinRole,
+		NewSpaceEditorWithoutVersionsWithoutTrashbinRole,
+	} {
+		role := constructor()
+		got := RoleFromResourcePermissions(role.CS3ResourcePermissions(), false)
+		assert.Equal(t, PermissionRead|PermissionWrite|PermissionCreate|PermissionDelete, got.OCSPermissions(),
+			"expected read, write, create and delete for role %s", role.Name)
+	}
+}
+
+func TestRoleFromResourcePermissions_SecureViewerCannotDownload(t *testing.T) {
+	got := RoleFromResourcePermissions(NewSecureViewerRole().CS3ResourcePermissions(), false)
+	assert.Equal(t, RoleSecureViewer, got.Name)
+	assert.Contains(t, got.WebDAVPermissions(false, false, false, false), "X")
+}
