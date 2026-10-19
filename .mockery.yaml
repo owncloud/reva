@@ -4,18 +4,12 @@ dir: "{{.InterfaceDir}}/mocks"
 mockname: "{{.InterfaceName}}"
 outpkg: "mocks"
 packages:
-    github.com/cs3org/reva/v2/pkg/publicshare/manager/owncloudsql:
-        interfaces:
-            UserConverter:
     github.com/cs3org/reva/v2/pkg/publicshare:
         interfaces:
             Manager:
     github.com/cs3org/reva/v2/pkg/share:
         interfaces:
             Manager:
-    github.com/cs3org/reva/v2/pkg/share/manager/owncloudsql:
-        interfaces:
-            UserConverter:
     github.com/cs3org/reva/v2/pkg/storage/fs/posix/tree:
         interfaces:
             Blobstore:
