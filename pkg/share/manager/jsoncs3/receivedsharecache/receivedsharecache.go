@@ -35,6 +35,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/mtimesyncedcache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 )
@@ -245,6 +246,7 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		default:
 		}
 		err = persistFunc()
+		stillBusy := false
 		switch err.(type) {
 		case nil:
 			return nil
@@ -264,31 +266,26 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		case errtypes.TooEarly:
 			// storage-system has an upload in progress for this node; wait for it to finish
 			// continue with sync below
+			stillBusy = true
 			log.Debug().Int("attempt", attempt).Msg("CAS failed: TooEarly (upload in progress), retrying")
 		default:
 			log.Error().Int("attempt", attempt).Err(err).Msg("persisting received share failed, giving up")
 			return err
 		}
-		timer := time.NewTimer(expBackoff(attempt))
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
-		serr := c.resyncAfterConflict(ctx, userID)
-		// Retrying persistFunc now would just repeat the same conflict against stale
-		// state -- keep retrying the resync itself until it refreshes that state.
-		for resyncAttempt := 0; serr != nil && isSyncTransient(serr) && resyncAttempt < 20; resyncAttempt++ {
-			log.Warn().Int("attempt", attempt).Int("resyncAttempt", resyncAttempt).Err(serr).Msg("lost update: re-read before retry")
-			timer := time.NewTimer(expBackoff(resyncAttempt))
+		// TooEarly means the lock is still held; the other CAS errors mean the
+		// winner already committed, so only TooEarly needs a pre-resync delay.
+		if stillBusy {
+			timer := time.NewTimer(expBackoff(attempt))
 			select {
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
 				return ctx.Err()
 			}
-			serr = c.resyncAfterConflict(ctx, userID)
+		}
+		serr := c.resyncAfterConflict(ctx, userID)
+		if serr != nil && isSyncTransient(serr) {
+			serr = c.retryTransientResync(ctx, userID, attempt, serr, log)
 		}
 		if serr != nil {
 			log.Error().Int("attempt", attempt).Err(serr).Msg("lost update: re-read failed, aborting")
@@ -296,6 +293,34 @@ func (c *Cache) retryPersist(ctx context.Context, userID, spaceID string, persis
 		}
 	}
 	return err
+}
+
+// resyncRetryBudget caps retry time instead of attempt count, so a stuck
+// resync fails fast instead of accumulating seconds of backoff.
+const resyncRetryBudget = 150 * time.Millisecond
+
+// retryTransientResync re-reads state while the resync keeps failing
+// transiently (lock contention or a 502/503/504), until it refreshes or the budget runs out.
+func (c *Cache) retryTransientResync(ctx context.Context, userID string, attempt int, lastErr error, log zerolog.Logger) error {
+	resyncCtx, cancel := context.WithTimeout(ctx, resyncRetryBudget)
+	defer cancel()
+
+	serr := lastErr
+	for resyncAttempt := 0; serr != nil && isSyncTransient(serr); resyncAttempt++ {
+		log.Warn().Int("attempt", attempt).Int("resyncAttempt", resyncAttempt).Err(serr).Msg("lost update: re-read before retry")
+		timer := time.NewTimer(expBackoff(resyncAttempt))
+		select {
+		case <-timer.C:
+		case <-resyncCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return serr
+		}
+		serr = c.resyncAfterConflict(ctx, userID)
+	}
+	return serr
 }
 
 // syncIfStale pulls the authoritative state from storage when the local replica is stale; caller must hold the user lock.

@@ -228,6 +228,48 @@ var _ = Describe("Cache", func() {
 			Expect(fs.downloadCount()).To(BeNumerically("<", 5),
 				"a permanent InternalError on resync should fail fast, not burn the retry budget: %d resync attempts", fs.downloadCount())
 		})
+
+		It("resyncs immediately after losing a CAS race, without a guaranteed pre-resync delay", func() {
+			fs := &casSimStorage{etag: "etag0", content: []byte(`{"Spaces":{}}`)}
+			c2 := receivedsharecache.New(fs, 0*time.Second)
+
+			fs.forceFirstUploadConflict = true // one lost race; the resync right after it succeeds immediately
+
+			rs := &collaboration.ReceivedShare{
+				Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share1"}},
+				State: collaboration.ShareState_SHARE_STATE_PENDING,
+			}
+
+			start := time.Now()
+			Expect(c2.Add(ctx, userID, spaceID, rs)).To(Succeed())
+			elapsed := time.Since(start)
+
+			Expect(elapsed).To(BeNumerically("<", 20*time.Millisecond),
+				"a resync that succeeds on the first try after a lost CAS race should not wait on a pre-resync backoff: took %s", elapsed)
+		})
+
+		It("gives up on a resync stuck in TooEarly within a bounded wall-clock budget, not 20 attempts", func() {
+			fs := &casSimStorage{etag: "etag0", content: []byte(`{"Spaces":{}}`)}
+			c2 := receivedsharecache.New(fs, 0*time.Second)
+
+			fs.forceFirstUploadConflict = true
+			fs.resyncFailuresBeforeSuccess = 1 << 30 // never clears within this test's time budget
+
+			rs := &collaboration.ReceivedShare{
+				Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share1"}},
+				State: collaboration.ShareState_SHARE_STATE_PENDING,
+			}
+
+			start := time.Now()
+			err := c2.Add(ctx, userID, spaceID, rs)
+			elapsed := time.Since(start)
+
+			Expect(err).To(HaveOccurred())
+			Expect(elapsed).To(BeNumerically("<", time.Second),
+				"a resync stuck in TooEarly should give up within a short wall-clock budget, not loop up to 20 attempts: took %s", elapsed)
+			Expect(fs.downloadCount()).To(BeNumerically(">", 1),
+				"expected multiple resync attempts before giving up, got %d", fs.downloadCount())
+		})
 	})
 
 	Describe("concurrent writes from multiple cache instances", func() {
