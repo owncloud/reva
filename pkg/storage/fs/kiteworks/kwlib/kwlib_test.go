@@ -67,7 +67,7 @@ func TestDecodeError_returnsNil(t *testing.T) {
 		name string
 		call func() (any, error)
 	}{
-		{"GetTopFolders", func() (any, error) { return c.GetTopFolders() }},
+		{"GetTopFolders", func() (any, error) { return c.GetTopFolders(false) }},
 		{"GetFolderByID", func() (any, error) { return c.GetFolderByID("x") }},
 		{"GetFileByID", func() (any, error) { return c.GetFileByID("x") }},
 		{"ListFolderContents", func() (any, error) { v, e := c.ListFolderContents("x"); return v, e }},
@@ -136,6 +136,33 @@ func TestDeleteFolder_error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
+	var ce *kwlib.ClientError
+	if !errors.As(err, &ce) || ce.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected ClientError(403), got %v", err)
+	}
+}
+
+func TestRecoverFolder_sendsPatchToRecoverAction(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c := newClient(t, srv)
+	if err := c.RecoverFolder("folder-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPatch || gotPath != "/rest/folders/folder-1/actions/recover" {
+		t.Fatalf("expected PATCH /rest/folders/folder-1/actions/recover, got %s %s", gotMethod, gotPath)
+	}
+}
+
+func TestRecoverFolder_error(t *testing.T) {
+	srv := serverWith(http.StatusForbidden, `{"errors":[{"code":"ERR_ENTITY_NOT_DELETED"}]}`)
+	defer srv.Close()
+	c := newClient(t, srv)
+	err := c.RecoverFolder("folder-1")
 	var ce *kwlib.ClientError
 	if !errors.As(err, &ce) || ce.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected ClientError(403), got %v", err)

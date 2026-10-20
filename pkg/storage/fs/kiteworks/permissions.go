@@ -52,7 +52,7 @@ func filePermissions(fi *kwlib.FileInfo) *provider.ResourcePermissions {
 // Precedence: Manager > Editor > Viewer.
 func spaceRole(fi *kwlib.FileInfo) *provider.ResourcePermissions {
 	switch {
-	case fi.HasPermission(kwlib.PermUserAdd):
+	case fi.HasPermission(kwlib.PermFolderDelete):
 		return conversions.NewManagerRole().CS3ResourcePermissions()
 	case fi.HasPermission(kwlib.PermFileAdd):
 		return conversions.NewEditorRole().CS3ResourcePermissions()
