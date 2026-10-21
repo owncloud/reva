@@ -44,7 +44,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-type copy struct {
+type copyInfo struct {
 	source      *provider.Reference
 	sourceInfo  *provider.ResourceInfo
 	destination *provider.Reference
@@ -139,7 +139,7 @@ func (s *svc) handlePathCopy(w http.ResponseWriter, r *http.Request, ns string) 
 	w.WriteHeader(cp.successCode)
 }
 
-func (s *svc) executePathCopy(ctx context.Context, selector pool.Selectable[gateway.GatewayAPIClient], w http.ResponseWriter, r *http.Request, cp *copy) error {
+func (s *svc) executePathCopy(ctx context.Context, selector pool.Selectable[gateway.GatewayAPIClient], w http.ResponseWriter, r *http.Request, cp *copyInfo) error {
 	log := appctx.GetLogger(ctx)
 	log.Debug().Str("src", cp.sourceInfo.Path).Str("dst", cp.destination.Path).Msg("descending")
 
@@ -198,7 +198,7 @@ func (s *svc) executePathCopy(ctx context.Context, selector pool.Selectable[gate
 				ResourceId: cp.destination.ResourceId,
 				Path:       utils.MakeRelativePath(filepath.Join(cp.destination.Path, child)),
 			}
-			err := s.executePathCopy(ctx, selector, w, r, &copy{source: src, sourceInfo: res.Infos[i], destination: childDst, depth: cp.depth, successCode: cp.successCode})
+			err := s.executePathCopy(ctx, selector, w, r, &copyInfo{source: src, sourceInfo: res.Infos[i], destination: childDst, depth: cp.depth, successCode: cp.successCode})
 			if err != nil {
 				return err
 			}
@@ -375,7 +375,7 @@ func (s *svc) handleSpacesCopy(w http.ResponseWriter, r *http.Request, spaceID s
 	w.WriteHeader(cp.successCode)
 }
 
-func (s *svc) executeSpacesCopy(ctx context.Context, w http.ResponseWriter, selector pool.Selectable[gateway.GatewayAPIClient], cp *copy) error {
+func (s *svc) executeSpacesCopy(ctx context.Context, w http.ResponseWriter, selector pool.Selectable[gateway.GatewayAPIClient], cp *copyInfo) error {
 	log := appctx.GetLogger(ctx)
 	log.Debug().Interface("src", cp.sourceInfo).Interface("dst", cp.destination).Msg("descending")
 
@@ -428,7 +428,7 @@ func (s *svc) executeSpacesCopy(ctx context.Context, w http.ResponseWriter, sele
 				ResourceId: cp.destination.ResourceId,
 				Path:       utils.MakeRelativePath(path.Join(cp.destination.Path, res.Infos[i].Path)),
 			}
-			err := s.executeSpacesCopy(ctx, w, selector, &copy{sourceInfo: res.Infos[i], destination: childRef, depth: cp.depth, successCode: cp.successCode})
+			err := s.executeSpacesCopy(ctx, w, selector, &copyInfo{sourceInfo: res.Infos[i], destination: childRef, depth: cp.depth, successCode: cp.successCode})
 			if err != nil {
 				return err
 			}
@@ -552,7 +552,7 @@ func (s *svc) executeSpacesCopy(ctx context.Context, w http.ResponseWriter, sele
 	return nil
 }
 
-func (s *svc) prepareCopy(ctx context.Context, w http.ResponseWriter, r *http.Request, srcRef, dstRef *provider.Reference, log *zerolog.Logger, destInShareJail bool) *copy {
+func (s *svc) prepareCopy(ctx context.Context, w http.ResponseWriter, r *http.Request, srcRef, dstRef *provider.Reference, log *zerolog.Logger, destInShareJail bool) *copyInfo {
 	// restrict copy from the vault to outside of the vault.
 	if destinationIsNotAllowed(srcRef, dstRef) {
 		w.WriteHeader(http.StatusConflict)
@@ -759,5 +759,5 @@ func (s *svc) prepareCopy(ctx context.Context, w http.ResponseWriter, r *http.Re
 		// TODO what if intermediate is a file?
 	}
 
-	return &copy{source: srcRef, sourceInfo: srcStatRes.Info, depth: depth, successCode: successCode, destination: dstRef}
+	return &copyInfo{source: srcRef, sourceInfo: srcStatRes.Info, depth: depth, successCode: successCode, destination: dstRef}
 }
