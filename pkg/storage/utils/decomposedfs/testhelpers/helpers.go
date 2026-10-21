@@ -26,7 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
-	"github.com/owncloud/reva/v2/pkg/storage/fs/posix/timemanager"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/timemanager"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/aspects"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/lookup"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata"
