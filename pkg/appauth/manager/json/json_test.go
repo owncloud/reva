@@ -60,7 +60,7 @@ func TestNewManager(t *testing.T) {
 	hashToken, _ := bcrypt.GenerateFromPassword([]byte("1234"), 10)
 
 	dummyData := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken): {
 				Password:   string(hashToken),
 				TokenScope: nil,
@@ -168,7 +168,7 @@ func TestGenerateAppPassword(t *testing.T) {
 	hashToken1234, _ := bcrypt.GenerateFromPassword([]byte(token), 11)
 
 	dummyData := map[string]map[string]*apppb.AppPassword{
-		userpb.User{Id: &userpb.UserId{Idp: "1"}, Username: "Test User1"}.Id.String(): {
+		userKey(&userpb.UserId{Idp: "1"}): {
 			string(hashTokenXXXX): {
 				Password: string(hashTokenXXXX),
 				Label:    "",
@@ -200,7 +200,7 @@ func TestGenerateAppPassword(t *testing.T) {
 				Utime:      now,
 			},
 			expectedState: map[string]map[string]*apppb.AppPassword{
-				userTest.GetId().String(): {
+				userKey(userTest.GetId()): {
 					string(hashToken1234): {
 						Password:   string(hashToken1234),
 						TokenScope: nil,
@@ -226,7 +226,7 @@ func TestGenerateAppPassword(t *testing.T) {
 				Utime:      now,
 			},
 			expectedState: concatMaps(map[string]map[string]*apppb.AppPassword{
-				userTest.GetId().String(): {
+				userKey(userTest.GetId()): {
 					string(hashToken1234): {
 						Password:   string(hashToken1234),
 						TokenScope: nil,
@@ -307,7 +307,7 @@ func TestListAppPasswords(t *testing.T) {
 	token := "hash:1234"
 
 	dummyDataUser0 := map[string]map[string]*apppb.AppPassword{
-		user0Test.GetId().String(): {
+		userKey(user0Test.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -320,7 +320,7 @@ func TestListAppPasswords(t *testing.T) {
 		}}
 
 	dummyDataUserExpired := map[string]map[string]*apppb.AppPassword{
-		user0Test.GetId().String(): {
+		userKey(user0Test.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -338,7 +338,7 @@ func TestListAppPasswords(t *testing.T) {
 	dummyDataUserExpiredJSON, _ := json.Marshal(dummyDataUserExpired)
 
 	dummyDataUser1 := map[string]map[string]*apppb.AppPassword{
-		user1Test.GetId().String(): {
+		userKey(user1Test.GetId()): {
 			"XXXX": {
 				Password:   "XXXX",
 				TokenScope: nil,
@@ -371,7 +371,7 @@ func TestListAppPasswords(t *testing.T) {
 			description: "ListAppPasswords with not empty state (only one user)",
 			stateJSON:   string(dummyDataUser0JSON),
 			expectedState: []*apppb.AppPassword{
-				dummyDataUser0[user0Test.GetId().String()][token],
+				dummyDataUser0[userKey(user0Test.GetId())][token],
 			},
 		},
 		{
@@ -383,7 +383,7 @@ func TestListAppPasswords(t *testing.T) {
 			description: "ListAppPasswords with not empty state (different users)",
 			stateJSON:   string(dummyDataTwoUsersJSON),
 			expectedState: []*apppb.AppPassword{
-				dummyDataUser0[user0Test.GetId().String()][token],
+				dummyDataUser0[userKey(user0Test.GetId())][token],
 			},
 		},
 	}
@@ -433,7 +433,7 @@ func TestInvalidateAppPassword(t *testing.T) {
 	token := "hash:1234"
 
 	dummyDataUser1Token := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -448,7 +448,7 @@ func TestInvalidateAppPassword(t *testing.T) {
 	dummyDataUser1TokenJSON, _ := json.Marshal(dummyDataUser1Token)
 
 	dummyDataUser2Token := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			token: {
 				Password:   token,
 				TokenScope: nil,
@@ -500,7 +500,7 @@ func TestInvalidateAppPassword(t *testing.T) {
 			stateJSON:   string(dummyDataUser2TokenJSON),
 			password:    token,
 			expectedState: map[string]map[string]*apppb.AppPassword{
-				userTest.GetId().String(): {
+				userKey(userTest.GetId()): {
 					"hash:XXXX": {
 						Password:   "hash:XXXX",
 						TokenScope: nil,
@@ -570,7 +570,7 @@ func TestGetAppPassword(t *testing.T) {
 	hashToken1234, _ := bcrypt.GenerateFromPassword([]byte(token), 11)
 
 	dummyDataUser1Token := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken1234): {
 				Password:   string(hashToken1234),
 				TokenScope: nil,
@@ -583,7 +583,7 @@ func TestGetAppPassword(t *testing.T) {
 		}}
 
 	dummyDataUserExpired := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken1234): {
 				Password:   string(hashToken1234),
 				TokenScope: nil,
@@ -598,7 +598,7 @@ func TestGetAppPassword(t *testing.T) {
 		}}
 
 	dummyDataUserFutureExpiration := map[string]map[string]*apppb.AppPassword{
-		userTest.GetId().String(): {
+		userKey(userTest.GetId()): {
 			string(hashToken1234): {
 				Password:   string(hashToken1234),
 				TokenScope: nil,
@@ -653,7 +653,7 @@ func TestGetAppPassword(t *testing.T) {
 			description:   "GetAppPassword with token with expiration set in the future",
 			stateJSON:     string(dummyDataUserFutureExpirationJSON),
 			password:      "1234",
-			expectedState: dummyDataUserFutureExpiration[userTest.GetId().String()][string(hashToken1234)],
+			expectedState: dummyDataUserFutureExpiration[userKey(userTest.GetId())][string(hashToken1234)],
 		},
 		{
 			description:   "GetAppPassword with token that exists but different user",
@@ -665,7 +665,7 @@ func TestGetAppPassword(t *testing.T) {
 			description:   "GetAppPassword with token that exists owned by user",
 			stateJSON:     string(dummyDataUser1TokenJSON),
 			password:      "1234",
-			expectedState: dummyDataUser1Token[userTest.GetId().String()][string(hashToken1234)],
+			expectedState: dummyDataUser1Token[userKey(userTest.GetId())][string(hashToken1234)],
 		},
 	}
 
