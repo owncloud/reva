@@ -1,4 +1,4 @@
-https://github.com/owncloud/reva/pull/780Bugfix: Don't log the public link password
+Bugfix: Don't log the public link password
 
 When persisting a new public link failed, the publicshareprovider logged the
 whole create request, including the link password in plain text. The error
