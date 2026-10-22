@@ -1,6 +1,7 @@
 package publicshareprovider_test
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/owncloud/reva/v2/internal/grpc/services/publicshareprovider"
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/permission"
@@ -24,6 +26,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/utils"
 	cs3mocks "github.com/owncloud/reva/v2/tests/cs3mocks/mocks"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 )
@@ -804,6 +807,37 @@ var _ = Describe("PublicShareProvider", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_INTERNAL))
 			Expect(res.GetStatus().GetMessage()).To(Equal("error persisting public share:transport error"))
+		})
+		It("does not log the link password when the share can't be persisted", func() {
+			manager.
+				EXPECT().
+				CreatePublicShare(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(nil, errors.New("transport error"))
+
+			logs := &bytes.Buffer{}
+			logger := zerolog.New(logs)
+			ctx = appctx.WithLogger(ctx, &logger)
+
+			req := &link.CreatePublicShareRequest{
+				ResourceInfo: &providerpb.ResourceInfo{
+					Owner: &userpb.UserId{
+						OpaqueId: "alice",
+					},
+					Path: "./NewFolder/file.txt",
+				},
+				Grant: &link.Grant{
+					Permissions: &link.PublicSharePermissions{
+						Permissions: linkPermissions,
+					},
+					Password: "SecretPassw0rd123!",
+				},
+			}
+
+			res, err := provider.CreatePublicShare(ctx, req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_INTERNAL))
+			Expect(logs.String()).To(ContainSubstring("could not write public share"))
+			Expect(logs.String()).ToNot(ContainSubstring("SecretPassw0rd123!"))
 		})
 	})
 	Describe("Removing a PublicShare", func() {
