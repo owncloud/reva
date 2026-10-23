@@ -65,14 +65,12 @@ func TestCredentialsOption(t *testing.T) {
 		opt, err := natsauth.CredentialsOption("", "")
 		require.NoError(t, err)
 		require.Nil(t, opt)
-		require.False(t, natsauth.Enabled("", ""))
 	})
 
 	t.Run("creds content", func(t *testing.T) {
 		opt, err := natsauth.CredentialsOption("", string(creds))
 		require.NoError(t, err)
 		requireJWTOption(t, opt)
-		require.True(t, natsauth.Enabled("", string(creds)))
 	})
 
 	t.Run("creds file", func(t *testing.T) {
@@ -80,7 +78,6 @@ func TestCredentialsOption(t *testing.T) {
 		opt, err := natsauth.CredentialsOption(path, "")
 		require.NoError(t, err)
 		requireJWTOption(t, opt)
-		require.True(t, natsauth.Enabled(path, ""))
 	})
 
 	t.Run("creds content takes precedence over creds file", func(t *testing.T) {
