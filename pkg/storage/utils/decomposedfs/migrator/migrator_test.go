@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"github.com/owncloud/reva/v2/pkg/storage/fs/posix/timemanager"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/timemanager"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/lookup"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"

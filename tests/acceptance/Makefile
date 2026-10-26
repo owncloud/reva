@@ -3,7 +3,6 @@ help:
 	@echo "Usage: make [target]"
 	@echo "Available targets:"
 	@echo "  reva            Start reva with ocis storage"
-	@echo "  reva-posix      Start reva with posixfs storage"
 	@echo "  reva-s3ng       Start reva with s3ng storage"
 
 CURR_DIR:=$(dir $(abspath $(firstword $(MAKEFILE_LIST))))
@@ -64,14 +63,9 @@ reva: ldap reva-services
 	@echo "Running reva with ocis storage"
 	@$(REVA_CMD) -c $(CONFIG_DIR)/storage-users.toml
 
-.PHONY: reva-posix
-reva-posix: ldap redis reva-services
-	@echo "Running reva with posixfs storage"
-	@$(REVA_CMD) -c $(CONFIG_DIR)/storage-users-posixfs.toml
-
 .PHONY: reva-s3ng
 reva-s3ng: ldap ceph reva-services
-	@echo "Running reva with posixfs storage"
+	@echo "Running reva with s3ng storage"
 	@$(REVA_CMD) -c $(CONFIG_DIR)/storage-users-s3ng.toml
 
 .PHONY: clean
