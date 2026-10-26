@@ -141,6 +141,12 @@ func (bs *Blobstore) Download(node *node.Node) (io.ReadCloser, error) {
 func (bs *Blobstore) Delete(node *node.Node) error {
 	err := bs.client.RemoveObject(context.Background(), bs.bucket, bs.Path(node), minio.RemoveObjectOptions{})
 	if err != nil {
+		// AWS S3 answers 204 for a key that does not exist, but other S3-compatible stores (e.g. GCS)
+		// answer 404 NoSuchKey. The blob is gone either way, so treat that as success; failing here
+		// would abort a purge part-way and leave a hollow folder behind in the trash.
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil
+		}
 		return errors.Wrapf(err, "could not delete object '%s' from bucket '%s'", bs.Path(node), bs.bucket)
 	}
 	return nil
