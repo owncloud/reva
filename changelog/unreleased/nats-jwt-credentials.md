@@ -18,5 +18,9 @@ are set, reva does not send the username and the password.
   `store_creds`.
 
 reva checks the credentials at startup. An invalid value gives a clear error.
+The event streams, the publicshares auth manager, the decomposedfs and posix
+caches, the gateway caches, and the OCS stat cache stop with this error. Before,
+an invalid value for a store only caused an error log, and each store operation
+failed later.
 
-https://github.com/owncloud/reva/pull/781
+https://github.com/owncloud/reva/pull/782

@@ -143,3 +143,10 @@ func TestValidate(t *testing.T) {
 		require.NotContains(t, err.Error(), string(seed))
 	})
 }
+
+func TestCheck(t *testing.T) {
+	require.NoError(t, natsauth.Check("", ""))
+	require.NoError(t, natsauth.Check("", string(newCreds(t, nil))))
+	require.Error(t, natsauth.Check("", "not a creds file"))
+	require.ErrorIs(t, natsauth.Check("/does/not/exist.creds", ""), os.ErrNotExist)
+}
