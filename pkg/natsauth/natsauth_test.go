@@ -102,6 +102,30 @@ func TestCredentialsOption(t *testing.T) {
 	})
 }
 
+func TestOption(t *testing.T) {
+	t.Run("no credentials", func(t *testing.T) {
+		require.Nil(t, natsauth.Option("", ""))
+	})
+
+	t.Run("creds content", func(t *testing.T) {
+		requireJWTOption(t, natsauth.Option("", string(newCreds(t, nil))))
+	})
+
+	t.Run("creds file", func(t *testing.T) {
+		requireJWTOption(t, natsauth.Option(writeFile(t, newCreds(t, nil)), ""))
+	})
+
+	t.Run("missing creds file", func(t *testing.T) {
+		// Option does not read the file. The connection reads it on each connect.
+		opt := natsauth.Option(filepath.Join(t.TempDir(), "missing.creds"), "")
+		require.NotNil(t, opt)
+		o := nats.GetDefaultOptions()
+		require.NoError(t, opt(&o))
+		_, err := o.UserJWT()
+		require.Error(t, err)
+	})
+}
+
 func TestValidate(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		require.NoError(t, natsauth.Validate(newCreds(t, nil)))

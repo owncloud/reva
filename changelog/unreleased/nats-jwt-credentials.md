@@ -16,6 +16,12 @@ are set, reva does not send the username and the password.
   and `nats_creds`.
 - The publicshares auth manager has the new keys `store_creds_file` and
   `store_creds`.
+- `stream.NatsOptions(cfg)` returns the `nats.Option` values for the
+  authentication and the TLS settings. The event streams use it. Other NATS
+  connections, for example health checks, can use the same rules.
+- `natsauth.Option(credsFile, creds)` returns the credentials option without a
+  check. For a file, the option reads the file only when the connection
+  connects. Use it after a reconnect, when a rotated file can be partly written.
 
 reva checks the credentials at startup. An invalid value gives a clear error.
 The event streams, the publicshares auth manager, the decomposedfs and posix
