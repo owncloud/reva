@@ -21,6 +21,7 @@ reva checks the credentials at startup. An invalid value gives a clear error.
 The event streams, the publicshares auth manager, the decomposedfs and posix
 caches, the gateway caches, and the OCS stat cache stop with this error. Before,
 an invalid value for a store only caused an error log, and each store operation
-failed later.
+failed later. reva checks the credentials of a store or a cache only when its
+type is `nats-js` or `nats-js-kv`. Other types do not use the credentials.
 
 https://github.com/owncloud/reva/pull/782

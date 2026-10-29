@@ -61,7 +61,7 @@ var _ = Describe("Options", func() {
 		for _, name := range []string{"statcache", "filemetadatacache", "idcache"} {
 			It("returns an error for invalid creds in "+name, func() {
 				_, err := options.New(map[string]interface{}{
-					name: map[string]interface{}{"cache_creds": "not a creds file"},
+					name: map[string]interface{}{"cache_store": "nats-js-kv", "cache_creds": "not a creds file"},
 				})
 				Expect(err).To(MatchError(ContainSubstring(name)))
 				Expect(err).To(MatchError(ContainSubstring("invalid nats creds")))
@@ -70,9 +70,16 @@ var _ = Describe("Options", func() {
 
 		It("returns an error for a missing creds file", func() {
 			_, err := options.New(map[string]interface{}{
-				"idcache": map[string]interface{}{"cache_creds_file": "/does/not/exist.creds"},
+				"idcache": map[string]interface{}{"cache_store": "nats-js-kv", "cache_creds_file": "/does/not/exist.creds"},
 			})
 			Expect(err).To(MatchError(ContainSubstring("cannot read nats creds file")))
+		})
+
+		It("ignores the creds of a cache that does not use nats", func() {
+			_, err := options.New(map[string]interface{}{
+				"idcache": map[string]interface{}{"cache_store": "memory", "cache_creds_file": "/does/not/exist.creds"},
+			})
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })
