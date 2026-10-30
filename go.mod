@@ -232,10 +232,9 @@ require (
 
 replace github.com/studio-b12/gowebdav => github.com/kobergj/gowebdav v0.0.0-20251030165916-532350997dde
 
-// TODO revert to github.com/kobergj/plugins
-replace github.com/go-micro/plugins/v4/store/nats-js-kv => github.com/2403905/plugins/v4/store/nats-js-kv v0.0.0-20261023115027-38bde25e01c7
+replace github.com/go-micro/plugins/v4/store/nats-js-kv => github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20261030085317-811a2ded849b
 
-replace github.com/go-micro/plugins/v4/events/natsjs => github.com/2403905/plugins/v4/events/natsjs v1.2.1-0.20261023115027-38bde25e01c7
+replace github.com/go-micro/plugins/v4/events/natsjs => github.com/kobergj/plugins/v4/events/natsjs v1.2.1-0.20261030085317-811a2ded849b
 
 replace go-micro.dev/v4 => github.com/kobergj/go-micro/v4 v4.0.0-20250610135441-d0b187215699
 
