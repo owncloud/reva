@@ -1,6 +1,6 @@
 module github.com/owncloud/reva/v2
 
-go 1.26.0
+go 1.26.10
 
 require (
 	bou.ke/monkey v1.0.2
@@ -58,8 +58,10 @@ require (
 	github.com/mileusna/useragent v1.3.5
 	github.com/minio/minio-go/v7 v7.0.97
 	github.com/mitchellh/mapstructure v1.5.0
+	github.com/nats-io/jwt/v2 v2.8.0
 	github.com/nats-io/nats-server/v2 v2.12.3
-	github.com/nats-io/nats.go v1.48.0
+	github.com/nats-io/nats.go v1.54.0
+	github.com/nats-io/nkeys v0.4.16
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.27.5
 	github.com/onsi/gomega v1.39.0
@@ -159,7 +161,7 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
-	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -174,8 +176,6 @@ require (
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/jwt/v2 v2.8.0 // indirect
-	github.com/nats-io/nkeys v0.4.12 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/oklog/run v1.2.0 // indirect
@@ -232,7 +232,9 @@ require (
 
 replace github.com/studio-b12/gowebdav => github.com/kobergj/gowebdav v0.0.0-20251030165916-532350997dde
 
-replace github.com/go-micro/plugins/v4/store/nats-js-kv => github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20240807130109-f62bb67e8c90
+replace github.com/go-micro/plugins/v4/store/nats-js-kv => github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20261030085317-811a2ded849b
+
+replace github.com/go-micro/plugins/v4/events/natsjs => github.com/kobergj/plugins/v4/events/natsjs v1.2.1-0.20261030085317-811a2ded849b
 
 replace go-micro.dev/v4 => github.com/kobergj/go-micro/v4 v4.0.0-20250610135441-d0b187215699
 
