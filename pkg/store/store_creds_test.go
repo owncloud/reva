@@ -1,6 +1,8 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nats-io/jwt/v2"
@@ -65,5 +67,35 @@ func TestDefaultNatsOptionsCredentials(t *testing.T) {
 		require.ErrorContains(t, err, "invalid nats creds")
 		_, err = o.SignatureCB(nil)
 		require.Error(t, err)
+	})
+
+	t.Run("missing creds file works after the file appears", func(t *testing.T) {
+		credsFile := filepath.Join(t.TempDir(), "user.creds")
+		o := defaultNatsOptions(storeOptions(Credentials(credsFile, "")))
+		require.NotNil(t, o.UserJWT)
+		require.NotNil(t, o.SignatureCB)
+		_, err := o.UserJWT()
+		require.Error(t, err)
+
+		require.NoError(t, os.WriteFile(credsFile, []byte(newTestCreds(t)), 0o600))
+		_, err = o.UserJWT()
+		require.NoError(t, err)
+		_, err = o.SignatureCB([]byte("nonce"))
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid creds file works after a rotation", func(t *testing.T) {
+		credsFile := filepath.Join(t.TempDir(), "user.creds")
+		require.NoError(t, os.WriteFile(credsFile, []byte("not a creds file"), 0o600))
+		o := defaultNatsOptions(storeOptions(Credentials(credsFile, "")))
+		// The file has no seed, so the signature fails.
+		_, err := o.SignatureCB([]byte("nonce"))
+		require.Error(t, err)
+
+		require.NoError(t, os.WriteFile(credsFile, []byte(newTestCreds(t)), 0o600))
+		_, err = o.UserJWT()
+		require.NoError(t, err)
+		_, err = o.SignatureCB([]byte("nonce"))
+		require.NoError(t, err)
 	})
 }
