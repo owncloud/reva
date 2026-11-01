@@ -68,6 +68,18 @@ var _ = Describe("Options", func() {
 			})
 		}
 
+		It("names the first invalid cache in a fixed order", func() {
+			invalid := map[string]interface{}{"cache_store": "nats-js-kv", "cache_creds": "not a creds file"}
+			for range 20 {
+				_, err := options.New(map[string]interface{}{
+					"idcache":           invalid,
+					"filemetadatacache": invalid,
+					"statcache":         invalid,
+				})
+				Expect(err).To(MatchError(HavePrefix("statcache: ")))
+			}
+		})
+
 		It("returns an error for a missing creds file", func() {
 			_, err := options.New(map[string]interface{}{
 				"idcache": map[string]interface{}{"cache_store": "nats-js-kv", "cache_creds_file": "/does/not/exist.creds"},
