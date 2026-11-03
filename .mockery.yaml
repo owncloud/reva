@@ -10,9 +10,6 @@ packages:
     github.com/cs3org/reva/v2/pkg/share:
         interfaces:
             Manager:
-    github.com/cs3org/reva/v2/pkg/storage/fs/posix/tree:
-        interfaces:
-            Blobstore:
     github.com/cs3org/reva/v2/pkg/storage/registry/spaces:
         interfaces:
             StorageProviderClient:
