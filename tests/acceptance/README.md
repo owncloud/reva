@@ -14,12 +14,6 @@ This will require some PHP-related tools to run, for instance on Ubuntu you will
    >
    > You can run reva with other storage drivers.
    >
-   > To run reva with `posix` storage driver:
-   >
-   > ```bash
-   > make reva-posix
-   > ```
-   >
    > To run reva with `s3ng` storage driver:
    >
    > ```bash
@@ -83,15 +77,6 @@ This will require some PHP-related tools to run, for instance on Ubuntu you will
    >    make test-acceptance-api
    >    ```
    >
-   > 2. Run tests with `posix` storage driver:
-   >
-   >    ```bash
-   >    ...
-   >    DELETE_USER_DATA_CMD="bash -cx 'rm -rf /tmp/reva/data/users/* /tmp/reva/data/indexes/by-type/*'" \
-   >    EXPECTED_FAILURES_FILE=<path-to-reva>/tests/acceptance/expected-failures-on-POSIX-storage.md \
-   >    make test-acceptance-api
-   >    ```
-
 6. Cleanup the setup
 
    ```bash
