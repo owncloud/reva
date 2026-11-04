@@ -266,5 +266,27 @@ var _ = Describe("Decomposed", func() {
 				Expect(ok).To(BeTrue(), "expected errtypes.ResourceProcessing, got %T: %v", err, err)
 			})
 		})
+
+		Context("when the blob disappears after the node is resolved", func() {
+			It("preserves NotFound typing instead of wrapping it into a generic error", func() {
+				fileRef := &provider.Reference{
+					ResourceId: env.SpaceRootRes,
+					Path:       "/dir1/file1",
+				}
+				env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(&provider.ResourcePermissions{
+					Stat:                 true,
+					InitiateFileDownload: true,
+				}, nil)
+				// simulates a concurrent writer deleting/replacing the blob between
+				// node resolution and the ReadBlob call inside Download.
+				env.Blobstore.On("Download", mock.Anything).Return(nil, errtypes.NotFound("file1-blobid"))
+
+				_, _, err := env.Fs.Download(env.Ctx, fileRef, func(*provider.ResourceInfo) bool { return true })
+
+				Expect(err).To(HaveOccurred())
+				_, ok := err.(errtypes.IsNotFound)
+				Expect(ok).To(BeTrue(), "expected NotFound typing to survive Download(), got %T: %v", err, err)
+			})
+		})
 	})
 })

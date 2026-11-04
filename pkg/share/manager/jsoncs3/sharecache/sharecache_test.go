@@ -20,13 +20,17 @@ package sharecache_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/sharecache"
+	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
 
@@ -83,6 +87,35 @@ var _ = Describe("Sharecache", func() {
 		})
 	})
 
+	Describe("Add", func() {
+		It("retries a TooEarly CAS conflict on persist instead of aborting", func() {
+			Expect(c.Add(ctx, userid, shareID)).To(Succeed())
+
+			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+
+			err := c2.Add(ctx, userid, "storageid$spaceid!share2")
+			Expect(err).ToNot(HaveOccurred(), "TooEarly from write-lock contention should be retried, not treated as fatal")
+			Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
+		})
+
+		It("fails instead of dropping other shares when the post-conflict resync finds the file gone", func() {
+			initial := sharecache.UserShareCache{UserShares: map[string]*sharecache.SpaceShareIDs{
+				"storageid$spaceid1": {IDs: map[string]struct{}{shareID: {}}},
+				"storageid$spaceid2": {IDs: map[string]struct{}{"storageid$spaceid2!share2": {}}},
+			}}
+			initialBytes, err := json.Marshal(initial)
+			Expect(err).ToNot(HaveOccurred())
+
+			fs := &helpers.ConflictThenNotFoundStorage{InitialData: initialBytes, InitialEtag: "etag1"}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+
+			addErr := c2.Add(ctx, userid, "storageid$spaceid3!share3")
+			Expect(addErr).To(HaveOccurred(), "a backing file that vanished mid-retry must surface as an error, not a partial write")
+			Expect(fs.UploadedContent()).To(BeNil(), "no write should ever reach the storage once the resync reports NotFound")
+		})
+	})
+
 	Describe("List", func() {
 		Context("when no cache file exists yet", func() {
 			It("creates the cache file on first call", func() {
@@ -124,3 +157,4 @@ var _ = Describe("Sharecache", func() {
 		})
 	})
 })
+
