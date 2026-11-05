@@ -10,6 +10,8 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	link "github.com/cs3org/go-cs3apis/cs3/sharing/link/v1beta1"
 	providerpb "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/owncloud/reva/v2/internal/grpc/services/publicshareprovider"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
@@ -21,8 +23,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	cs3mocks "github.com/owncloud/reva/v2/tests/cs3mocks/mocks"
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
@@ -1514,6 +1514,85 @@ var _ = Describe("PublicShareProvider", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_INVALID_ARGUMENT))
 				Expect(res.GetStatus().GetMessage()).To(ContainSubstring("characters are required"))
+			})
+		})
+		Context("when the creator promotes an internal link to a public link", func() {
+			BeforeEach(func() {
+				// the existing link is internal (empty permissions) and was created by the
+				// calling user, who already armed it with a password in a previous step
+				existingLink.Permissions = &link.PublicSharePermissions{
+					Permissions: &providerpb.ResourcePermissions{},
+				}
+				existingLink.PasswordProtected = true
+				existingLink.Creator = user.GetId()
+
+				// the promotion request raises the link to a non-internal (edit) type
+				linkPermissions = &providerpb.ResourcePermissions{
+					Stat:                 true,
+					GetPath:              true,
+					InitiateFileDownload: true,
+					InitiateFileUpload:   true,
+					CreateContainer:      true,
+					Delete:               true,
+				}
+				updatedLink = &link.PublicShare{
+					Id:                &link.PublicShareId{OpaqueId: "share-id"},
+					PasswordProtected: true,
+					Permissions: &link.PublicSharePermissions{
+						Permissions: linkPermissions,
+					},
+				}
+
+				manager.
+					EXPECT().
+					GetPublicShare(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+					Once().Return(existingLink, nil)
+
+				// these are only reached on the vulnerable (un-fixed) code path; the fix denies
+				// the promotion before they are called
+				gatewayClient.
+					EXPECT().
+					CheckPermission(mock.Anything, mock.Anything).
+					Return(checkPermissionResponse, nil).Maybe()
+				manager.
+					EXPECT().
+					UpdatePublicShare(mock.Anything, mock.Anything, mock.Anything).
+					Return(updatedLink, nil).Maybe()
+			})
+
+			promotionRequest := func() *link.UpdatePublicShareRequest {
+				return &link.UpdatePublicShareRequest{
+					Update: &link.UpdatePublicShareRequest_Update{
+						Type: link.UpdatePublicShareRequest_Update_TYPE_PERMISSIONS,
+						Grant: &link.Grant{
+							Permissions: &link.PublicSharePermissions{
+								Permissions: linkPermissions,
+							},
+						},
+					},
+					Ref: &link.PublicShareReference{
+						Spec: &link.PublicShareReference_Id{
+							Id: &link.PublicShareId{OpaqueId: "share-id"},
+						},
+					},
+				}
+			}
+
+			It("is denied when the creator has no resharing permission on the resource", func() {
+				// the creator only has edit (no resharing) rights on the resource
+				statResourceResponse.Info.PermissionSet.AddGrant = false
+
+				res, err := provider.UpdatePublicShare(ctx, promotionRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_INVALID_ARGUMENT))
+				Expect(res.GetStatus().GetMessage()).To(Equal("no share permission"))
+			})
+
+			It("succeeds when the creator may reshare the resource", func() {
+				res, err := provider.UpdatePublicShare(ctx, promotionRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_OK))
+				Expect(res.GetShare()).To(Equal(updatedLink))
 			})
 		})
 		Context("when the user gets a public share", func() {
