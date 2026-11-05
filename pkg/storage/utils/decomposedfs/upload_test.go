@@ -21,8 +21,10 @@ package decomposedfs_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
@@ -50,11 +52,24 @@ import (
 	"github.com/owncloud/reva/v2/tests/helpers"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/mock"
+	microevents "go-micro.dev/v4/events"
 	"google.golang.org/grpc"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// erroringEventStream satisfies events.Stream but always fails to publish,
+// simulating a transient event-bus (NATS) outage during FinishUploadDecomposed.
+type erroringEventStream struct{}
+
+func (erroringEventStream) Publish(string, interface{}, ...microevents.PublishOption) error {
+	return errors.New("event bus unavailable")
+}
+
+func (erroringEventStream) Consume(string, ...microevents.ConsumeOption) (<-chan microevents.Event, error) {
+	return nil, errors.New("event bus unavailable")
+}
 
 var _ = Describe("File uploads", func() {
 	var (
@@ -315,6 +330,123 @@ var _ = Describe("File uploads", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(len(resources)).To(Equal(1))
 				Expect(resources[0].Path).To(Equal(ref.Path))
+			})
+		})
+
+		When("the user's conditional overwrite fails on an etag conflict", func() {
+			BeforeEach(func() {
+				bs.On("Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string"), mock.Anything).
+					Return(nil)
+
+				// OCISDEV-1560: create the node once so the next write is an overwrite,
+				// which is what makes updateExistingNode check If-Match against the
+				// existing etag.
+				uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{})
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = fs.Upload(ctx, storage.UploadRequest{
+					Ref:    &provider.Reference{Path: "/" + uploadIds["simple"]},
+					Body:   io.NopCloser(bytes.NewReader([]byte("0123456789"))),
+					Length: 10,
+				}, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("does not leave orphaned upload session files behind", func() {
+				uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{"if-match": "stale-etag"})
+				Expect(err).ToNot(HaveOccurred())
+				uploadID := uploadIds["simple"]
+
+				_, err = fs.Upload(ctx, storage.UploadRequest{
+					Ref:    &provider.Reference{Path: "/" + uploadID},
+					Body:   io.NopCloser(bytes.NewReader([]byte("9876543210"))),
+					Length: 10,
+				}, nil)
+				Expect(err).To(HaveOccurred())
+
+				_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "orphaned upload session binary must be cleaned up on etag conflict")
+
+				_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID+".info"))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "orphaned upload session info file must be cleaned up on etag conflict")
+			})
+
+			It("does not accumulate orphaned upload session files across repeated etag conflicts", func() {
+				const attempts = 5
+				for i := 0; i < attempts; i++ {
+					uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{"if-match": "stale-etag"})
+					Expect(err).ToNot(HaveOccurred())
+
+					_, err = fs.Upload(ctx, storage.UploadRequest{
+						Ref:    &provider.Reference{Path: "/" + uploadIds["simple"]},
+						Body:   io.NopCloser(bytes.NewReader([]byte("9876543210"))),
+						Length: 10,
+					}, nil)
+					Expect(err).To(HaveOccurred())
+				}
+
+				entries, err := os.ReadDir(filepath.Join(o.Root, "uploads"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(entries).To(BeEmpty(), "repeated etag conflicts must not leak upload session files")
+			})
+		})
+
+		When("the upload body is shorter than the declared length", func() {
+			It("does not leave orphaned upload session files behind", func() {
+				uploadIds, err := fs.InitiateUpload(ctx, ref, 10, map[string]string{})
+				Expect(err).ToNot(HaveOccurred())
+				uploadID := uploadIds["simple"]
+
+				// client declared 10 bytes but the connection dropped after 5: the
+				// non-chunked write path must clean up just like chunking-v1 does.
+				_, err = fs.Upload(ctx, storage.UploadRequest{
+					Ref:    &provider.Reference{Path: "/" + uploadID},
+					Body:   io.NopCloser(bytes.NewReader([]byte("01234"))),
+					Length: 10,
+				}, nil)
+				Expect(err).To(HaveOccurred())
+
+				_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "orphaned upload session binary must be cleaned up on a short write")
+
+				_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID+".info"))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "orphaned upload session info file must be cleaned up on a short write")
+			})
+		})
+
+		When("publishing the upload-finished event fails", func() {
+			It("does not leave orphaned upload session files behind", func() {
+				tree := tree.New(lu, bs, o, store.Create(), &zerolog.Logger{})
+				aspects := aspects.Aspects{
+					Lookup:      lu,
+					Tree:        tree,
+					Permissions: permissions.NewPermissions(pmock, permissionsSelector),
+					Trashbin:    &decomposedfs.DecomposedfsTrashbin{},
+					EventStream: erroringEventStream{},
+				}
+				fsWithEvents, err := decomposedfs.New(o, aspects, &zerolog.Logger{})
+				Expect(err).ToNot(HaveOccurred())
+
+				bs.On("Upload", mock.AnythingOfType("*node.Node"), mock.AnythingOfType("string"), mock.Anything).
+					Return(nil)
+
+				fileContent := []byte("0123456789")
+				uploadIds, err := fsWithEvents.InitiateUpload(ctx, ref, int64(len(fileContent)), map[string]string{})
+				Expect(err).ToNot(HaveOccurred())
+				uploadID := uploadIds["simple"]
+
+				_, err = fsWithEvents.Upload(ctx, storage.UploadRequest{
+					Ref:    &provider.Reference{Path: "/" + uploadID},
+					Body:   io.NopCloser(bytes.NewReader(fileContent)),
+					Length: int64(len(fileContent)),
+				}, nil)
+				Expect(err).To(HaveOccurred())
+
+				_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "orphaned upload session binary must be cleaned up when publishing the upload-finished event fails")
+
+				_, err = os.Stat(filepath.Join(o.Root, "uploads", uploadID+".info"))
+				Expect(os.IsNotExist(err)).To(BeTrue(), "orphaned upload session info file must be cleaned up when publishing the upload-finished event fails")
 			})
 		})
 
