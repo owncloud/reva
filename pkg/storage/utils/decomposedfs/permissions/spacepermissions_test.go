@@ -80,8 +80,13 @@ func TestIsEditorAcceptsSpaceEditorVariants(t *testing.T) {
 // space role that can read (all space roles carry ListGrants), including subset editors and
 // the manager, while non-space and grant-only grants do not.
 func TestIsSpaceViewerAcceptsSpaceRoleVariants(t *testing.T) {
+	// a space viewer added before the role lost ListRecycle still has it in the stored grant
+	oldSpaceViewer := conversions.NewSpaceViewerRole().CS3ResourcePermissions()
+	oldSpaceViewer.ListRecycle = true
+
 	viewers := map[string]*provider.ResourcePermissions{
 		"space viewer":                        conversions.NewSpaceViewerRole().CS3ResourcePermissions(),
+		"space viewer added before the fix":   oldSpaceViewer,
 		"space editor without versions/trash": conversions.NewSpaceEditorWithoutVersionsWithoutTrashbinRole().CS3ResourcePermissions(),
 		"space editor":                        conversions.NewSpaceEditorRole().CS3ResourcePermissions(),
 		"manager":                             conversions.NewManagerRole().CS3ResourcePermissions(),

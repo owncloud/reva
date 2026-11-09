@@ -25,8 +25,10 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/owncloud/reva/v2/pkg/conversions"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/permissions/mocks"
 	helpers "github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/testhelpers"
 	"github.com/stretchr/testify/mock"
@@ -464,6 +466,78 @@ var _ = Describe("Recycle", func() {
 			_, err = env.Fs.RestoreRecycleItem(ctx, &provider.Reference{ResourceId: env.SpaceRootRes}, items[0].Key, "", nil)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("not found"))
+		})
+	})
+
+	When("a space viewer lists the trash bin", func() {
+		const viewerID = "viewerid"
+		var viewerCtx context.Context
+
+		// addViewer stores a space member grant for the viewer the same way the web UI does
+		addViewer := func(perms *provider.ResourcePermissions) {
+			err := env.Fs.AddGrant(env.Ctx, &provider.Reference{ResourceId: projectID}, &provider.Grant{
+				Grantee: &provider.Grantee{
+					Type: provider.GranteeType_GRANTEE_TYPE_USER,
+					Id:   &provider.Grantee_UserId{UserId: &userpb.UserId{OpaqueId: viewerID}},
+				},
+				Permissions: perms,
+			})
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		BeforeEach(func() {
+			var err error
+			projectID, err = env.CreateTestStorageSpace("project", nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			// the owner may delete files and add members
+			registerPermissions(env.Permissions, "25b69780-5f39-43be-a7ac-a9b9e9fe4230", &provider.ResourcePermissions{
+				Stat:               true,
+				AddGrant:           true,
+				Delete:             true,
+				ListRecycle:        true,
+				RestoreRecycleItem: true,
+				PurgeRecycle:       true,
+			})
+
+			// the viewer's permissions are assembled by the real permission code
+			// from the grant stored on the space root
+			realPermissions := node.NewPermissions(env.Lookup)
+			isViewer := mock.MatchedBy(func(ctx context.Context) bool {
+				return ctxpkg.ContextMustGetUser(ctx).GetId().GetOpaqueId() == viewerID
+			})
+			env.Permissions.On("AssemblePermissions", isViewer, mock.Anything).Return(realPermissions.AssemblePermissions)
+			env.Permissions.On("AssembleTrashPermissions", isViewer, mock.Anything).Return(realPermissions.AssembleTrashPermissions)
+
+			viewerCtx = ctxpkg.ContextSetUser(context.Background(), &userpb.User{
+				Id: &userpb.UserId{
+					Idp:      "viewidp",
+					OpaqueId: viewerID,
+					Type:     userpb.UserType_USER_TYPE_PRIMARY,
+				},
+				Username: "viewer",
+			})
+
+			_, err = env.Fs.Delete(env.Ctx, &provider.Reference{ResourceId: projectID, Path: "/dir1/file1"})
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("is denied", func() {
+			addViewer(conversions.NewSpaceViewerRole().CS3ResourcePermissions())
+
+			_, err := env.Fs.ListRecycle(viewerCtx, &provider.Reference{ResourceId: projectID}, "", "")
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(BeAssignableToTypeOf(errtypes.PermissionDenied("")))
+		})
+
+		It("is allowed with a grant stored before the role lost the trash bin access", func() {
+			oldViewer := conversions.NewSpaceViewerRole().CS3ResourcePermissions()
+			oldViewer.ListRecycle = true
+			addViewer(oldViewer)
+
+			items, err := env.Fs.ListRecycle(viewerCtx, &provider.Reference{ResourceId: projectID}, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items).To(HaveLen(1))
 		})
 	})
 })
