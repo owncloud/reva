@@ -530,6 +530,12 @@ func (s *service) UpdatePublicShare(ctx context.Context, req *link.UpdatePublicS
 	// resharing authority has to be (re-)enforced.
 	wasInternalLink := grants.PermissionsEqual(ps.GetPermissions().GetPermissions(), &provider.ResourcePermissions{})
 	if updatePermissions && wasInternalLink && !isInternalLink {
+		if !sRes.GetInfo().GetPermissionSet().AddGrant {
+			return &link.UpdatePublicShareResponse{
+				Status: status.NewInvalidArg(ctx, "no share permission"),
+			}, nil
+		}
+
 		canWriteLink, err := utils.CheckPermission(ctx, permission.WritePublicLink, gatewayClient)
 		if err != nil {
 			return &link.UpdatePublicShareResponse{
@@ -539,12 +545,6 @@ func (s *service) UpdatePublicShare(ctx context.Context, req *link.UpdatePublicS
 		if !canWriteLink {
 			return &link.UpdatePublicShareResponse{
 				Status: status.NewPermissionDenied(ctx, nil, "no permission to create public links"),
-			}, nil
-		}
-
-		if !sRes.GetInfo().GetPermissionSet().AddGrant {
-			return &link.UpdatePublicShareResponse{
-				Status: status.NewInvalidArg(ctx, "no share permission"),
 			}, nil
 		}
 	}
