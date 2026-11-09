@@ -1,6 +1,6 @@
 module github.com/owncloud/reva/v2
 
-go 1.26.0
+go 1.26.10
 
 require (
 	bou.ke/monkey v1.0.2
@@ -58,8 +58,10 @@ require (
 	github.com/mileusna/useragent v1.3.5
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/mitchellh/mapstructure v1.5.0
+	github.com/nats-io/jwt/v2 v2.8.2
 	github.com/nats-io/nats-server/v2 v2.15.0
 	github.com/nats-io/nats.go v1.54.0
+	github.com/nats-io/nkeys v0.4.16
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.33.0
 	github.com/onsi/gomega v1.44.0
@@ -173,8 +175,6 @@ require (
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/jwt/v2 v2.8.2 // indirect
-	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/oklog/run v1.2.0 // indirect
@@ -227,7 +227,9 @@ require (
 
 replace github.com/studio-b12/gowebdav => github.com/kobergj/gowebdav v0.0.0-20251030165916-532350997dde
 
-replace github.com/go-micro/plugins/v4/store/nats-js-kv => github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20240807130109-f62bb67e8c90
+replace github.com/go-micro/plugins/v4/store/nats-js-kv => github.com/kobergj/plugins/v4/store/nats-js-kv v0.0.0-20261030085317-811a2ded849b
+
+replace github.com/go-micro/plugins/v4/events/natsjs => github.com/kobergj/plugins/v4/events/natsjs v1.2.1-0.20261030085317-811a2ded849b
 
 replace go-micro.dev/v4 => github.com/kobergj/go-micro/v4 v4.0.0-20250610135441-d0b187215699
 
