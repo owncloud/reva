@@ -557,6 +557,12 @@ func (s *service) UpdatePublicShare(ctx context.Context, req *link.UpdatePublicS
 			}, nil
 		}
 
+		if !sRes.GetInfo().GetPermissionSet().AddGrant {
+			return &link.UpdatePublicShareResponse{
+				Status: status.NewInvalidArg(ctx, "no share permission"),
+			}, nil
+		}
+
 		canWriteLink, err := utils.CheckPermission(ctx, permission.WritePublicLink, gatewayClient)
 		if err != nil {
 			return &link.UpdatePublicShareResponse{
@@ -566,12 +572,6 @@ func (s *service) UpdatePublicShare(ctx context.Context, req *link.UpdatePublicS
 		if !canWriteLink {
 			return &link.UpdatePublicShareResponse{
 				Status: status.NewPermissionDenied(ctx, nil, "no permission to create public links"),
-			}, nil
-		}
-
-		if !sRes.GetInfo().GetPermissionSet().AddGrant {
-			return &link.UpdatePublicShareResponse{
-				Status: status.NewInvalidArg(ctx, "no share permission"),
 			}, nil
 		}
 	}
