@@ -34,6 +34,7 @@ import (
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/conversions"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/events/stream"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	sharespkg "github.com/owncloud/reva/v2/pkg/share"
@@ -44,7 +45,6 @@ import (
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/owncloud/reva/v2/tests/cs3mocks/mocks"
 	"github.com/stretchr/testify/mock"
-	nevents "go-micro.dev/v4/events"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -52,14 +52,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-// noopEventStream avoids a nil-Publisher panic on the expired-share path.
-type noopEventStream struct{}
-
-func (noopEventStream) Publish(string, interface{}, ...nevents.PublishOption) error { return nil }
-func (noopEventStream) Consume(string, ...nevents.ConsumeOption) (<-chan nevents.Event, error) {
-	return nil, nil
-}
 
 var _ = Describe("Jsoncs3", func() {
 	var (
@@ -762,7 +754,7 @@ var _ = Describe("Jsoncs3", func() {
 			})
 
 			It("does not block the response on removing an expired share", func() {
-				m2, err := jsoncs3.New(storage, nil, 0, noopEventStream{}, 0)
+				m2, err := jsoncs3.New(storage, nil, 0, stream.Chan{make(chan interface{}, 1), make(chan interface{})}, 0)
 				Expect(err).ToNot(HaveOccurred())
 
 				// warm m2's own cache from disk before backdating the share.

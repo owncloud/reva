@@ -9,7 +9,6 @@ import (
 
 	userv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
-	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3"
@@ -18,7 +17,10 @@ import (
 )
 
 // latencyStorage sleeps per Download/Upload call to make serialized vs parallel timing observable.
+// Embeds metadata.Storage (left nil) since only Download/Upload are exercised by these tests.
 type latencyStorage struct {
+	metadata.Storage
+
 	mu    sync.Mutex
 	files map[string][]byte
 
@@ -31,24 +33,7 @@ func (f *latencyStorage) fileFor(path string) []byte {
 	return f.files[path]
 }
 
-func (f *latencyStorage) Backend() string                                    { return "fake" }
-func (f *latencyStorage) Init(context.Context, string) error                 { return nil }
-func (f *latencyStorage) SimpleUpload(context.Context, string, []byte) error { return nil }
-func (f *latencyStorage) SimpleDownload(context.Context, string) ([]byte, error) {
-	return nil, nil
-}
-func (f *latencyStorage) Delete(context.Context, string) error { return nil }
-func (f *latencyStorage) Stat(context.Context, string) (*provider.ResourceInfo, error) {
-	return nil, nil
-}
-func (f *latencyStorage) ReadDir(context.Context, string) ([]string, error) { return nil, nil }
-func (f *latencyStorage) ListDir(context.Context, string) ([]*provider.ResourceInfo, error) {
-	return nil, nil
-}
-func (f *latencyStorage) CreateSymlink(context.Context, string, string) error { return nil }
-func (f *latencyStorage) ResolveSymlink(context.Context, string) (string, error) {
-	return "", nil
-}
+func (f *latencyStorage) Init(context.Context, string) error              { return nil }
 func (f *latencyStorage) MakeDirIfNotExist(context.Context, string) error { return nil }
 func (f *latencyStorage) WasRecentlyDeleted(context.Context, string) (bool, error) {
 	return false, nil

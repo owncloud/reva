@@ -946,11 +946,11 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 					if s == nil {
 						sublogr.Warn().Str("shareid", shareID).Msg("share not found. cleaning up")
 						// already excluded from the response; removal doesn't gate it.
-						go func(ssid, shareID string, log zerolog.Logger) {
-							if err := m.UserReceivedStates.Remove(context.Background(), user.Id.OpaqueId, ssid, shareID); err != nil {
+						go func(userID, ssid, shareID string, log zerolog.Logger) {
+							if err := m.UserReceivedStates.Remove(context.Background(), userID, ssid, shareID); err != nil {
 								log.Error().Err(err).Msg("failed to clean up orphaned share")
 							}
-						}(w.ssid, shareID, sublogr)
+						}(user.Id.OpaqueId, w.ssid, shareID, sublogr)
 						continue
 					}
 					sublogr = sublogr.With().Str("shareid", shareID).Logger()
