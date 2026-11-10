@@ -37,6 +37,7 @@ import (
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/config"
 	"github.com/owncloud/reva/v2/internal/http/services/owncloud/ocdav/net"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/publicshare"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/rhttp/global"
@@ -1186,6 +1187,64 @@ var _ = Describe("ocdav", func() {
 			basePath = "/dav/public-files"
 		})
 
+		propfind := func(ctx context.Context, token string, withPassword bool) *httptest.ResponseRecorder {
+			rr := httptest.NewRecorder()
+			req, err := http.NewRequest("PROPFIND", path.Join(basePath, token), strings.NewReader(""))
+			Expect(err).ToNot(HaveOccurred())
+			if withPassword {
+				req.SetBasicAuth("public", "secret")
+			}
+			handler.Handler().ServeHTTP(rr, req.WithContext(ctx))
+			return rr
+		}
+
+		Describe("an internal link", func() {
+			BeforeEach(func() {
+				// the publicshares auth manager refuses internal links, the gateway passes its reason on
+				client.On("Authenticate", mock.Anything, mock.MatchedBy(func(req *cs3gateway.AuthenticateRequest) bool {
+					return req.Type == "publicshares" && req.ClientId == "internallinktoken"
+				})).Return(&cs3gateway.AuthenticateResponse{
+					Status: status.NewPermissionDenied(ctx, nil, "authsvc: error in Authenticate: error: permission denied: "+publicshare.InternalLinkRejectedMessage),
+				}, nil)
+			})
+
+			It("asks an anonymous client to log in instead of asking for a password", func() {
+				rr := propfind(context.Background(), "internallinktoken", false)
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusUnauthorized))
+				Expect(rr.Header().Get(ocdav.WwwAuthenticate)).To(HavePrefix("Bearer "))
+				Expect(rr.Body.String()).To(ContainSubstring("<s:errorcode>" + ocdav.ErrMissingBearerAuth + "</s:errorcode>"))
+			})
+
+			It("answers not found to a logged-in user who has no access to the resource", func() {
+				// GetPublicShare as the user returns not found (see the outer BeforeEach)
+				rr := propfind(ctx, "internallinktoken", false)
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusNotFound))
+				Expect(rr.Header().Get(ocdav.WwwAuthenticate)).To(BeEmpty())
+			})
+
+			It("says the credentials are wrong when a password was sent", func() {
+				rr := propfind(context.Background(), "internallinktoken", true)
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusUnauthorized))
+				Expect(rr.Body.String()).To(ContainSubstring("<s:errorcode>" + ocdav.ErrInvalidCredentials + "</s:errorcode>"))
+			})
+		})
+
+		It("asks for a password when a password-protected link is opened without one", func() {
+			client.On("Authenticate", mock.Anything, mock.MatchedBy(func(req *cs3gateway.AuthenticateRequest) bool {
+				return req.Type == "publicshares" && req.ClientId == "passwordlinktoken"
+			})).Return(&cs3gateway.AuthenticateResponse{
+				Status: status.NewPermissionDenied(ctx, nil, "authsvc: error in Authenticate: error: invalid credentials: wrong password"),
+			}, nil)
+
+			rr := propfind(context.Background(), "passwordlinktoken", false)
+
+			Expect(rr).To(HaveHTTPStatus(http.StatusUnauthorized))
+			Expect(rr.Header().Get(ocdav.WwwAuthenticate)).To(BeEmpty())
+			Expect(rr.Body.String()).To(ContainSubstring("<s:errorcode>" + ocdav.ErrMissingBasicAuth + "</s:errorcode>"))
+		})
 	})
 
 	// TODO restructure the tests and split them up by endpoint?
