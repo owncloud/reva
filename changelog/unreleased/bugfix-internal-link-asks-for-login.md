@@ -10,4 +10,4 @@ ocdav now recognises the refusal. An anonymous request gets a 401 with
 the private link. A logged-in user without access to the resource gets a 404.
 Internal links still cannot be accessed anonymously.
 
-https://github.com/owncloud/reva/pull/XXX
+https://github.com/owncloud/reva/pull/801
