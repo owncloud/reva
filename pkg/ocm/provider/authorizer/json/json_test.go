@@ -28,6 +28,12 @@ func TestAuthorizer_GetInfoByDomain(t *testing.T) {
 			"domain with port":                {givenDomain: "server-two:9200", expectedDomain: "server-two:9200"},
 			"domain only with port in result": {givenDomain: "server-two", expectedDomain: "server-two:9200"},
 			"unknown domain":                  {givenDomain: "unknown-domain", expectedError: errtypes.NotFound("unknown-domain")},
+			"with subdomain":                  {givenDomain: "sub.server.prv", expectedDomain: "sub.server.prv"},
+			"with weird domain":               {givenDomain: "subxserver.prv", expectedError: errtypes.NotFound("subxserver.prv")},
+			"with wildcard domain":            {givenDomain: "s1.wild.server.prv", expectedDomain: "s1.wild.server.prv"},
+			"with wildcard domain2":           {givenDomain: "potato.wild.server.prv", expectedDomain: "potato.wild.server.prv"},
+			"with wildcard domain deep":       {givenDomain: "sub.potato.wild.server.prv", expectedError: errtypes.NotFound("sub.potato.wild.server.prv")},
+			"outside wildcard domain":         {givenDomain: "wild.server.prv", expectedError: errtypes.NotFound("wild.server.prv")},
 		} {
 			t.Run(name, func(t *testing.T) {
 				info, err := authorizer.GetInfoByDomain(context.Background(), env.givenDomain)
