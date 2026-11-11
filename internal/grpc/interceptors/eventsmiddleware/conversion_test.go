@@ -22,10 +22,13 @@ import (
 	"encoding/json"
 	"testing"
 
+	group "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
+	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/storage"
+	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -359,4 +362,37 @@ func TestSpaceDeleted(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShareRemovedGranteeIDs(t *testing.T) {
+	rid := &provider.ResourceId{StorageId: "storage-1", SpaceId: "space-1", OpaqueId: "opaque-1"}
+	req := &collaboration.RemoveShareRequest{
+		Ref: &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: &collaboration.ShareId{OpaqueId: "share-1"}}},
+	}
+
+	t.Run("group grantee", func(t *testing.T) {
+		groupID := &group.GroupId{Idp: "test-idp", OpaqueId: "group-1"}
+		opaque := utils.AppendJSONToOpaque(nil, "granteegroupid", groupID)
+		opaque = utils.AppendJSONToOpaque(opaque, "resourceid", rid)
+		resp := &collaboration.RemoveShareResponse{Status: &rpc.Status{Code: rpc.Code_CODE_OK}, Opaque: opaque}
+
+		ev := ShareRemoved(resp, req, testExecutant)
+
+		require.NotNil(t, ev.GranteeGroupID)
+		assert.Equal(t, "group-1", ev.GranteeGroupID.GetOpaqueId())
+		assert.Nil(t, ev.GranteeUserID)
+		assert.Equal(t, "storage-1", ev.ItemID.GetStorageId())
+	})
+
+	t.Run("user grantee", func(t *testing.T) {
+		userID := &user.UserId{Idp: "test-idp", OpaqueId: "user-1"}
+		opaque := utils.AppendJSONToOpaque(nil, "granteeuserid", userID)
+		resp := &collaboration.RemoveShareResponse{Status: &rpc.Status{Code: rpc.Code_CODE_OK}, Opaque: opaque}
+
+		ev := ShareRemoved(resp, req, testExecutant)
+
+		require.NotNil(t, ev.GranteeUserID)
+		assert.Equal(t, "user-1", ev.GranteeUserID.GetOpaqueId())
+		assert.Nil(t, ev.GranteeGroupID)
+	})
 }
