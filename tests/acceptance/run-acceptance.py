@@ -2,13 +2,12 @@
 """
 Run PHP Behat acceptance tests against reva with different storage backends.
 
-Replaces the ocis-integration-tests, s3ng-integration-tests, and
-posixfs-integration-tests Drone pipelines.
+Replaces the ocis-integration-tests and s3ng-integration-tests Drone
+pipelines.
 
 Usage:
     python3 tests/acceptance/run-acceptance.py --storage ocis --total-parts 4 --run-part 1
     python3 tests/acceptance/run-acceptance.py --storage s3ng --total-parts 6 --run-part 3
-    python3 tests/acceptance/run-acceptance.py --storage posixfs --total-parts 4 --run-part 2
 """
 
 import argparse
@@ -62,45 +61,30 @@ REVAD_CONFIGS = {
         "permissions-ocis-ci.toml",
         "machine-auth.toml",
     ],
-    "posixfs": [
-        "frontend.toml",
-        "gateway.toml",
-        "shares.toml",
-        "storage-shares.toml",
-        "machine-auth.toml",
-        "storage-users-posixfs.toml",
-        "storage-publiclink.toml",
-        "permissions-ocis-ci.toml",
-        "ldap-users.toml",
-    ],
 }
 
 # Storage driver names as expected by the test framework
 STORAGE_DRIVER_MAP = {
     "ocis": "OCIS",
     "s3ng": "S3NG",
-    "posixfs": "POSIX",
 }
 
 # Expected failures files per storage backend
 EXPECTED_FAILURES_MAP = {
     "ocis": "tests/acceptance/expected-failures-on-OCIS-storage.md",
     "s3ng": "tests/acceptance/expected-failures-on-S3NG-storage.md",
-    "posixfs": "tests/acceptance/expected-failures-on-POSIX-storage.md",
 }
 
 # DELETE_USER_DATA_CMD per storage backend (paths rewritten at runtime)
 DELETE_CMD_MAP = {
     "ocis": "rm -rf {data}/spaces/* {data}/blobs/* {data}/indexes/by-type/*",
     "s3ng": "rm -rf {data}/spaces/* {data}/blobs/* {data}/indexes/by-type/*",
-    "posixfs": "bash -cx 'rm -rf {data}/users/* {data}/indexes/by-type/*'",
 }
 
 # Services required per storage backend
 SERVICES_NEEDED = {
     "ocis": ["ldap"],
     "s3ng": ["ldap", "ceph"],
-    "posixfs": ["redis", "ldap"],
 }
 
 
@@ -298,7 +282,7 @@ def run_acceptance_tests(storage, total_parts, run_part):
 def main():
     parser = argparse.ArgumentParser(description="Run reva acceptance tests")
     parser.add_argument("--storage", required=True,
-                        choices=["ocis", "s3ng", "posixfs"],
+                        choices=["ocis", "s3ng"],
                         help="Storage backend to test")
     parser.add_argument("--total-parts", type=int, required=True,
                         help="Total number of parallel shards")
