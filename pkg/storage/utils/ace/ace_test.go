@@ -100,6 +100,36 @@ var _ = Describe("ACE", func() {
 		})
 	})
 
+	Describe("unmarshalling invalid values", func() {
+		It("returns an error for an empty value", func() {
+			e, err := ace.Unmarshal("u:einstein", []byte{})
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+		})
+		It("returns an error for an unknown encoding", func() {
+			e, err := ace.Unmarshal("u:einstein", []byte{1})
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+		})
+		It("returns an error and does not panic for a malformed key value body", func() {
+			var (
+				e   *ace.ACE
+				err error
+			)
+			Expect(func() {
+				e, err = ace.Unmarshal("u:einstein", append([]byte{0}, []byte(`t=A:s=notanumber`)...))
+			}).ToNot(Panic())
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+
+			Expect(func() {
+				e, err = ace.Unmarshal("u:einstein", append([]byte{0}, []byte(`t="A`)...))
+			}).ToNot(Panic())
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+		})
+	})
+
 	Describe("converting permissions", func() {
 		It("converts t", func() {
 			userGrant.Permissions.Stat = true
