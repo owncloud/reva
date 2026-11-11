@@ -162,3 +162,74 @@ func TestRoleFromResourcePermissions_WithoutTrashbinRolesAreWritable(t *testing.
 			"expected W in WebDAV permissions for role %s", role.Name)
 	}
 }
+
+func TestNewSpaceViewerRole(t *testing.T) {
+	p := NewSpaceViewerRole().CS3ResourcePermissions()
+
+	assert.True(t, p.InitiateFileDownload)
+
+	// should not have trashbin permissions
+	assert.False(t, p.ListRecycle)
+	assert.False(t, p.RestoreRecycleItem)
+	assert.False(t, p.PurgeRecycle)
+}
+
+func TestRoleFromResourcePermissions_SpaceViewerIsNotSecureViewer(t *testing.T) {
+	got := RoleFromResourcePermissions(NewSpaceViewerRole().CS3ResourcePermissions(), false)
+	assert.Equal(t, PermissionRead, got.OCSPermissions())
+	assert.NotEqual(t, RoleSecureViewer, got.Name)
+	// an X would make the Web frontend hide the download action
+	assert.Empty(t, got.WebDAVPermissions(false, false, false, false))
+	assert.Empty(t, got.WebDAVPermissions(true, false, false, false))
+}
+
+func TestRoleFromResourcePermissions_WithoutTrashbinRolesAreReadable(t *testing.T) {
+	for _, constructor := range []func() *Role{
+		NewSpaceEditorWithoutTrashbinRole,
+		NewSpaceEditorWithoutVersionsWithoutTrashbinRole,
+	} {
+		role := constructor()
+		got := RoleFromResourcePermissions(role.CS3ResourcePermissions(), false)
+		assert.Equal(t, PermissionRead|PermissionWrite|PermissionCreate|PermissionDelete, got.OCSPermissions(),
+			"expected read, write, create and delete for role %s", role.Name)
+	}
+}
+
+func TestRoleFromResourcePermissions_SecureViewerCannotDownload(t *testing.T) {
+	got := RoleFromResourcePermissions(NewSecureViewerRole().CS3ResourcePermissions(), false)
+	assert.Equal(t, RoleSecureViewer, got.Name)
+	assert.Contains(t, got.WebDAVPermissions(false, false, false, false), "X")
+}
+
+// TestRoleFromResourcePermissions_MixedTrashbinPermissions pins the OCS permissions of editor
+// permission sets with mixed trash bin permissions. The read permission does not depend on the
+// trash bin permissions. The write permission needs RestoreRecycleItem, or Delete when the trash
+// bin cannot be listed. No built-in role that can upload and delete lists the trash bin
+// without restoring from it.
+func TestRoleFromResourcePermissions_MixedTrashbinPermissions(t *testing.T) {
+	tests := []struct {
+		name        string
+		listRecycle bool
+		restore     bool
+		delete      bool
+		want        Permissions
+	}{
+		{"no trash bin permissions", false, false, true, PermissionRead | PermissionWrite | PermissionCreate | PermissionDelete},
+		{"restore without list", false, true, true, PermissionRead | PermissionWrite | PermissionCreate | PermissionDelete},
+		{"list without restore", true, false, true, PermissionRead | PermissionCreate | PermissionDelete},
+		{"list and restore", true, true, true, PermissionRead | PermissionWrite | PermissionCreate | PermissionDelete},
+		{"restore without delete", false, true, false, PermissionRead | PermissionWrite | PermissionCreate},
+		{"neither restore nor delete", false, false, false, PermissionRead | PermissionCreate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewSpaceEditorWithoutVersionsWithoutTrashbinRole().CS3ResourcePermissions()
+			p.ListRecycle = tt.listRecycle
+			p.RestoreRecycleItem = tt.restore
+			p.Delete = tt.delete
+
+			got := RoleFromResourcePermissions(p, false)
+			assert.Equal(t, tt.want, got.OCSPermissions())
+		})
+	}
+}
