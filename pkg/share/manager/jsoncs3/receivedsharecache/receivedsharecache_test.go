@@ -170,12 +170,27 @@ var _ = Describe("Cache", func() {
 		})
 	})
 
+	Describe("Remove for a user without received.json", func() {
+		// A user who only has group shares has no received.json.
+		// A cleanup of a stale group share must not create the file.
+		It("does not create received.json", func() {
+			cs := &helpers.CountingUploadStorage{Storage: storage}
+			c2 := receivedsharecache.New(cs, 0*time.Second)
+
+			Expect(c2.Remove(ctx, "groupsonly", spaceID, shareID)).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(0)))
+			_, err := os.Stat(filepath.Join(tmpdir, "users", "groupsonly", "received.json"))
+			Expect(os.IsNotExist(err)).To(BeTrue(), "received.json must not exist")
+		})
+	})
+
 	Describe("retryPersist's post-failure resync", func() {
 		It("does not perform a redundant bootstrap upload when no file exists yet", func() {
 			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.Aborted("injected")}
 			c2 := receivedsharecache.New(fs, 0*time.Second)
 
-			err := c2.Remove(ctx, userID, spaceID, shareID)
+			// Add, not Remove: a Remove of an unknown share does not upload.
+			err := c2.Add(ctx, userID, spaceID, &collaboration.ReceivedShare{Share: share, State: collaboration.ShareState_SHARE_STATE_PENDING})
 			Expect(err).ToNot(HaveOccurred())
 			// 1 forced failure + 1 real write; no extra bootstrap upload from the resync in between.
 			Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
@@ -244,6 +259,28 @@ var _ = Describe("Cache", func() {
 				s, err := c.Get(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil())
+			})
+
+			// ListReceivedShares calls Remove for stale group shares.
+			// Their IDs are not in received.json, so each upload was a byte-identical rewrite.
+			It("does not upload when the share is not in the space", func() {
+				cs := &helpers.CountingUploadStorage{Storage: storage}
+				c2 := receivedsharecache.New(cs, 0*time.Second)
+
+				Expect(c2.Remove(ctx, userID, spaceID, "storageid:spaceid:unknown")).To(Succeed())
+				Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(0)))
+
+				s, err := c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).ToNot(BeNil(), "the other entry must stay")
+			})
+
+			It("does not upload when the space is not in the cache", func() {
+				cs := &helpers.CountingUploadStorage{Storage: storage}
+				c2 := receivedsharecache.New(cs, 0*time.Second)
+
+				Expect(c2.Remove(ctx, userID, "otherspace", shareID)).To(Succeed())
+				Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(0)))
 			})
 
 			It("persists the removal", func() {
@@ -385,10 +422,16 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("does not reuse stale state when the post-failure resync itself fails transiently", func() {
-				fs := &flakyDownloadStorage{Storage: storage, downloadFailures: 2}
+				fs := &flakyDownloadStorage{Storage: storage}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
+				// warm the cache, so Remove starts with the persist attempt
+				_, err := c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				fs.calls = nil
+				atomic.StoreInt32(&fs.downloads, 0)
+				atomic.StoreInt32(&fs.downloadFailures, 2)
 
-				err := c2.Remove(ctx, userID, spaceID, shareID)
+				err = c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).ToNot(HaveOccurred())
 
 				// exactly one upload before the resync, one after it recovers — never
@@ -399,10 +442,15 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("gives up an endlessly-flaky resync on its own bounded budget, independent of persistAttempts", func() {
-				fs := &alwaysFailDownloadStorage{Storage: storage, downloadErr: errtypes.TooEarly("injected"), uploadErr: errtypes.Aborted("injected")}
+				fs := &alwaysFailDownloadStorage{Storage: storage}
 				c2 := receivedsharecache.New(fs, 0*time.Second)
+				// warm the cache, so Remove starts with the persist attempt
+				_, err := c2.Get(ctx, userID, spaceID, shareID)
+				Expect(err).ToNot(HaveOccurred())
+				fs.downloadErr = errtypes.TooEarly("injected")
+				fs.uploadErr = errtypes.Aborted("injected")
 
-				err := c2.Remove(ctx, userID, spaceID, shareID)
+				err = c2.Remove(ctx, userID, spaceID, shareID)
 				Expect(err).To(HaveOccurred())
 				// persistFunc/Upload is only ever called once: the single real persist
 				// attempt that set needsResync. You cannot safely retry a CAS write
@@ -504,7 +552,10 @@ type alwaysFailDownloadStorage struct {
 	uploads     int32
 }
 
-func (a *alwaysFailDownloadStorage) Download(_ context.Context, _ metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+func (a *alwaysFailDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if a.downloadErr == nil {
+		return a.Storage.Download(ctx, req)
+	}
 	atomic.AddInt32(&a.downloads, 1)
 	return nil, a.downloadErr
 }

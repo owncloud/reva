@@ -153,7 +153,13 @@ func (c *Cache) Remove(ctx context.Context, userid, shareID string) error {
 	span.SetAttributes(attribute.String("cs3.userid", userid))
 	defer unlock()
 
-	if _, ok := c.UserShares.Load(userid); !ok {
+	storageid, spaceid, _ := shareid.Decode(shareID)
+	ssid := storageid + shareid.IDDelimiter + spaceid
+
+	// When the share is not in memory, sync first. A cold or stale cache does
+	// not show if the share is in the file. When the share is in memory,
+	// the CAS write in Persist detects stale state.
+	if !c.has(userid, ssid, shareID) {
 		err := c.syncWithRetry(ctx, userid)
 		if err != nil {
 			return err
@@ -164,18 +170,12 @@ func (c *Cache) Remove(ctx context.Context, userid, shareID string) error {
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
 
-	storageid, spaceid, _ := shareid.Decode(shareID)
-	ssid := storageid + shareid.IDDelimiter + spaceid
-
 	persistFunc := func() error {
-		us, loaded := c.UserShares.LoadOrStore(userid, &UserShareCache{
-			UserShares: map[string]*SpaceShareIDs{},
-		})
-
-		if loaded {
-			// remove share id
-			delete(us.UserShares[ssid].IDs, shareID)
+		if !c.has(userid, ssid, shareID) {
+			return nil // nothing to remove, do not upload
 		}
+		us, _ := c.UserShares.Load(userid)
+		delete(us.UserShares[ssid].IDs, shareID)
 
 		return c.Persist(ctx, userid)
 	}
@@ -366,6 +366,16 @@ func (c *Cache) syncWithRetry(ctx context.Context, userID string) error {
 
 func (c *Cache) userCreatedPath(userid string) string {
 	return filepath.Join("/", c.namespace, userid, c.filename)
+}
+
+// has reports if the in-memory state has the share. The caller must hold the user lock.
+func (c *Cache) has(userid, ssid, shareID string) bool {
+	us, ok := c.UserShares.Load(userid)
+	if !ok || us.UserShares[ssid] == nil {
+		return false
+	}
+	_, ok = us.UserShares[ssid].IDs[shareID]
+	return ok
 }
 
 func (c *Cache) initializeIfNeeded(userid, ssid string) {

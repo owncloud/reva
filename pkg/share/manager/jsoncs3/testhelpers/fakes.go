@@ -41,6 +41,25 @@ func (e *ErrOnceDownloadStorage) Download(ctx context.Context, req metadata.Down
 	return e.Storage.Download(ctx, req)
 }
 
+// CountingUploadStorage counts Upload calls and delegates them.
+// When FailPath is set, each Upload to that exact path fails with
+// errtypes.PermissionDenied and is not counted.
+// Set FailPath only while no other goroutine uses the storage.
+type CountingUploadStorage struct {
+	metadata.Storage
+	FailPath string
+	Uploads  int32
+}
+
+// Upload counts the call and delegates to the wrapped Storage, or fails for FailPath.
+func (c *CountingUploadStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if c.FailPath != "" && req.Path == c.FailPath {
+		return nil, errtypes.PermissionDenied("injected upload failure for " + req.Path)
+	}
+	atomic.AddInt32(&c.Uploads, 1)
+	return c.Storage.Upload(ctx, req)
+}
+
 // AlwaysAbortedUploadStorage fails every Upload with errtypes.Aborted, never delegating.
 type AlwaysAbortedUploadStorage struct {
 	metadata.Storage

@@ -167,13 +167,25 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
 
-	err := c.retryPersist(ctx, userID, spaceID, func() error {
-		c.initializeIfNeeded(userID, spaceID)
+	// When the share is not in memory, sync first. A cold or stale cache does
+	// not show if the share is in received.json. When the share is in memory,
+	// the CAS write in persist detects stale state.
+	if !c.has(userID, spaceID, shareID) {
+		if err := c.syncWithRetry(ctx, userID); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return err
+		}
+	}
 
-		rss, _ := c.ReceivedSpaces.Load(userID)
+	err := c.retryPersist(ctx, userID, spaceID, func() error {
+		rss, ok := c.ReceivedSpaces.Load(userID)
+		if !ok || rss.Spaces[spaceID] == nil {
+			return nil // nothing to remove, do not upload
+		}
 		receivedSpace := rss.Spaces[spaceID]
-		if receivedSpace.States == nil {
-			receivedSpace.States = map[string]*State{}
+		if _, ok := receivedSpace.States[shareID]; !ok {
+			return nil // nothing to remove, do not upload
 		}
 		delete(receivedSpace.States, shareID)
 		if len(receivedSpace.States) == 0 {
@@ -438,6 +450,16 @@ func (c *Cache) persist(ctx context.Context, userID string) error {
 
 func userJSONPath(userID string) string {
 	return filepath.Join("/users", userID, "received.json")
+}
+
+// has reports if the in-memory state has the share. The caller must hold the user lock.
+func (c *Cache) has(userID, spaceID, shareID string) bool {
+	rss, ok := c.ReceivedSpaces.Load(userID)
+	if !ok || rss.Spaces[spaceID] == nil {
+		return false
+	}
+	_, ok = rss.Spaces[spaceID].States[shareID]
+	return ok
 }
 
 func (c *Cache) initializeIfNeeded(userID, spaceID string) {

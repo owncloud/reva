@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	gatewayv1beta1 "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	groupv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
@@ -39,6 +40,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/sharecache"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
+	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/owncloud/reva/v2/tests/cs3mocks/mocks"
@@ -269,6 +271,56 @@ var _ = Describe("Jsoncs3", func() {
 				Grantee:    grant.Grantee,
 			})
 			Expect(s).ToNot(BeNil())
+		})
+	})
+
+	// A partial write failure must not leave a group entry
+	// that has no share. Such an entry is a stale group share.
+	Context("with a failing metadata write", func() {
+		var (
+			cs      *helpers.CountingUploadStorage
+			fm      *jsoncs3.Manager
+			ssid    = "storageid2:spaceid2"
+			groupOf = func() map[string]struct{} {
+				fresh, err := jsoncs3.New(storage, nil, 0, nil, 0) // read the state on storage
+				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				list, err := fresh.GroupReceivedCache.List(ctx, "group1")
+				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				return list[ssid].IDs
+			}
+		)
+
+		BeforeEach(func() {
+			cs = &helpers.CountingUploadStorage{Storage: storage}
+			var err error
+			fm, err = jsoncs3.New(cs, nil, 0, nil, 0)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("does not leave a group entry when Share cannot store the share", func() {
+			cs.FailPath = "/storages/storageid2/spaceid2.json"
+			_, err := fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).To(HaveOccurred())
+			cs.FailPath = ""
+
+			Expect(groupOf()).To(BeEmpty())
+		})
+
+		It("does not leave a group entry without a share when Unshare cannot update the group cache", func() {
+			s, err := fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).ToNot(HaveOccurred())
+
+			cs.FailPath = "/groups/group1/received.json"
+			err = fm.Unshare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			Expect(err).To(HaveOccurred())
+			cs.FailPath = ""
+
+			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+			Expect(err).ToNot(HaveOccurred())
+			_, getErr := fresh.GetShare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			if getErr != nil {
+				Expect(groupOf()).ToNot(HaveKey(s.Id.OpaqueId), "the share is gone, so the group entry must be gone too")
+			}
 		})
 	})
 
@@ -859,6 +911,106 @@ var _ = Describe("Jsoncs3", func() {
 					received, err := m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(len(received)).To(Equal(2))
+				})
+
+				// A stale group share is an ID in the group cache
+				// that has no share in the provider cache.
+				Context("with a stale group share", func() {
+					var ghostID string
+
+					BeforeEach(func() {
+						ghostID = shareid.Encode("storageid", "spaceid", "ghost")
+						Expect(m.GroupReceivedCache.Add(ctx, "group1", ghostID)).To(Succeed())
+					})
+
+					It("does not list the stale share", func() {
+						received, err := m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+						ids := []string{}
+						for _, s := range received {
+							ids = append(ids, s.Share.Id.OpaqueId)
+						}
+						Expect(ids).To(ConsistOf(share.Id.OpaqueId, gshare.Id.OpaqueId))
+					})
+
+					It("removes the stale share from the group cache and persists the removal", func() {
+						_, err := m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+
+						m2, err := jsoncs3.New(storage, nil, 0, nil, 0) // Reset in-memory cache
+						Expect(err).ToNot(HaveOccurred())
+						list, err := m2.GroupReceivedCache.List(ctx, "group1")
+						Expect(err).ToNot(HaveOccurred())
+						Expect(list["storageid:spaceid"].IDs).ToNot(HaveKey(ghostID))
+						Expect(list["storageid:spaceid"].IDs).To(HaveKey(gshare.Id.OpaqueId), "the valid group share must stay")
+					})
+
+					It("does not upload anything on the listings after the first one", func() {
+						cs := &helpers.CountingUploadStorage{Storage: storage}
+						m2, err := jsoncs3.New(cs, nil, 0, nil, 0)
+						Expect(err).ToNot(HaveOccurred())
+
+						_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+						afterFirst := atomic.LoadInt32(&cs.Uploads)
+
+						for i := 0; i < 3; i++ {
+							_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+							Expect(err).ToNot(HaveOccurred())
+						}
+						Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(afterFirst), "a stale group share must not cause an upload on each listing")
+					})
+
+					It("removes the stale share of a user in more than one group", func() {
+						// group2 has a share in another space only.
+						group2Grant := &collaboration.ShareGrant{
+							Grantee: &provider.Grantee{
+								Type: provider.GranteeType_GRANTEE_TYPE_GROUP,
+								Id:   &provider.Grantee_GroupId{GroupId: &groupv1beta1.GroupId{OpaqueId: "group2"}},
+							},
+							Permissions: groupGrant.Permissions,
+						}
+						g2share, err := m.Share(ctx, sharedResource2, group2Grant)
+						Expect(err).ToNot(HaveOccurred())
+
+						twoGroupsCtx := ctxpkg.ContextSetUser(context.Background(), &userpb.User{
+							Id:     user2.Id,
+							Groups: []string{"group2", "group1"},
+						})
+						received, err := m.ListReceivedShares(twoGroupsCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(received).To(HaveLen(3))
+
+						list, err := m.GroupReceivedCache.List(ctx, "group1")
+						Expect(err).ToNot(HaveOccurred())
+						Expect(list["storageid:spaceid"].IDs).ToNot(HaveKey(ghostID))
+
+						list, err = m.GroupReceivedCache.List(ctx, "group2")
+						Expect(err).ToNot(HaveOccurred())
+						Expect(list["storageid2:spaceid2"].IDs).To(HaveKey(g2share.Id.OpaqueId), "the group2 share must stay")
+					})
+
+					It("removes the stale share when the user accepted it before", func() {
+						ghost := &collaboration.Share{
+							Id:         &collaboration.ShareId{OpaqueId: ghostID},
+							ResourceId: sharedResource.Id,
+							Grantee:    groupGrant.Grantee,
+						}
+						Expect(m.UserReceivedStates.Add(ctx, user2.Id.OpaqueId, "storageid:spaceid", &collaboration.ReceivedShare{
+							Share: ghost,
+							State: collaboration.ShareState_SHARE_STATE_ACCEPTED,
+						})).To(Succeed())
+
+						_, err := m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+
+						list, err := m.GroupReceivedCache.List(ctx, "group1")
+						Expect(err).ToNot(HaveOccurred())
+						Expect(list["storageid:spaceid"].IDs).ToNot(HaveKey(ghostID))
+						state, err := m.UserReceivedStates.Get(ctx, user2.Id.OpaqueId, "storageid:spaceid", ghostID)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(state).To(BeNil())
+					})
 				})
 			})
 		})

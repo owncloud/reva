@@ -20,6 +20,8 @@ package jsoncs3
 
 import (
 	"context"
+	stderrors "errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -272,7 +274,8 @@ func (m *Manager) initialize(ctx context.Context) error {
 func (m *Manager) ProcessEvents(ch <-chan events.Event) {
 	log := logger.New()
 	for event := range ch {
-		ctx := context.Background()
+		// Put the logger into the context. Without it, the code below logs to a disabled logger.
+		ctx := log.WithContext(context.Background())
 
 		if err := m.initialize(ctx); err != nil {
 			log.Error().Err(err).Msg("error initializing manager")
@@ -280,7 +283,11 @@ func (m *Manager) ProcessEvents(ch <-chan events.Event) {
 
 		if ev, ok := event.Event.(events.SpaceDeleted); ok {
 			log.Debug().Msgf("space deleted event: %v", ev)
-			go func() { m.purgeSpace(ctx, ev.ID) }()
+			go func() {
+				if err := m.purgeSpace(ctx, ev.ID); err != nil {
+					log.Error().Err(err).Str("spaceid", ev.ID.GetOpaqueId()).Msg("could not remove all shares of the deleted space")
+				}
+			}()
 		}
 	}
 }
@@ -339,10 +346,13 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 		Mtime:       ts,
 	}
 
-	eg, ctx := errgroup.WithContext(ctx)
+	// Write the share first, then the entry for the grantee. When the share
+	// cannot be stored, no grantee entry exists without a share.
+	// A listing that sees the grantee entry then always finds the share.
+	eg, egctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		err := m.Cache.Add(ctx, md.Id.StorageId, md.Id.SpaceId, shareID, s)
+		err := m.Cache.Add(egctx, md.Id.StorageId, md.Id.SpaceId, shareID, s)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
@@ -352,7 +362,7 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 	})
 
 	eg.Go(func() error {
-		err := m.CreatedCache.Add(ctx, s.GetCreator().GetOpaqueId(), shareID)
+		err := m.CreatedCache.Add(egctx, s.GetCreator().GetOpaqueId(), shareID)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
@@ -360,40 +370,29 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 
 		return err
 	})
+
+	if err = eg.Wait(); err != nil {
+		return nil, err
+	}
 
 	spaceID := md.Id.StorageId + shareid.IDDelimiter + md.Id.SpaceId
 	// set flag for grantee to have access to share
 	switch g.Grantee.Type {
 	case provider.GranteeType_GRANTEE_TYPE_USER:
-		eg.Go(func() error {
-			userid := g.Grantee.GetUserId().GetOpaqueId()
+		userid := g.Grantee.GetUserId().GetOpaqueId()
 
-			rs := &collaboration.ReceivedShare{
-				Share: s,
-				State: collaboration.ShareState_SHARE_STATE_PENDING,
-			}
-			err := m.UserReceivedStates.Add(ctx, userid, spaceID, rs)
-			if err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-			}
-
-			return err
-		})
+		rs := &collaboration.ReceivedShare{
+			Share: s,
+			State: collaboration.ShareState_SHARE_STATE_PENDING,
+		}
+		err = m.UserReceivedStates.Add(ctx, userid, spaceID, rs)
 	case provider.GranteeType_GRANTEE_TYPE_GROUP:
-		eg.Go(func() error {
-			groupid := g.Grantee.GetGroupId().GetOpaqueId()
-			err := m.GroupReceivedCache.Add(ctx, groupid, shareID)
-			if err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-			}
-
-			return err
-		})
+		groupid := g.Grantee.GetGroupId().GetOpaqueId()
+		err = m.GroupReceivedCache.Add(ctx, groupid, shareID)
 	}
-
-	if err = eg.Wait(); err != nil {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 
@@ -853,6 +852,9 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 	}
 
 	ssids := map[string]*receivedsharecache.Space{}
+	// groupsOfShare holds the groups that give each share ID, for the cleanup of
+	// stale group shares. The workers below only read it.
+	groupsOfShare := map[string][]string{}
 
 	// first collect all spaceids the user has access to as a group member
 	for _, group := range user.Groups {
@@ -876,6 +878,7 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 				rs.States[shareid] = &receivedsharecache.State{
 					State: collaboration.ShareState_SHARE_STATE_PENDING,
 				}
+				groupsOfShare[shareid] = append(groupsOfShare[shareid], group)
 			}
 		}
 	}
@@ -943,8 +946,25 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						continue
 					}
 					if s == nil {
+						// Read the share again from storage before the cleanup.
+						// The in-memory provider cache can miss a share that is new.
+						s, err = m.Cache.Get(ctx, storageID, spaceID, shareID, false)
+						if err != nil {
+							sublogr.Error().Err(err).Msg("could not retrieve share")
+							continue
+						}
+					}
+					if s == nil {
 						sublogr.Warn().Str("shareid", shareID).Msg("share not found. cleaning up")
-						_ = m.UserReceivedStates.Remove(ctx, user.Id.OpaqueId, w.ssid, shareID)
+						if err := m.UserReceivedStates.Remove(ctx, user.Id.OpaqueId, w.ssid, shareID); err != nil {
+							sublogr.Error().Err(err).Str("shareid", shareID).Msg("could not remove stale share from the user received states")
+						}
+						// A stale group share is in the group cache, not in received.json.
+						for _, group := range groupsOfShare[shareID] {
+							if err := m.GroupReceivedCache.Remove(ctx, group, shareID); err != nil {
+								sublogr.Error().Err(err).Str("shareid", shareID).Str("groupid", group).Msg("could not remove stale share from the group cache")
+							}
+						}
 						continue
 					}
 					sublogr = sublogr.With().Str("shareid", shareID).Logger()
@@ -1179,61 +1199,71 @@ func (m *Manager) Load(ctx context.Context, shareChan <-chan *collaboration.Shar
 	return nil
 }
 
-func (m *Manager) purgeSpace(ctx context.Context, id *provider.StorageSpaceId) {
-	log := appctx.GetLogger(ctx)
+// purgeSpace removes all shares of a deleted space. It continues after an
+// error, because the space is gone. It returns all errors, so the caller
+// can report them.
+func (m *Manager) purgeSpace(ctx context.Context, id *provider.StorageSpaceId) error {
 	storageID, spaceID := storagespace.SplitStorageID(id.OpaqueId)
 
 	shares, err := m.Cache.ListSpace(ctx, storageID, spaceID)
 	if err != nil {
-		log.Error().Err(err).Msg("error listing shares in space")
-		return
+		return fmt.Errorf("could not list the shares in space %s: %w", id.GetOpaqueId(), err)
 	}
 
-	// iterate over all shares in the space and remove them
+	var errs []error
 	for _, share := range shares.Shares {
-		err := m.removeShare(ctx, share, true)
-		if err != nil {
-			log.Error().Err(err).Msg("error removing share")
+		if err := m.removeShare(ctx, share, true); err != nil {
+			errs = append(errs, fmt.Errorf("could not remove share %s: %w", share.GetId().GetOpaqueId(), err))
 		}
 	}
 
-	// remove all shares in the space
-	err = m.Cache.PurgeSpace(ctx, storageID, spaceID)
-	if err != nil {
-		log.Error().Err(err).Msg("error purging space")
+	if err := m.Cache.PurgeSpace(ctx, storageID, spaceID); err != nil {
+		errs = append(errs, fmt.Errorf("could not purge space %s: %w", id.GetOpaqueId(), err))
 	}
+	return stderrors.Join(errs...)
 }
 
-func (m *Manager) removeShare(ctx context.Context, s *collaboration.Share, skipSpaceCache bool) error {
+// removeShare removes a share and its entries. Set purgingSpace when the
+// caller removes the space entry itself, because the space is deleted.
+func (m *Manager) removeShare(ctx context.Context, s *collaboration.Share, purgingSpace bool) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "removeShare")
 	defer span.End()
 
-	eg, ctx := errgroup.WithContext(ctx)
-	if !skipSpaceCache {
+	// Remove the entry for the grantee first, then the share. When the grantee
+	// entry cannot be removed, the share stays and the caller can try again.
+	// Thus no grantee entry stays without a share.
+	var granteeErr error
+	switch s.GetGrantee().Type {
+	case provider.GranteeType_GRANTEE_TYPE_USER:
+		granteeErr = m.UserReceivedStates.Remove(ctx, s.GetGrantee().GetUserId().GetOpaqueId(), s.GetResourceId().GetStorageId()+shareid.IDDelimiter+s.GetResourceId().GetSpaceId(), s.Id.OpaqueId)
+	case provider.GranteeType_GRANTEE_TYPE_GROUP:
+		granteeErr = m.GroupReceivedCache.Remove(ctx, s.GetGrantee().GetGroupId().GetOpaqueId(), s.Id.OpaqueId)
+	}
+	if granteeErr != nil {
+		span.RecordError(granteeErr)
+		span.SetStatus(codes.Error, granteeErr.Error())
+		// In a purge, the space entry goes in any case. Continue, so that
+		// created.json does not keep the ID. The next listing of a grantee
+		// removes the stale grantee entry.
+		if !purgingSpace {
+			return granteeErr
+		}
+	}
+
+	eg, egctx := errgroup.WithContext(ctx)
+	if !purgingSpace {
 		eg.Go(func() error {
 			storageID, spaceID, _ := shareid.Decode(s.Id.OpaqueId)
-			err := m.Cache.Remove(ctx, storageID, spaceID, s.Id.OpaqueId)
-
-			return err
+			return m.Cache.Remove(egctx, storageID, spaceID, s.Id.OpaqueId)
 		})
 	}
 
 	eg.Go(func() error {
 		// remove from created cache
-		return m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), s.Id.OpaqueId)
+		return m.CreatedCache.Remove(egctx, s.GetCreator().GetOpaqueId(), s.Id.OpaqueId)
 	})
 
-	eg.Go(func() error {
-		// remove from user received states
-		if s.GetGrantee().Type == provider.GranteeType_GRANTEE_TYPE_USER {
-			return m.UserReceivedStates.Remove(ctx, s.GetGrantee().GetUserId().GetOpaqueId(), s.GetResourceId().GetStorageId()+shareid.IDDelimiter+s.GetResourceId().GetSpaceId(), s.Id.OpaqueId)
-		} else if s.GetGrantee().Type == provider.GranteeType_GRANTEE_TYPE_GROUP {
-			return m.GroupReceivedCache.Remove(ctx, s.GetGrantee().GetGroupId().GetOpaqueId(), s.Id.OpaqueId)
-		}
-		return nil
-	})
-
-	return eg.Wait()
+	return stderrors.Join(granteeErr, eg.Wait())
 }
 
 func (m *Manager) CleanupStaleShares(ctx context.Context) {

@@ -30,6 +30,7 @@ import (
 
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/sharecache"
+	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
@@ -137,6 +138,29 @@ var _ = Describe("Sharecache", func() {
 			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
 			Expect(c2.Remove(ctx, userid, shareID)).To(Succeed())
 			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)), "a cold Remove should sync first instead of blindly uploading an empty cache")
+		})
+
+		// The cleanup of a stale group share calls Remove on the group cache.
+		// The group can have entries in other spaces only.
+		It("does not panic when the user has no entry for the space of the share", func() {
+			Expect(c.Add(ctx, userid, shareid.Encode("storageid", "spaceid", "s1"))).To(Succeed())
+
+			Expect(func() {
+				Expect(c.Remove(ctx, userid, shareid.Encode("storageid", "otherspace", "s2"))).To(Succeed())
+			}).ToNot(Panic())
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey("storageid:spaceid:s1"))
+		})
+
+		It("does not upload when the share is not in the cache", func() {
+			Expect(c.Add(ctx, userid, shareid.Encode("storageid", "spaceid", "s1"))).To(Succeed())
+
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+			Expect(c2.Remove(ctx, userid, shareid.Encode("storageid", "spaceid", "unknown"))).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
 		})
 
 		It("clears the stale in-memory shares instead of returning deleted data", func() {
