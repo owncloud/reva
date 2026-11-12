@@ -254,6 +254,26 @@ var _ = Describe("Node", func() {
 		})
 	})
 	Describe("Permissions", func() {
+		It("does not panic and grants no access when a grant of the user cannot be read", func() {
+			storageSpace, err := env.CreateTestStorageSpace("project", &provider.Quota{QuotaMaxBytes: 2000})
+			Expect(err).ToNot(HaveOccurred())
+			spaceRoot, err := env.Lookup.NodeFromSpaceID(env.Ctx, storageSpace.SpaceId)
+			Expect(err).ToNot(HaveOccurred())
+			u := ctxpkg.ContextMustGetUser(env.Ctx)
+
+			// a value with an unknown encoding makes ReadGrant return a nil grant and an error
+			err = spaceRoot.SetXattr(env.Ctx, prefixes.GrantUserAcePrefix+u.Id.OpaqueId, []byte{1})
+			Expect(err).ToNot(HaveOccurred())
+
+			var perms *provider.ResourcePermissions
+			var denied bool
+			Expect(func() {
+				perms, denied, err = spaceRoot.ReadUserPermissions(env.Ctx, u)
+			}).ToNot(Panic())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(denied).To(BeFalse())
+			Expect(grants.PermissionsEqual(perms, &provider.ResourcePermissions{})).To(BeTrue())
+		})
 		It("Checks the owner permissions on a personal space", func() {
 			node1, err := env.Lookup.NodeFromSpaceID(env.Ctx, env.SpaceRootRes.SpaceId)
 			Expect(err).ToNot(HaveOccurred())
