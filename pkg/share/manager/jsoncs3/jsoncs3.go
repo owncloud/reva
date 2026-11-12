@@ -50,6 +50,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/codes"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/genproto/protobuf/field_mask"
@@ -274,8 +275,11 @@ func (m *Manager) initialize(ctx context.Context) error {
 func (m *Manager) ProcessEvents(ch <-chan events.Event) {
 	log := logger.New()
 	for event := range ch {
-		// Put the logger into the context. Without it, the code below logs to a disabled logger.
-		ctx := log.WithContext(context.Background())
+		// Put a logger into the context. Without it, the code below logs to a
+		// disabled logger. Log only warnings and errors, because this logger
+		// does not use the configured log level.
+		ctxLog := log.Level(zerolog.WarnLevel)
+		ctx := ctxLog.WithContext(context.Background())
 
 		if err := m.initialize(ctx); err != nil {
 			log.Error().Err(err).Msg("error initializing manager")
@@ -349,48 +353,41 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 	// Write the share first, then the entry for the grantee. When the share
 	// cannot be stored, no grantee entry exists without a share.
 	// A listing that sees the grantee entry then always finds the share.
-	eg, egctx := errgroup.WithContext(ctx)
-
-	eg.Go(func() error {
-		err := m.Cache.Add(egctx, md.Id.StorageId, md.Id.SpaceId, shareID, s)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+	// When a write fails, remove what was written. Otherwise the share stays
+	// without a grantee entry, and a new Share fails with AlreadyExists.
+	rollback := func() {
+		log := appctx.GetLogger(ctx)
+		if err := m.Cache.Remove(ctx, md.Id.StorageId, md.Id.SpaceId, shareID); err != nil {
+			log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the share in the provider cache")
 		}
-
-		return err
-	})
-
-	eg.Go(func() error {
-		err := m.CreatedCache.Add(egctx, s.GetCreator().GetOpaqueId(), shareID)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+		if err := m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), shareID); err != nil {
+			log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the share in the created cache")
 		}
-
-		return err
-	})
-
-	if err = eg.Wait(); err != nil {
-		return nil, err
 	}
 
-	spaceID := md.Id.StorageId + shareid.IDDelimiter + md.Id.SpaceId
-	// set flag for grantee to have access to share
-	switch g.Grantee.Type {
-	case provider.GranteeType_GRANTEE_TYPE_USER:
-		userid := g.Grantee.GetUserId().GetOpaqueId()
+	err = runAll(
+		func() error { return m.Cache.Add(ctx, md.Id.StorageId, md.Id.SpaceId, shareID, s) },
+		func() error { return m.CreatedCache.Add(ctx, s.GetCreator().GetOpaqueId(), shareID) },
+	)
+	if err == nil {
+		spaceID := md.Id.StorageId + shareid.IDDelimiter + md.Id.SpaceId
+		// set flag for grantee to have access to share
+		switch g.Grantee.Type {
+		case provider.GranteeType_GRANTEE_TYPE_USER:
+			userid := g.Grantee.GetUserId().GetOpaqueId()
 
-		rs := &collaboration.ReceivedShare{
-			Share: s,
-			State: collaboration.ShareState_SHARE_STATE_PENDING,
+			rs := &collaboration.ReceivedShare{
+				Share: s,
+				State: collaboration.ShareState_SHARE_STATE_PENDING,
+			}
+			err = m.UserReceivedStates.Add(ctx, userid, spaceID, rs)
+		case provider.GranteeType_GRANTEE_TYPE_GROUP:
+			groupid := g.Grantee.GetGroupId().GetOpaqueId()
+			err = m.GroupReceivedCache.Add(ctx, groupid, shareID)
 		}
-		err = m.UserReceivedStates.Add(ctx, userid, spaceID, rs)
-	case provider.GranteeType_GRANTEE_TYPE_GROUP:
-		groupid := g.Grantee.GetGroupId().GetOpaqueId()
-		err = m.GroupReceivedCache.Add(ctx, groupid, shareID)
 	}
 	if err != nil {
+		rollback()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -933,26 +930,24 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 				storageID, spaceID, _ := shareid.Decode(w.ssid)
 				sublogr := sublog.With().Str("storageid", storageID).Str("spaceid", spaceID).Logger()
 				// fetch all shares from space with one request
-				_, err := m.Cache.ListSpace(ctx, storageID, spaceID)
+				spaceShares, err := m.Cache.ListSpace(ctx, storageID, spaceID)
 				if err != nil {
 					sublogr.Error().Err(err).
 						Msg("failed to list shares in space")
 					continue
 				}
+				// An empty etag means that the space file was not found. That can be
+				// temporary, so it is no proof that a share is gone.
+				spaceFileRead := spaceShares.Etag != ""
 				for shareID, state := range w.rspace.States {
 					s, err := m.Cache.Get(ctx, storageID, spaceID, shareID, true)
 					if err != nil {
 						sublogr.Error().Err(err).Msg("could not retrieve share")
 						continue
 					}
-					if s == nil {
-						// Read the share again from storage before the cleanup.
-						// The in-memory provider cache can miss a share that is new.
-						s, err = m.Cache.Get(ctx, storageID, spaceID, shareID, false)
-						if err != nil {
-							sublogr.Error().Err(err).Msg("could not retrieve share")
-							continue
-						}
+					if s == nil && !spaceFileRead {
+						sublogr.Debug().Str("shareid", shareID).Msg("share not found, but the space file was not read. skipping the cleanup")
+						continue
 					}
 					if s == nil {
 						sublogr.Warn().Str("shareid", shareID).Msg("share not found. cleaning up")
@@ -1229,41 +1224,57 @@ func (m *Manager) removeShare(ctx context.Context, s *collaboration.Share, purgi
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "removeShare")
 	defer span.End()
 
-	// Remove the entry for the grantee first, then the share. When the grantee
-	// entry cannot be removed, the share stays and the caller can try again.
-	// Thus no grantee entry stays without a share.
-	var granteeErr error
-	switch s.GetGrantee().Type {
-	case provider.GranteeType_GRANTEE_TYPE_USER:
-		granteeErr = m.UserReceivedStates.Remove(ctx, s.GetGrantee().GetUserId().GetOpaqueId(), s.GetResourceId().GetStorageId()+shareid.IDDelimiter+s.GetResourceId().GetSpaceId(), s.Id.OpaqueId)
-	case provider.GranteeType_GRANTEE_TYPE_GROUP:
-		granteeErr = m.GroupReceivedCache.Remove(ctx, s.GetGrantee().GetGroupId().GetOpaqueId(), s.Id.OpaqueId)
-	}
-	if granteeErr != nil {
-		span.RecordError(granteeErr)
-		span.SetStatus(codes.Error, granteeErr.Error())
-		// In a purge, the space entry goes in any case. Continue, so that
-		// created.json does not keep the ID. The next listing of a grantee
-		// removes the stale grantee entry.
-		if !purgingSpace {
-			return granteeErr
+	removeGrantee := func() error {
+		switch s.GetGrantee().Type {
+		case provider.GranteeType_GRANTEE_TYPE_USER:
+			return m.UserReceivedStates.Remove(ctx, s.GetGrantee().GetUserId().GetOpaqueId(), s.GetResourceId().GetStorageId()+shareid.IDDelimiter+s.GetResourceId().GetSpaceId(), s.Id.OpaqueId)
+		case provider.GranteeType_GRANTEE_TYPE_GROUP:
+			return m.GroupReceivedCache.Remove(ctx, s.GetGrantee().GetGroupId().GetOpaqueId(), s.Id.OpaqueId)
 		}
+		return nil
+	}
+	removeCreated := func() error {
+		return m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), s.Id.OpaqueId)
 	}
 
-	eg, egctx := errgroup.WithContext(ctx)
-	if !purgingSpace {
-		eg.Go(func() error {
-			storageID, spaceID, _ := shareid.Decode(s.Id.OpaqueId)
-			return m.Cache.Remove(egctx, storageID, spaceID, s.Id.OpaqueId)
-		})
+	var err error
+	if purgingSpace {
+		// The caller purges the space entry. The order of the other writes does not matter.
+		err = runAll(removeGrantee, removeCreated)
+	} else {
+		// Remove the entry for the grantee first, then the share. Continue also
+		// after an error: the gateway removes the storage grant in any case.
+		// The next listing of a grantee removes a stale grantee entry.
+		granteeErr := removeGrantee()
+		err = stderrors.Join(granteeErr, runAll(
+			func() error {
+				storageID, spaceID, _ := shareid.Decode(s.Id.OpaqueId)
+				return m.Cache.Remove(ctx, storageID, spaceID, s.Id.OpaqueId)
+			},
+			removeCreated,
+		))
 	}
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
 
-	eg.Go(func() error {
-		// remove from created cache
-		return m.CreatedCache.Remove(egctx, s.GetCreator().GetOpaqueId(), s.Id.OpaqueId)
-	})
-
-	return stderrors.Join(granteeErr, eg.Wait())
+// runAll runs the functions at the same time and returns all errors.
+// It does not cancel a function when another one fails.
+func runAll(fns ...func() error) error {
+	errs := make([]error, len(fns))
+	var wg sync.WaitGroup
+	for i, fn := range fns {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = fn()
+		}()
+	}
+	wg.Wait()
+	return stderrors.Join(errs...)
 }
 
 func (m *Manager) CleanupStaleShares(ctx context.Context) {

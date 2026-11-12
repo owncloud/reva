@@ -306,21 +306,74 @@ var _ = Describe("Jsoncs3", func() {
 			Expect(groupOf()).To(BeEmpty())
 		})
 
-		It("does not leave a group entry without a share when Unshare cannot update the group cache", func() {
+		// The gateway removes the storage grant also when RemoveShare fails.
+		// Thus Unshare must remove the share also when the grantee entry cannot be removed.
+		It("removes the share when Unshare cannot update the group cache, and the next listing removes the group entry", func() {
 			s, err := fm.Share(ctx, sharedResource2, groupGrant)
 			Expect(err).ToNot(HaveOccurred())
 
 			cs.FailPath = "/groups/group1/received.json"
 			err = fm.Unshare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			Expect(err).To(HaveOccurred(), "the caller must see the failure")
+			cs.FailPath = ""
+
+			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = fresh.GetShare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			Expect(err).To(HaveOccurred(), "the share must be gone")
+			Expect(groupOf()).To(HaveKey(s.Id.OpaqueId), "the group entry stays until the next listing")
+
+			_, err = fresh.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(groupOf()).ToNot(HaveKey(s.Id.OpaqueId))
+		})
+
+		It("removes the share when Unshare cannot update the received.json of the grantee", func() {
+			s, err := fm.Share(ctx, sharedResource2, grant)
+			Expect(err).ToNot(HaveOccurred())
+
+			cs.FailPath = "/users/einstein/received.json"
+			err = fm.Unshare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			Expect(err).To(HaveOccurred(), "the caller must see the failure")
+			cs.FailPath = ""
+
+			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = fresh.GetShare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			Expect(err).To(HaveOccurred(), "the share must be gone")
+		})
+
+		It("allows a new Share after a Share that could not update the group cache", func() {
+			cs.FailPath = "/groups/group1/received.json"
+			_, err := fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).To(HaveOccurred())
+			cs.FailPath = ""
+
+			_, err = fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).ToNot(HaveOccurred(), "the failed Share must not leave a share that blocks a new one")
+		})
+
+		It("allows a new Share after a Share that could not update created.json", func() {
+			cs.FailPath = "/users/admin/created.json"
+			_, err := fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).To(HaveOccurred())
+			cs.FailPath = ""
+
+			_, err = fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).ToNot(HaveOccurred(), "the failed Share must not leave a share that blocks a new one")
+		})
+
+		It("does not leave a created.json entry when Share cannot store the share", func() {
+			cs.FailPath = "/storages/storageid2/spaceid2.json"
+			_, err := fm.Share(ctx, sharedResource2, groupGrant)
 			Expect(err).To(HaveOccurred())
 			cs.FailPath = ""
 
 			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
 			Expect(err).ToNot(HaveOccurred())
-			_, getErr := fresh.GetShare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
-			if getErr != nil {
-				Expect(groupOf()).ToNot(HaveKey(s.Id.OpaqueId), "the share is gone, so the group entry must be gone too")
-			}
+			created, err := fresh.CreatedCache.List(ctx, "admin")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(created[ssid].IDs).To(BeEmpty())
 		})
 	})
 
@@ -921,6 +974,33 @@ var _ = Describe("Jsoncs3", func() {
 					BeforeEach(func() {
 						ghostID = shareid.Encode("storageid", "spaceid", "ghost")
 						Expect(m.GroupReceivedCache.Add(ctx, "group1", ghostID)).To(Succeed())
+					})
+
+					// A NotFound for the space file can be temporary. Then the provider cache
+					// has an empty space with no etag. That is no proof that the shares are gone.
+					It("keeps all entries when the space file cannot be found", func() {
+						spaceFile := filepath.Join(tmpdir, "storages", "storageid", "spaceid.json")
+						content, err := os.ReadFile(spaceFile)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(os.Remove(spaceFile)).To(Succeed())
+
+						m2, err := jsoncs3.New(storage, nil, 0, nil, 0) // cold cache
+						Expect(err).ToNot(HaveOccurred())
+						_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+
+						// the storage recovers
+						Expect(os.WriteFile(spaceFile, content, 0644)).To(Succeed())
+
+						m3, err := jsoncs3.New(storage, nil, 0, nil, 0)
+						Expect(err).ToNot(HaveOccurred())
+						received, err := m3.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+						Expect(err).ToNot(HaveOccurred())
+						ids := []string{}
+						for _, s := range received {
+							ids = append(ids, s.Share.Id.OpaqueId)
+						}
+						Expect(ids).To(ConsistOf(share.Id.OpaqueId, gshare.Id.OpaqueId), "the user share and the group share must come back")
 					})
 
 					It("does not list the stale share", func() {
