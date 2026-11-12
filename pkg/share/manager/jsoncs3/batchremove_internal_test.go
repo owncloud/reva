@@ -35,6 +35,7 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	microevents "go-micro.dev/v4/events"
@@ -224,4 +225,31 @@ func TestListReceivedSharesRemovesExpiredSharesWithOneUploadPerDocument(t *testi
 
 	g.Expect(uploads).To(Equal(int32(3)))
 	f.expectEmpty(t, []string{"admin"}, []string{"group1"}, nil)
+}
+
+func TestListReceivedSharesRemovesManyStaleGroupSharesWithOneUploadPerGroup(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
+	for _, gid := range []string{"group1", "group2"} {
+		for i := 0; i < 20; i++ {
+			g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), gid, shareid.Encode("storageid", "spaceid", fmt.Sprintf("%s-ghost%d", gid, i)))).To(Succeed())
+		}
+	}
+
+	uploads := f.uploadsDuring(func() {
+		received, err := f.m.ListReceivedShares(ctxOf("einstein", "group1", "group2"), nil, nil)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(received).To(HaveLen(1), "only the valid share")
+	})
+
+	// one upload for each group file
+	g.Expect(uploads).To(Equal(int32(2)))
+	m, err := New(f.storage, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+	for gid, want := range map[string]int{"group1": 1, "group2": 0} {
+		l, err := m.GroupReceivedCache.List(ctxOf("admin"), gid)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(l["storageid:spaceid"].IDs).To(HaveLen(want), gid)
+	}
 }

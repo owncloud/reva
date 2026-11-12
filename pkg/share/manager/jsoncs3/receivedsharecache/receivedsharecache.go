@@ -157,6 +157,12 @@ func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*Stat
 
 // Remove removes an entry from the cache
 func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) error {
+	return c.RemoveMany(ctx, userID, spaceID, []string{shareID})
+}
+
+// RemoveMany removes the given shares of one user in one space with one upload.
+// It does not upload when none of the shares is in the cache.
+func (c *Cache) RemoveMany(ctx context.Context, userID, spaceID string, shareIDs []string) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
 	unlock := c.lockUser(userID)
 	span.SetAttributes(attribute.String("cs3.userid", userID))
@@ -165,16 +171,19 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 
 	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
 	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
+	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID), attribute.Int("cs3.sharecount", len(shareIDs)))
 
-	// When the share is not in memory, sync first. A cold or stale cache does
-	// not show if the share is in received.json. When the share is in memory,
-	// the CAS write in persist detects stale state.
-	if !c.has(userID, spaceID, shareID) {
-		if err := c.syncWithRetry(ctx, userID); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return err
+	// When a share is not in memory, sync first. A cold or stale cache does
+	// not show if the share is in received.json. When all shares are in
+	// memory, the CAS write in persist detects stale state.
+	for _, shareID := range shareIDs {
+		if !c.has(userID, spaceID, shareID) {
+			if err := c.syncWithRetry(ctx, userID); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return err
+			}
+			break
 		}
 	}
 
@@ -184,10 +193,16 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 			return nil // nothing to remove, do not upload
 		}
 		receivedSpace := rss.Spaces[spaceID]
-		if _, ok := receivedSpace.States[shareID]; !ok {
+		removed := false
+		for _, shareID := range shareIDs {
+			if _, ok := receivedSpace.States[shareID]; ok {
+				delete(receivedSpace.States, shareID)
+				removed = true
+			}
+		}
+		if !removed {
 			return nil // nothing to remove, do not upload
 		}
-		delete(receivedSpace.States, shareID)
 		if len(receivedSpace.States) == 0 {
 			delete(rss.Spaces, spaceID)
 		}
