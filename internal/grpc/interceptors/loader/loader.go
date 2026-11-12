@@ -23,5 +23,6 @@ import (
 	_ "github.com/owncloud/reva/v2/internal/grpc/interceptors/eventsmiddleware"
 	_ "github.com/owncloud/reva/v2/internal/grpc/interceptors/prometheus"
 	_ "github.com/owncloud/reva/v2/internal/grpc/interceptors/readonly"
+	_ "github.com/owncloud/reva/v2/internal/grpc/interceptors/vault"
 	// Add your own service here
 )

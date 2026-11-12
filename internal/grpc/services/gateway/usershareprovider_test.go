@@ -24,7 +24,6 @@ import (
 
 	grouppb "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
-	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/conversions"
@@ -143,34 +142,8 @@ func groupGrantee(id string) *provider.Grantee {
 	}
 }
 
-// TestVaultPermissionSubject covers which grantees are eligible for a VaultMode check at all.
-func TestVaultPermissionSubject(t *testing.T) {
-	tests := []struct {
-		name        string
-		grantee     *provider.Grantee
-		wantSubject bool
-	}{
-		{"user grantee is checked", userGrantee("alice"), true},
-		{"group grantee has no subject", groupGrantee("students"), false},
-		{"invalid grantee is denied outright", &provider.Grantee{Type: provider.GranteeType_GRANTEE_TYPE_INVALID}, false},
-		{"nil grantee is denied outright", nil, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := vaultPermissionSubject(tt.grantee)
-			if (got != nil) != tt.wantSubject {
-				t.Fatalf("vaultPermissionSubject() subject = %v, want subject %v", got, tt.wantSubject)
-			}
-			if tt.wantSubject && got.GetUserId().GetOpaqueId() != tt.grantee.GetUserId().GetOpaqueId() {
-				t.Errorf("vaultPermissionSubject() checked %q, want the grantee %q",
-					got.GetUserId().GetOpaqueId(), tt.grantee.GetUserId().GetOpaqueId())
-			}
-		})
-	}
-}
-
-// TestGranteeMayAccessVaultGroups covers the group grantees, which are decided without a VaultMode check.
+// TestGranteeMayAccessVaultGroups covers the grantees that are decided without a VaultMode check.
+// pkg/vault covers the VaultMode check of a user grantee.
 func TestGranteeMayAccessVaultGroups(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -192,34 +165,6 @@ func TestGranteeMayAccessVaultGroups(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("granteeMayAccessVault() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestVaultPermissionGranted covers the fail-closed contract: only a definitive OK grants access.
-func TestVaultPermissionGranted(t *testing.T) {
-	tests := []struct {
-		name    string
-		status  *rpc.Status
-		want    bool
-		wantErr bool
-	}{
-		{"ok grants", &rpc.Status{Code: rpc.Code_CODE_OK}, true, false},
-		{"permission denied denies", &rpc.Status{Code: rpc.Code_CODE_PERMISSION_DENIED}, false, false},
-		{"internal error fails closed", &rpc.Status{Code: rpc.Code_CODE_INTERNAL}, false, true},
-		{"not found fails closed", &rpc.Status{Code: rpc.Code_CODE_NOT_FOUND}, false, true},
-		{"unset status fails closed", nil, false, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := vaultPermissionGranted(tt.status)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("vaultPermissionGranted() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if got != tt.want {
-				t.Errorf("vaultPermissionGranted() = %v, want %v", got, tt.want)
 			}
 		})
 	}
