@@ -19,6 +19,7 @@
 package gateway
 
 import (
+	"context"
 	"testing"
 
 	grouppb "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
@@ -150,7 +151,7 @@ func TestVaultPermissionSubject(t *testing.T) {
 		wantSubject bool
 	}{
 		{"user grantee is checked", userGrantee("alice"), true},
-		{"group grantee is denied outright", groupGrantee("students"), false},
+		{"group grantee has no subject", groupGrantee("students"), false},
 		{"invalid grantee is denied outright", &provider.Grantee{Type: provider.GranteeType_GRANTEE_TYPE_INVALID}, false},
 		{"nil grantee is denied outright", nil, false},
 	}
@@ -164,6 +165,33 @@ func TestVaultPermissionSubject(t *testing.T) {
 			if tt.wantSubject && got.GetUserId().GetOpaqueId() != tt.grantee.GetUserId().GetOpaqueId() {
 				t.Errorf("vaultPermissionSubject() checked %q, want the grantee %q",
 					got.GetUserId().GetOpaqueId(), tt.grantee.GetUserId().GetOpaqueId())
+			}
+		})
+	}
+}
+
+// TestGranteeMayAccessVaultGroups covers the group grantees, which are decided without a VaultMode check.
+func TestGranteeMayAccessVaultGroups(t *testing.T) {
+	tests := []struct {
+		name    string
+		grantee *provider.Grantee
+		want    bool
+	}{
+		{"group grantee is allowed", groupGrantee("students"), true},
+		{"group grantee without id is denied", &provider.Grantee{Type: provider.GranteeType_GRANTEE_TYPE_GROUP}, false},
+		{"invalid grantee is denied", &provider.Grantee{Type: provider.GranteeType_GRANTEE_TYPE_INVALID}, false},
+		{"nil grantee is denied", nil, false},
+	}
+
+	s := &svc{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s.granteeMayAccessVault(context.Background(), tt.grantee)
+			if err != nil {
+				t.Fatalf("granteeMayAccessVault() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("granteeMayAccessVault() = %v, want %v", got, tt.want)
 			}
 		})
 	}
