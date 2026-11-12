@@ -100,6 +100,77 @@ var _ = Describe("ACE", func() {
 		})
 	})
 
+	Describe("unmarshalling invalid values", func() {
+		It("returns an error for an empty value", func() {
+			e, err := ace.Unmarshal("u:einstein", []byte{})
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+		})
+		It("returns an error for an unknown encoding", func() {
+			e, err := ace.Unmarshal("u:einstein", []byte{1})
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+		})
+		It("returns an error and does not panic for a malformed key value body", func() {
+			var (
+				e   *ace.ACE
+				err error
+			)
+			Expect(func() {
+				e, err = ace.Unmarshal("u:einstein", append([]byte{0}, []byte(`t=A:s=notanumber`)...))
+			}).ToNot(Panic())
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+
+			Expect(func() {
+				e, err = ace.Unmarshal("u:einstein", append([]byte{0}, []byte(`t="A`)...))
+			}).ToNot(Panic())
+			Expect(err).To(HaveOccurred())
+			Expect(e).To(BeNil())
+		})
+		DescribeTable("returns an error and does not panic for an invalid principal",
+			func(principal string) {
+				var (
+					e   *ace.ACE
+					err error
+				)
+				Expect(func() {
+					e, err = ace.Unmarshal(principal, append([]byte{0}, []byte("t=A:f=:p=rw:c=:e=0\n")...))
+				}).ToNot(Panic())
+				Expect(err).To(HaveOccurred())
+				Expect(e).To(BeNil())
+			},
+			Entry("empty", ""),
+			Entry("type only", "u"),
+			Entry("no separator", "ux"),
+		)
+		DescribeTable("returns an error and does not panic for a field without a value",
+			func(body string) {
+				var (
+					e   *ace.ACE
+					err error
+				)
+				Expect(func() {
+					e, err = ace.Unmarshal("u:einstein", append([]byte{0}, []byte(body)...))
+				}).ToNot(Panic())
+				Expect(err).To(HaveOccurred())
+				Expect(e).To(BeNil())
+			},
+			Entry("known key", "t:f=:p=rw\n"),
+			Entry("unknown key", "t=A:x:p=rw\n"),
+		)
+		It("keeps the full value when the value contains an equals sign", func() {
+			e, err := ace.Unmarshal("u:einstein", append([]byte{0}, []byte("t=A:f=:p=rw:c=a=b:e=0\n")...))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(e.Grant().GetCreator().GetOpaqueId()).To(Equal("a=b"))
+		})
+		It("ignores empty fields", func() {
+			e, err := ace.Unmarshal("u:einstein", append([]byte{0}, []byte("t=A::p=rw\n")...))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(e.Grant().GetPermissions().GetInitiateFileUpload()).To(BeTrue())
+		})
+	})
+
 	Describe("converting permissions", func() {
 		It("converts t", func() {
 			userGrant.Permissions.Stat = true
