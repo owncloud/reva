@@ -62,7 +62,6 @@ type config struct {
 	GatewayAddr             string                            `mapstructure:"gateway_addr"`
 	UserGroupsCacheSize     int                               `mapstructure:"usergroups_cache_size"`
 	ScopeExpansionCacheSize int                               `mapstructure:"scope_expansion_cache_size"`
-	MFAEnabled              bool                              `mapstructure:"mfa_enabled"`
 }
 
 func parseConfig(m map[string]interface{}) (*config, error) {
@@ -155,14 +154,6 @@ func NewUnary(m map[string]interface{}, unprotected []string, tp trace.TracerPro
 		// store user and scopes in context
 		ctx = ctxpkg.ContextSetUser(ctx, u)
 		ctx = ctxpkg.ContextSetScopes(ctx, tokenScope)
-		// TODO: MFA enforcement should be moved to the individual service level, so each service can
-		// decide which endpoints require MFA and which are accessible without it.
-		if conf.MFAEnabled && u.Id.Type != userpb.UserType_USER_TYPE_SERVICE {
-			if !ctxpkg.HasMFA(ctx) {
-				log.Warn().Str("user_id", u.Id.OpaqueId).Msg("MFA is required")
-				return mfaResponse(ctx, req, info)
-			}
-		}
 
 		span.SetAttributes(semconv.EnduserIDKey.String(u.Id.OpaqueId))
 
@@ -182,6 +173,7 @@ func NewStream(m map[string]interface{}, unprotected []string, tp trace.TracerPr
 	if conf.TokenManager == "" {
 		conf.TokenManager = "jwt"
 	}
+	conf.GatewayAddr = sharedconf.GetGatewaySVC(conf.GatewayAddr)
 
 	if conf.UserGroupsCacheSize == 0 {
 		conf.UserGroupsCacheSize = 10000
@@ -252,14 +244,6 @@ func NewStream(m map[string]interface{}, unprotected []string, tp trace.TracerPr
 		// store user and scopes in context
 		ctx = ctxpkg.ContextSetUser(ctx, u)
 		ctx = ctxpkg.ContextSetScopes(ctx, tokenScope)
-		// TODO: MFA enforcement should be moved to the individual service level, so each service can
-		// decide which endpoints require MFA and which are accessible without it.
-		if conf.MFAEnabled && u.Id.Type != userpb.UserType_USER_TYPE_SERVICE {
-			if !ctxpkg.HasMFA(ctx) {
-				log.Warn().Str("user_id", u.Id.OpaqueId).Msg("MFA is required")
-				return status.Errorf(codes.PermissionDenied, "MFA required to access vault storage")
-			}
-		}
 		wrapped := newWrappedServerStream(ctx, ss)
 
 		span.SetAttributes(semconv.EnduserIDKey.String(u.Id.OpaqueId))
