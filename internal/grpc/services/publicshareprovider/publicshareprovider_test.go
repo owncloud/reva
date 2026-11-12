@@ -1592,6 +1592,97 @@ var _ = Describe("PublicShareProvider", func() {
 				Expect(res.GetStatus().GetMessage()).To(ContainSubstring("characters are required"))
 			})
 		})
+		Context("when the creator promotes an internal link to a public link", func() {
+			BeforeEach(func() {
+				// the existing link is internal (empty permissions) and was created by the
+				// calling user, who already armed it with a password in a previous step
+				existingLink.Permissions = &link.PublicSharePermissions{
+					Permissions: &providerpb.ResourcePermissions{},
+				}
+				existingLink.PasswordProtected = true
+				existingLink.Creator = user.GetId()
+
+				// the promotion request raises the link to a non-internal (edit) type
+				linkPermissions = &providerpb.ResourcePermissions{
+					Stat:                 true,
+					GetPath:              true,
+					InitiateFileDownload: true,
+					InitiateFileUpload:   true,
+					CreateContainer:      true,
+					Delete:               true,
+				}
+				updatedLink = &link.PublicShare{
+					Id:                &link.PublicShareId{OpaqueId: "share-id"},
+					PasswordProtected: true,
+					Permissions: &link.PublicSharePermissions{
+						Permissions: linkPermissions,
+					},
+				}
+
+				manager.
+					EXPECT().
+					GetPublicShare(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+					Once().Return(existingLink, nil)
+
+				// these are only reached on the vulnerable (un-fixed) code path; the fix denies
+				// the promotion before they are called
+				gatewayClient.
+					EXPECT().
+					CheckPermission(mock.Anything, mock.Anything).
+					Return(checkPermissionResponse, nil).Maybe()
+				manager.
+					EXPECT().
+					UpdatePublicShare(mock.Anything, mock.Anything, mock.Anything).
+					Return(updatedLink, nil).Maybe()
+			})
+
+			promotionRequest := func() *link.UpdatePublicShareRequest {
+				return &link.UpdatePublicShareRequest{
+					Update: &link.UpdatePublicShareRequest_Update{
+						Type: link.UpdatePublicShareRequest_Update_TYPE_PERMISSIONS,
+						Grant: &link.Grant{
+							Permissions: &link.PublicSharePermissions{
+								Permissions: linkPermissions,
+							},
+						},
+					},
+					Ref: &link.PublicShareReference{
+						Spec: &link.PublicShareReference_Id{
+							Id: &link.PublicShareId{OpaqueId: "share-id"},
+						},
+					},
+				}
+			}
+
+			It("is denied when public sharing is disabled", func() {
+				revaConfig["enable_public_sharing"] = false
+				var err error
+				provider, err = createPublicShareProvider(revaConfig, gatewaySelector, manager)
+				Expect(err).ToNot(HaveOccurred())
+
+				res, err := provider.UpdatePublicShare(ctx, promotionRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_PERMISSION_DENIED))
+				Expect(res.GetStatus().GetMessage()).To(Equal("public sharing is disabled"))
+			})
+
+			It("is denied when the creator has no resharing permission on the resource", func() {
+				// public sharing is enabled, but the creator only has edit (no resharing) rights
+				statResourceResponse.Info.PermissionSet.AddGrant = false
+
+				res, err := provider.UpdatePublicShare(ctx, promotionRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_INVALID_ARGUMENT))
+				Expect(res.GetStatus().GetMessage()).To(Equal("no share permission"))
+			})
+
+			It("succeeds when public sharing is enabled and the creator may reshare", func() {
+				res, err := provider.UpdatePublicShare(ctx, promotionRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res.GetStatus().GetCode()).To(Equal(rpc.Code_CODE_OK))
+				Expect(res.GetShare()).To(Equal(updatedLink))
+			})
+		})
 		Context("when the user gets a public share", func() {
 			BeforeEach(func() {
 				manager.
