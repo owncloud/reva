@@ -8,8 +8,10 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/storage"
 	"github.com/owncloud/reva/v2/pkg/storagespace"
+	"github.com/owncloud/reva/v2/pkg/upload"
 )
 
 // stubFS overrides only the methods under test; the embedded storage.FS satisfies the rest.
@@ -17,6 +19,22 @@ type stubFS struct {
 	storage.FS
 	listSpaces  func(ctx context.Context, filters []*provider.ListStorageSpacesRequest_Filter, unrestricted bool) ([]*provider.StorageSpace, error)
 	deleteSpace func(ctx context.Context, req *provider.DeleteStorageSpaceRequest) (*storage.DeleteStorageSpaceResult, error)
+	getMD       func(ctx context.Context, ref *provider.Reference, mdKeys, fieldMask []string) (*provider.ResourceInfo, error)
+}
+
+func (s *stubFS) GetMD(ctx context.Context, ref *provider.Reference, mdKeys, fieldMask []string) (*provider.ResourceInfo, error) {
+	return s.getMD(ctx, ref, mdKeys, fieldMask)
+}
+
+// stubCoordinator overrides only InitiateUpload; no other Coordinator method is
+// reachable from InitiateFileUpload, so the embedded nil interface is never called.
+type stubCoordinator struct {
+	upload.Coordinator
+	initiateUpload func(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error)
+}
+
+func (c *stubCoordinator) InitiateUpload(ctx context.Context, ref *provider.Reference, uploadLength int64, metadata map[string]string) (map[string]string, error) {
+	return c.initiateUpload(ctx, ref, uploadLength, metadata)
 }
 
 func (s *stubFS) ListStorageSpaces(ctx context.Context, filters []*provider.ListStorageSpacesRequest_Filter, unrestricted bool) ([]*provider.StorageSpace, error) {
@@ -126,5 +144,45 @@ var _ = Describe("DeleteStorageSpace", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(res.Status.Code).To(Equal(rpc.Code_CODE_NOT_FOUND))
 		})
+	})
+})
+
+var _ = Describe("InitiateFileUpload", func() {
+	ref := &provider.Reference{Path: "/file1"}
+
+	// Stat must miss so InitiateFileUpload falls through to the Coordinator
+	// call instead of short-circuiting on the IfNotExist/IfMatch checks.
+	newService := func(initiateUpload func(context.Context, *provider.Reference, int64, map[string]string) (map[string]string, error)) *Service {
+		return &Service{
+			conf: &config{},
+			Storage: &stubFS{
+				getMD: func(context.Context, *provider.Reference, []string, []string) (*provider.ResourceInfo, error) {
+					return nil, errtypes.NotFound("file1")
+				},
+			},
+			Coordinator: &stubCoordinator{initiateUpload: initiateUpload},
+		}
+	}
+
+	It("maps a lost CAS race (Aborted) to ABORTED instead of a generic Internal status", func() {
+		svc := newService(func(context.Context, *provider.Reference, int64, map[string]string) (map[string]string, error) {
+			return nil, errtypes.Aborted("etag mismatch")
+		})
+
+		res, err := svc.InitiateFileUpload(context.Background(), &provider.InitiateFileUploadRequest{Ref: ref})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(res.Status.Code).To(Equal(rpc.Code_CODE_ABORTED), "expected ABORTED, got %v: %s", res.Status.Code, res.Status.Message)
+	})
+
+	It("maps a concurrent-create conflict (AlreadyExists) to ALREADY_EXISTS instead of a generic Internal status", func() {
+		svc := newService(func(context.Context, *provider.Reference, int64, map[string]string) (map[string]string, error) {
+			return nil, errtypes.AlreadyExists("file1")
+		})
+
+		res, err := svc.InitiateFileUpload(context.Background(), &provider.InitiateFileUploadRequest{Ref: ref})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(res.Status.Code).To(Equal(rpc.Code_CODE_ALREADY_EXISTS), "expected ALREADY_EXISTS, got %v: %s", res.Status.Code, res.Status.Message)
 	})
 })
