@@ -184,6 +184,41 @@ var _ = Describe("Cache", func() {
 		})
 	})
 
+	// Many shares of one user in one space go with one upload.
+	Describe("RemoveMany", func() {
+		BeforeEach(func() {
+			for _, id := range []string{"s1", "s2", "s3"} {
+				Expect(c.Add(ctx, userID, spaceID, &collaboration.ReceivedShare{
+					Share: &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: id}},
+					State: collaboration.ShareState_SHARE_STATE_PENDING,
+				})).To(Succeed())
+			}
+		})
+
+		It("removes the given shares with one upload", func() {
+			cs := &helpers.CountingUploadStorage{Storage: storage}
+			c2 := receivedsharecache.New(cs, 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userID, spaceID, []string{"s1", "s2", "unknown"})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(1)))
+
+			fresh := receivedsharecache.New(storage, 0*time.Second)
+			for id, want := range map[string]bool{"s1": false, "s2": false, "s3": true} {
+				st, err := fresh.Get(ctx, userID, spaceID, id)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(st != nil).To(Equal(want), id)
+			}
+		})
+
+		It("does not upload when none of the shares is in the space", func() {
+			cs := &helpers.CountingUploadStorage{Storage: storage}
+			c2 := receivedsharecache.New(cs, 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userID, spaceID, []string{"unknown1", "unknown2"})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(0)))
+		})
+	})
+
 	Describe("retryPersist's post-failure resync", func() {
 		It("does not perform a redundant bootstrap upload when no file exists yet", func() {
 			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.Aborted("injected")}

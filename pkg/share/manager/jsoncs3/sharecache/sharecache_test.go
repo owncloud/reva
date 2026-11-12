@@ -69,6 +69,46 @@ var _ = Describe("Sharecache", func() {
 		}
 	})
 
+	// Many shares of one user or group go with one upload, also when they are in different spaces.
+	Describe("RemoveMany", func() {
+		var s1, s2, s3 string
+
+		BeforeEach(func() {
+			s1 = shareid.Encode("storageid", "spaceid", "s1")
+			s2 = shareid.Encode("storageid", "spaceid", "s2")
+			s3 = shareid.Encode("storageid", "otherspace", "s3")
+			for _, id := range []string{s1, s2, s3} {
+				Expect(c.Add(ctx, userid, id)).To(Succeed())
+			}
+		})
+
+		It("removes the given shares with one upload", func() {
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userid, []string{s1, s3, shareid.Encode("storageid", "spaceid", "unknown")})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)))
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveLen(1))
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey(s2))
+			Expect(spaces["storageid:otherspace"].IDs).To(BeEmpty())
+		})
+
+		It("does not upload when none of the shares is in the cache", func() {
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userid, []string{
+				shareid.Encode("storageid", "spaceid", "unknown"),
+				shareid.Encode("storageid", "nospace", "unknown"),
+			})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
+		})
+	})
+
 	Describe("Persist", func() {
 		Context("with an existing entry", func() {
 			BeforeEach(func() {
