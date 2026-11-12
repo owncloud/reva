@@ -23,13 +23,16 @@ package jsoncs3
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	groupv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/events"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 
@@ -144,4 +147,84 @@ func TestPurgeSpacePurgesTheSpaceWhenGroupRemovalFails(t *testing.T) {
 	shares, err := f.fresh(t).Cache.ListSpace(f.ctx, "storageid", "spaceid")
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(shares.Shares).To(BeEmpty())
+}
+
+// The tests below send a SpaceDeleted event to ProcessEvents, as in production.
+// ProcessEvents runs the purge in a goroutine.
+
+// member is a user in group1, the grantee of the fixture share.
+var member = &userpb.User{Id: &userpb.UserId{OpaqueId: "einstein"}, Groups: []string{"group1"}}
+
+// deleteSpace sends the SpaceDeleted event and waits until the purge emptied the space.
+func (f *purgeFixture) deleteSpace(t *testing.T) {
+	ch := make(chan events.Event)
+	go f.m.ProcessEvents(ch)
+	t.Cleanup(func() { close(ch) })
+	ch <- events.Event{Event: events.SpaceDeleted{ID: spaceToPurge}}
+
+	// metadata.Disk does not write atomically, so a read during the purge can
+	// see a partial file. Then the poll tries again.
+	NewWithT(t).Eventually(func() (int, error) {
+		m, err := New(f.storage, nil, 0, nil, 0)
+		if err != nil {
+			return -1, err
+		}
+		shares, err := m.Cache.ListSpace(f.ctx, "storageid", "spaceid")
+		if err != nil {
+			return -1, err
+		}
+		return len(shares.Shares), nil
+	}, 5*time.Second, 20*time.Millisecond).Should(BeZero(), "the purge must empty the space")
+	// PurgeSpace is the last write of the purge. Let the goroutine return.
+	time.Sleep(100 * time.Millisecond)
+}
+
+// uploadsPerListing lists the received shares of the member n times and
+// returns the number of uploads for each listing.
+func (f *purgeFixture) uploadsPerListing(t *testing.T, n int) []int32 {
+	g := NewWithT(t)
+	ctx := ctxpkg.ContextSetUser(context.Background(), member)
+	out := make([]int32, 0, n)
+	for i := 0; i < n; i++ {
+		before := atomic.LoadInt32(&f.cs.Uploads)
+		received, err := f.m.ListReceivedShares(ctx, nil, nil)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(received).To(BeEmpty(), "the member must not see shares of the deleted space")
+		out = append(out, atomic.LoadInt32(&f.cs.Uploads)-before)
+	}
+	return out
+}
+
+func TestSpaceDeletedEventRemovesTheGroupShares(t *testing.T) {
+	g := NewWithT(t)
+	f := newPurgeFixture(t)
+
+	f.deleteSpace(t)
+
+	group, err := f.fresh(t).GroupReceivedCache.List(f.ctx, "group1")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(group["storageid:spaceid"].IDs).To(BeEmpty())
+	g.Expect(f.uploadsPerListing(t, 3)).To(Equal([]int32{0, 0, 0}))
+}
+
+// The stale group entry that a failed purge leaves must go away on the first
+// listing. Before, each listing uploaded received.json again, with no end.
+func TestSpaceDeletedEventWithAFailedGroupWriteIsCleanedOnTheFirstListing(t *testing.T) {
+	g := NewWithT(t)
+	f := newPurgeFixture(t)
+
+	f.cs.FailPath = "/groups/group1/received.json"
+	f.deleteSpace(t)
+	f.cs.FailPath = ""
+
+	group, err := f.fresh(t).GroupReceivedCache.List(f.ctx, "group1")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(group["storageid:spaceid"].IDs).To(HaveKey(f.share.Id.OpaqueId), "the failed purge leaves the group entry")
+
+	// The first listing rewrites the group file once. The next listings do no uploads.
+	g.Expect(f.uploadsPerListing(t, 3)).To(Equal([]int32{1, 0, 0}))
+
+	group, err = f.fresh(t).GroupReceivedCache.List(f.ctx, "group1")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(group["storageid:spaceid"].IDs).To(BeEmpty())
 }
