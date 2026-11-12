@@ -13,4 +13,4 @@ We changed the code:
 
 The storage provider now logs the invalid grant and does not stop.
 
-https://github.com/owncloud/reva/pull/804
+https://github.com/owncloud/reva/pull/812
