@@ -154,6 +154,46 @@ var _ = Describe("Sharecache", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(spaces).To(BeEmpty(), "stale in-memory shares should not survive a NotFound resync")
 		})
+
+		// OCISDEV-1675: Remove must not panic when the user has no entry for the space of the share.
+		It("does not panic when the user has no entry for the space of the share", func() {
+			Expect(c.Add(ctx, userid, "storageid:space-a:share1")).To(Succeed())
+
+			Expect(c.Remove(ctx, userid, "storageid:space-b:share2")).To(Succeed())
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces).To(HaveKey("storageid:space-a"))
+			Expect(spaces["storageid:space-a"].IDs).To(HaveKey("storageid:space-a:share1"))
+			Expect(spaces).ToNot(HaveKey("storageid:space-b"))
+		})
+
+		It("does not panic when the share id has no delimiter", func() {
+			Expect(c.Add(ctx, userid, "storageid:space-a:share1")).To(Succeed())
+
+			Expect(c.Remove(ctx, userid, "nodelimiter")).To(Succeed())
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:space-a"].IDs).To(HaveKey("storageid:space-a:share1"))
+		})
+
+		It("removes the share when another node added the space after the local sync", func() {
+			Expect(c.Add(ctx, userid, "storageid:space-a:share1")).To(Succeed())
+
+			// a second cache instance plays the role of another node
+			other := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			Expect(other.Add(ctx, userid, "storageid:space-b:share2")).To(Succeed())
+
+			// the local cache does not know space-b yet. The etag conflict makes it sync and retry.
+			Expect(c.Remove(ctx, userid, "storageid:space-b:share2")).To(Succeed())
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:space-b"].IDs).ToNot(HaveKey("storageid:space-b:share2"))
+			Expect(spaces["storageid:space-a"].IDs).To(HaveKey("storageid:space-a:share1"))
+		})
 	})
 })
 
