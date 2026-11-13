@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	gatewayv1beta1 "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	groupv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
@@ -33,6 +34,7 @@ import (
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/conversions"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/events/stream"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	sharespkg "github.com/owncloud/reva/v2/pkg/share"
@@ -733,6 +735,44 @@ var _ = Describe("Jsoncs3", func() {
 				Expect(len(received)).To(Equal(1))
 				Expect(received[0].Share.ResourceId).To(BeComparableTo(sharedResource.Id, protocmp.Transform()))
 				Expect(received[0].State).To(Equal(collaboration.ShareState_SHARE_STATE_PENDING))
+			})
+
+			It("does not block the response on cleaning up an orphaned share", func() {
+				// DiskStorage.Download always rereads, so write the removal to disk.
+				spaces, ok := m.Cache.Providers.Load("storageid")
+				Expect(ok).To(BeTrue())
+				cache, ok := spaces.Spaces.Load("spaceid")
+				Expect(ok).To(BeTrue())
+				delete(cache.Shares, share.Id.OpaqueId)
+				bytes, err := json.Marshal(cache)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
+
+				received, err := m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(received).To(BeEmpty())
+			})
+
+			It("does not block the response on removing an expired share", func() {
+				m2, err := jsoncs3.New(storage, nil, 0, stream.Chan{make(chan interface{}, 1), make(chan interface{})}, 0)
+				Expect(err).ToNot(HaveOccurred())
+
+				// warm m2's own cache from disk before backdating the share.
+				_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+				Expect(err).ToNot(HaveOccurred())
+
+				spaces, ok := m2.Cache.Providers.Load("storageid")
+				Expect(ok).To(BeTrue())
+				cache, ok := spaces.Spaces.Load("spaceid")
+				Expect(ok).To(BeTrue())
+				cache.Shares[share.Id.OpaqueId].Expiration = utils.TimeToTS(time.Now().Add(-time.Hour))
+				bytes, err := json.Marshal(cache)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
+
+				received, err := m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(received).To(BeEmpty())
 			})
 
 			It("syncronizes the provider cache before listing", func() {

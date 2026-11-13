@@ -217,7 +217,7 @@ func (session *OcisSession) FinishUploadDecomposed(ctx context.Context) error {
 		s, err := session.URL(ctx)
 		if err != nil {
 			// the node was already created/updated: revert it, same as a failed Finalize below.
-			session.Cleanup(true, true, true, true)
+			_ = session.Terminate(ctx)
 			return err
 		}
 
@@ -225,7 +225,7 @@ func (session *OcisSession) FinishUploadDecomposed(ctx context.Context) error {
 		if utils.ExistsInOpaque(u.Opaque, "impersonating-user") {
 			iu = &userpb.User{}
 			if err := utils.ReadJSONFromOpaque(u.Opaque, "impersonating-user", iu); err != nil {
-				session.Cleanup(true, true, true, true)
+				_ = session.Terminate(ctx)
 				return err
 			}
 		}
@@ -240,7 +240,7 @@ func (session *OcisSession) FinishUploadDecomposed(ctx context.Context) error {
 			Filesize:          uint64(session.Size()),
 			ImpersonatingUser: iu,
 		}); err != nil {
-			session.Cleanup(true, true, true, true)
+			_ = session.Terminate(ctx)
 			return err
 		}
 	}
