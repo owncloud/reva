@@ -190,6 +190,97 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 	return err
 }
 
+// RemoveSpaceShares removes multiple entries of a single space from the cache in
+// one persist. It is the batched counterpart of Remove: collecting all shareIDs
+// to drop for a user's space avoids the N serial read-modify-write cycles that a
+// per-share Remove would incur. Passing an empty shareIDs slice is a no-op.
+func (c *Cache) RemoveSpaceShares(ctx context.Context, userID, spaceID string, shareIDs []string) error {
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "RemoveSpaceShares")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
+
+	if len(shareIDs) == 0 {
+		return nil
+	}
+
+	unlock := c.lockUser(userID)
+	defer unlock()
+
+	persistFunc := func() error {
+		c.initializeIfNeeded(userID, spaceID)
+
+		rss, _ := c.ReceivedSpaces.Load(userID)
+		receivedSpace := rss.Spaces[spaceID]
+		if receivedSpace == nil {
+			// initializeIfNeeded only creates the space entry for a non-empty
+			// spaceID; guard against a nil entry so we never dereference it.
+			return nil
+		}
+		if receivedSpace.States == nil {
+			receivedSpace.States = map[string]*State{}
+		}
+		for _, shareID := range shareIDs {
+			delete(receivedSpace.States, shareID)
+		}
+		if len(receivedSpace.States) == 0 {
+			delete(rss.Spaces, spaceID)
+		}
+
+		return c.persist(ctx, userID)
+	}
+
+	log := appctx.GetLogger(ctx).With().
+		Str("hostname", os.Getenv("HOSTNAME")).
+		Str("userID", userID).
+		Str("spaceID", spaceID).Logger()
+
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		err = persistFunc()
+		switch err.(type) {
+		case nil:
+			span.SetStatus(codes.Ok, "")
+			return nil
+		case errtypes.Aborted:
+			log.Debug().Msg("aborted when persisting removed received shares: etag changed. retrying...")
+			// this is the expected status code from the server when the if-match etag check fails
+			// continue with sync below
+		case errtypes.PreconditionFailed:
+			log.Debug().Msg("precondition failed when persisting removed received shares: etag changed. retrying...")
+			// actually, this is the wrong status code and we treat it like errtypes.Aborted because of inconsistencies on the server side
+			// continue with sync below
+		case errtypes.AlreadyExists:
+			log.Debug().Msg("already exists when persisting removed received shares. retrying...")
+			// CS3 uses an already exists error instead of precondition failed when using an If-None-Match=* header / IfExists flag in the InitiateFileUpload call.
+			// That happens when the cache thinks there is no file.
+			// continue with sync below
+		default:
+			span.SetStatus(codes.Error, fmt.Sprintf("persisting removed received shares failed. giving up: %s", err.Error()))
+			log.Error().Err(err).Msg("persisting removed received shares failed")
+			return err
+		}
+		timer := time.NewTimer(expBackoff(attempt))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+		if err := c.syncWithLock(ctx, userID); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			log.Error().Err(err).Msg("persisting removed received shares failed. giving up.")
+			return err
+		}
+	}
+	return err
+}
+
 // List returns a list of received shares for a given user
 // The return list is guaranteed to be thread-safe
 func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, error) {
