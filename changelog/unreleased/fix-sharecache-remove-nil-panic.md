@@ -10,4 +10,10 @@ for example `Unshare` and the cleanup of orphaned shares.
 the cache. When the in-memory cache is stale, the etag conflict causes a resync
 and a retry. Thus the share is removed correctly when another node added it.
 
+We also fixed two related problems in the jsoncs3 provider cache.
+`providercache.Cache.PurgeSpace` stored a nil share map. A later `Add` to the
+same space panicked. `PurgeSpace` now stores an empty map. And
+`providercache.Cache.Remove` checked the wrong `ok` value after it loaded the
+space. It now checks the correct value.
+
 https://github.com/owncloud/reva/pull/814

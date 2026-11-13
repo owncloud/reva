@@ -297,6 +297,18 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil())
 			})
+
+			// OCISDEV-1675: PurgeSpace must not leave a nil Shares map in the cache.
+			It("allows to add a share to the same space after the purge", func() {
+				Expect(c.PurgeSpace(ctx, storageID, spaceID)).To(Succeed())
+
+				Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
+
+				s, err := c.Get(ctx, storageID, spaceID, shareID, true)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).ToNot(BeNil())
+				Expect(s.Id.OpaqueId).To(Equal(share1.Id.OpaqueId))
+			})
 		})
 
 		Describe("All", func() {
