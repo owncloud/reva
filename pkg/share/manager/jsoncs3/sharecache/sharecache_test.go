@@ -180,6 +180,40 @@ var _ = Describe("Sharecache", func() {
 			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)), "a cold Remove should sync first instead of blindly uploading an empty cache")
 		})
 
+		// The exact case from a production panic: a share in space-a, then a
+		// Remove of a share in space-b for the same user, on a warm cache.
+		It("does not panic on a warm cache when the share is in a space that the user has no entry for", func() {
+			Expect(c.Add(ctx, userid, "storageid:space-a:share1")).To(Succeed())
+
+			Expect(func() {
+				Expect(c.Remove(ctx, userid, "storageid:space-b:share2")).To(Succeed())
+			}).ToNot(Panic())
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:space-a"].IDs).To(HaveKey("storageid:space-a:share1"))
+		})
+
+		// shareid.Decode gives ("", "", id) for an ID with no delimiter, so the space key is ":".
+		It("does not panic and does not upload when the share ID has no delimiter", func() {
+			Expect(c.Add(ctx, userid, "storageid:spaceid:share1")).To(Succeed())
+
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+			Expect(func() {
+				Expect(c2.Remove(ctx, userid, "share-id-without-delimiter")).To(Succeed())
+			}).ToNot(Panic())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
+
+			Expect(func() {
+				Expect(c.Remove(ctx, userid, "share-id-without-delimiter")).To(Succeed())
+			}).ToNot(Panic(), "also on a warm cache")
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey("storageid:spaceid:share1"))
+		})
+
 		// The cleanup of a stale group share calls Remove on the group cache.
 		// The group can have entries in other spaces only.
 		It("does not panic when the user has no entry for the space of the share", func() {

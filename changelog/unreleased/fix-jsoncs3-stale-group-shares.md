@@ -11,8 +11,10 @@ this only when it read the file of the space. A missing space file can be
 temporary, so the share manager keeps all entries in that case.
 
 A Remove on the provider cache, the user cache or the group cache no longer
-uploads the file when the share is not in it. A Remove on the group cache no
-longer panics when the group has no entry for the space of the share.
+uploads the file when the share is not in it. A Remove on the created cache or
+on the group cache no longer panics when the user or group has no entry for the
+space of the share, or when the share ID has no delimiter. Before, the panic
+stopped the process, also in an unshare.
 
 The share manager now writes a share before the entry for the grantee. When a
 write fails, it removes the entries that it wrote. Thus a failed share no longer
