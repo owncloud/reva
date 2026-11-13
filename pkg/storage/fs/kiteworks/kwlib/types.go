@@ -15,24 +15,26 @@ const (
 )
 
 const (
-	PermDownload       = "download"
-	PermView           = "view"
-	PermPropertiesView = "properties_view"
-	PermUserView       = "user_view"
-	PermUserAdd        = "user_add"
-	PermUserEdit       = "user_edit"
-	PermUserRemove     = "user_remove"
-	PermRename         = "rename"
-	PermFolderAdd      = "folder_add"
-	PermFileAdd        = "file_add"
-	PermFolderDelete   = "folder_delete"
-	PermFolderMove     = "folder_move"
-	PermVersionView    = "version_view"
-	PermVersionCreate  = "version_create"
-	PermVersionPromote = "version_promote"
-	PermVersionDelete  = "version_delete"
-	PermFileDelete     = "file_delete"
-	PermFileMove       = "file_move"
+	PermDownload              = "download"
+	PermView                  = "view"
+	PermPropertiesView        = "properties_view"
+	PermUserView              = "user_view"
+	PermUserAdd               = "user_add"
+	PermUserEdit              = "user_edit"
+	PermUserRemove            = "user_remove"
+	PermRename                = "rename"
+	PermFolderAdd             = "folder_add"
+	PermFileAdd               = "file_add"
+	PermFolderDelete          = "folder_delete"
+	PermFolderPermanentDelete = "folder_permanent_delete"
+	PermFolderRecover         = "folder_recover"
+	PermFolderMove            = "folder_move"
+	PermVersionView           = "version_view"
+	PermVersionCreate         = "version_create"
+	PermVersionPromote        = "version_promote"
+	PermVersionDelete         = "version_delete"
+	PermFileDelete            = "file_delete"
+	PermFileMove              = "file_move"
 )
 
 type FileSearch struct {
@@ -88,6 +90,7 @@ type FileInfo struct {
 	Creator        User             `json:"creator"`
 	Locked         bool             `json:"locked"`
 	LockUser       *User            `json:"lockUser"`
+	Deleted        bool             `json:"deleted"`
 }
 
 type FileFingerPrints []FileFingerPrint
@@ -224,6 +227,7 @@ type User struct {
 	ProfileIcon string `json:"profileIcon"`
 	AdminRoleId *int   `json:"adminRoleId"`
 	UserTypeId  int    `json:"userTypeId"`
+	SyncDirID   string `json:"syncdirId"`
 }
 
 type Contact struct {
@@ -247,6 +251,11 @@ type FileUpdateRequest struct {
 
 type FolderUpdatePutRequest struct {
 	Name string `json:"name,omitempty"`
+}
+
+type FolderQuotaUpdateRequest struct {
+	UseFolderQuota bool  `json:"useFolderQuota"`
+	Quota          int64 `json:"quota"`
 }
 
 type MoveFolderRequest struct {
