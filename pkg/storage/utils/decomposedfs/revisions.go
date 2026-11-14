@@ -101,6 +101,7 @@ func (fs *Decomposedfs) ListRevisions(ctx context.Context, ref *provider.Referen
 					return nil, errors.Wrapf(err, "error calculating etag")
 				}
 				rev.Etag = etag
+				rev.Opaque = fs.revisionAuthorOpaque(ctx, items[i])
 				revisions = append(revisions, rev)
 			}
 		}
@@ -279,7 +280,8 @@ func (fs *Decomposedfs) RestoreRevision(ctx context.Context, ref *provider.Refer
 			attributeName == prefixes.TypeAttr ||
 			attributeName == prefixes.BlobIDAttr ||
 			attributeName == prefixes.BlobsizeAttr ||
-			attributeName == prefixes.MTimeAttr // FIXME somewhere I mix up the revision time and the mtime, causing the restore to overwrite the other existing revisien
+			attributeName == prefixes.MTimeAttr || // FIXME somewhere I mix up the revision time and the mtime, causing the restore to overwrite the other existing revisien
+			isAuthorAttr(attributeName)
 	}, f, true)
 	if err != nil {
 		return nil, errtypes.InternalError("failed to copy blob xattrs to version node: " + err.Error())
@@ -298,10 +300,17 @@ func (fs *Decomposedfs) RestoreRevision(ctx context.Context, ref *provider.Refer
 		return value, strings.HasPrefix(attributeName, prefixes.ChecksumPrefix) ||
 			attributeName == prefixes.TypeAttr ||
 			attributeName == prefixes.BlobIDAttr ||
-			attributeName == prefixes.BlobsizeAttr
+			attributeName == prefixes.BlobsizeAttr ||
+			isAuthorAttr(attributeName)
 	}, false)
 	if err != nil {
 		return nil, errtypes.InternalError("failed to copy blob xattrs to old revision to node: " + err.Error())
+	}
+	// CopyMetadata only adds and overwrites. A revision from before authors were
+	// recorded has none, so drop the author of the content that was just replaced
+	// instead of attributing the restored content to them.
+	if err := fs.dropStaleAuthor(ctx, restoredRevisionPath, nodePath); err != nil {
+		return nil, errtypes.InternalError("failed to reset author on node: " + err.Error())
 	}
 	// always set the node mtime to the current time
 	err = fs.lu.MetadataBackend().SetMultiple(ctx, nodePath,

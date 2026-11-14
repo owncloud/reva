@@ -74,6 +74,10 @@ type UploadChecksums struct {
 	Adler32 []byte
 }
 
+// RevisionAuthorOpaqueKey is the key in FileVersion.Opaque that holds the json
+// encoded userpb.UserId of the user who uploaded the content of a revision.
+const RevisionAuthorOpaqueKey = "author"
+
 type UploadInfo struct {
 	NodeExisted       bool // true when the target node existed before the upload started
 	Size              int64
