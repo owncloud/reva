@@ -1003,7 +1003,13 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 					}
 					if s == nil {
 						sublogr.Warn().Str("shareid", shareID).Msg("share not found. cleaning up")
-						stale = append(stale, shareID)
+						// Remove the ID from received.json only when the file has it. Otherwise
+						// the user cache downloads the file again to find nothing to remove.
+						if us := spaces[w.ssid]; us != nil {
+							if _, inUserFile := us.States[shareID]; inUserFile {
+								stale = append(stale, shareID)
+							}
+						}
 						// A stale group share is in the group cache, not in received.json.
 						for _, group := range groupsOfShare[shareID] {
 							staleOfGroup[group] = append(staleOfGroup[group], shareID)
@@ -1041,10 +1047,10 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 					if err := m.UserReceivedStates.RemoveMany(gctx, user.Id.OpaqueId, w.ssid, stale); err != nil {
 						sublogr.Error().Err(err).Strs("shareids", stale).Msg("could not remove stale shares from the user received states")
 					}
-					for group, ids := range staleOfGroup {
-						if err := m.GroupReceivedCache.RemoveMany(gctx, group, ids); err != nil {
-							sublogr.Error().Err(err).Strs("shareids", ids).Str("groupid", group).Msg("could not remove stale shares from the group cache")
-						}
+				}
+				for group, ids := range staleOfGroup {
+					if err := m.GroupReceivedCache.RemoveMany(gctx, group, ids); err != nil {
+						sublogr.Error().Err(err).Strs("shareids", ids).Str("groupid", group).Msg("could not remove stale shares from the group cache")
 					}
 				}
 			}

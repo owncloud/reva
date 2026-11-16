@@ -24,6 +24,8 @@ package jsoncs3
 // remove it at once.
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 
 	. "github.com/onsi/gomega"
 )
@@ -155,4 +158,43 @@ func TestListReceivedSharesRestartsTheGracePeriodWhenTheShareIsFoundAgain(t *tes
 	loseSpaceFileDuringAListing()
 
 	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "two short losses do not remove the entry")
+}
+
+// countingDownloadStorage counts the downloads of path.
+type countingDownloadStorage struct {
+	metadata.Storage
+	path      string
+	downloads int32
+}
+
+func (c *countingDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if req.Path == c.path {
+		atomic.AddInt32(&c.downloads, 1)
+	}
+	return c.Storage.Download(ctx, req)
+}
+
+// Break: the cleanup also sends the stale IDs of a group to the received.json
+// of the user. These IDs are not in that file, so the user cache downloads it
+// again only to find nothing to remove.
+func TestListReceivedSharesCleansAStaleGroupEntryWithoutAnExtraUserDownload(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
+	cd := &countingDownloadStorage{Storage: f.storage, path: "/users/einstein/received.json"}
+	m, err := New(cd, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+	m.StaleShareGracePeriod = 0 // this test checks the cleanup, not the grace period
+	downloadsDuringAListing := func() int32 {
+		before := atomic.LoadInt32(&cd.downloads)
+		_ = receivedIDs(t, m, "einstein", "group1")
+		return atomic.LoadInt32(&cd.downloads) - before
+	}
+	_ = downloadsDuringAListing() // warm up the caches
+	normal := downloadsDuringAListing()
+
+	ghost := shareid.Encode("storageid", "spaceid", "ghost")
+	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
+	g.Expect(downloadsDuringAListing()).To(Equal(normal), "the cleanup of a group entry does not read received.json of the user again")
+	g.Expect(groupIDsOnStorage(t, f, "group1")).ToNot(ContainElement(ghost), "the listing removes the stale entry")
 }
