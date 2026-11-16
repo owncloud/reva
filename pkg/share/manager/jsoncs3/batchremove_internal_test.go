@@ -254,3 +254,55 @@ func TestListReceivedSharesRemovesManyStaleGroupSharesWithOneUploadPerGroup(t *t
 		g.Expect(l["storageid:spaceid"].IDs).To(HaveLen(want), gid)
 	}
 }
+
+// inFlightStorage counts the uploads and downloads that run at the same time.
+// Each call waits a moment, so parallel calls overlap.
+type inFlightStorage struct {
+	metadata.Storage
+	now, max int32
+}
+
+func (s *inFlightStorage) enter() func() {
+	n := atomic.AddInt32(&s.now, 1)
+	for {
+		m := atomic.LoadInt32(&s.max)
+		if n <= m || atomic.CompareAndSwapInt32(&s.max, m, n) {
+			break
+		}
+	}
+	time.Sleep(10 * time.Millisecond)
+	return func() { atomic.AddInt32(&s.now, -1) }
+}
+
+func (s *inFlightStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	defer s.enter()()
+	return s.Storage.Upload(ctx, req)
+}
+
+func (s *inFlightStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	defer s.enter()()
+	return s.Storage.Download(ctx, req)
+}
+
+// Break: removeShares starts one goroutine for each grantee and creator
+// document, with no limit. A purge of a space with many grantees then sends
+// hundreds of parallel writes to the metadata storage.
+func TestPurgeSpaceLimitsTheParallelStorageCalls(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	for i := 0; i < 20; i++ {
+		f.share(t, ctxOf("admin"), i, userGrantee(fmt.Sprintf("user%d", i)), nil)
+	}
+	fs := &inFlightStorage{Storage: f.storage}
+	m, err := New(fs, nil, 0, nopStream{}, 3)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	g.Expect(m.purgeSpace(ctxOf("admin"), &provider.StorageSpaceId{OpaqueId: "storageid$spaceid"})).To(Succeed())
+
+	g.Expect(atomic.LoadInt32(&fs.max)).To(BeNumerically("<=", 3), "MaxConcurrency limits the parallel storage calls")
+	users := make([]string, 20)
+	for i := range users {
+		users[i] = fmt.Sprintf("user%d", i)
+	}
+	f.expectEmpty(t, []string{"admin"}, nil, users)
+}

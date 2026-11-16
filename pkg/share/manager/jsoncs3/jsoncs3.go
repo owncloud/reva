@@ -1353,6 +1353,10 @@ func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Shar
 		})
 	}
 
+	// Limit the parallel removals. Each one downloads and uploads a document,
+	// and a purge of a large space can touch hundreds of documents.
+	limitAll(m.removeConcurrency(), granteeFns, createdFns, spaceFns)
+
 	var err error
 	if purgingSpace {
 		// The caller purges the space entries. The order of the other writes does not matter.
@@ -1439,6 +1443,31 @@ func (m *Manager) forgetStale(shareID string) {
 	m.staleMu.Lock()
 	defer m.staleMu.Unlock()
 	delete(m.staleSince, shareID)
+}
+
+// defaultRemoveConcurrency limits the parallel removals when MaxConcurrency is not set.
+const defaultRemoveConcurrency = 10
+
+func (m *Manager) removeConcurrency() int {
+	if m.MaxConcurrency > 0 {
+		return m.MaxConcurrency
+	}
+	return defaultRemoveConcurrency
+}
+
+// limitAll wraps the functions in place, so that at most n of them run at
+// the same time. All lists share the same limit.
+func limitAll(n int, lists ...[]func() error) {
+	sem := make(chan struct{}, n)
+	for _, fns := range lists {
+		for i, fn := range fns {
+			fns[i] = func() error {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				return fn()
+			}
+		}
+	}
 }
 
 // runAll runs the functions at the same time and returns all errors.
