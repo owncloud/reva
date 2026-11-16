@@ -110,3 +110,49 @@ func TestListReceivedSharesRemovesAStaleGroupEntryAfterTheGracePeriod(t *testing
 	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]))
 	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "a listing after the grace period removes the stale entry")
 }
+
+// Break: the listing keeps a stale entry when the space file does not exist.
+// A failed first Share in a space leaves a grantee entry, but no space file.
+// Each listing then skips the entry again, and nothing removes it.
+func TestListReceivedSharesRemovesAStaleGroupEntryWhenTheSpaceFileDoesNotExist(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.m.StaleShareGracePeriod = 200 * time.Millisecond
+	ghost := shareid.Encode("storageid", "spaceid", "ghost")
+	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
+
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(BeEmpty())
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(ghost), "the first listing keeps the stale entry")
+
+	time.Sleep(250 * time.Millisecond)
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(BeEmpty())
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(BeEmpty(), "a listing after the grace period removes the stale entry")
+}
+
+// Break: the grace period does not restart when a listing finds the share
+// again. Two short losses of the space file, longer apart than the grace
+// period, then look like one long loss, and the listing removes a valid entry.
+func TestListReceivedSharesRestartsTheGracePeriodWhenTheShareIsFoundAgain(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.m.StaleShareGracePeriod = 200 * time.Millisecond
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
+	valid := receivedIDs(t, f.m, "einstein", "group1")
+	g.Expect(valid).To(HaveLen(1))
+
+	spaceFile := "/storages/storageid/spaceid.json"
+	content, err := f.storage.SimpleDownload(ctxOf("admin"), spaceFile)
+	g.Expect(err).ToNot(HaveOccurred())
+	loseSpaceFileDuringAListing := func() {
+		g.Expect(f.storage.Delete(ctxOf("admin"), spaceFile)).To(Succeed())
+		_ = receivedIDs(t, f.m, "einstein", "group1")
+		g.Expect(f.storage.SimpleUpload(ctxOf("admin"), spaceFile, content)).To(Succeed())
+	}
+
+	loseSpaceFileDuringAListing()
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the space file is back")
+	time.Sleep(250 * time.Millisecond)
+	loseSpaceFileDuringAListing()
+
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "two short losses do not remove the entry")
+}

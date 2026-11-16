@@ -374,6 +374,15 @@ func (c *Cache) ListSpace(ctx context.Context, storageID, spaceID string) (*Shar
 	return shares, nil
 }
 
+// SpaceFileMissing reports if a Stat of the space file returns NotFound.
+// Use it as a second proof after a download got NotFound. It returns false
+// for all other results, also for errors.
+func (c *Cache) SpaceFileMissing(ctx context.Context, storageID, spaceID string) bool {
+	_, err := c.storage.Stat(ctx, spaceJSONPath(storageID, spaceID))
+	_, notFound := err.(errtypes.NotFound)
+	return notFound
+}
+
 // Persist persists the data of one space
 func (c *Cache) Persist(ctx context.Context, storageID, spaceID string) error {
 	ctx, span := tracer.Start(ctx, "Persist")

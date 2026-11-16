@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
@@ -170,7 +171,7 @@ func TestShareRollbackDoesNotLeaveTheGranteeEntryInMemory(t *testing.T) {
 }
 
 // Break: the stale cleanup reads each share from the live provider cache,
-// not from the ListSpace snapshot that set spaceFileRead. A parallel listing
+// not from the ListSpace snapshot that set staleIsProven. A parallel listing
 // that gets a temporary NotFound empties the live cache between the two
 // reads. Then all shares look stale, and the cleanup removes them from the
 // group cache.
@@ -210,4 +211,60 @@ func TestListReceivedSharesDoesNotRemoveValidGroupSharesWhenTheCacheIsReset(t *t
 	l, err := fresh.GroupReceivedCache.List(ctxOf("admin"), "group1")
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(l["storageid:spaceid"].IDs).To(HaveLen(shares), "the group cache keeps all valid shares")
+}
+
+// slowGranteeRollbackStorage fails the first upload of path, so Share rolls
+// back. Each later upload of path waits until the context ends. Each call
+// fails at once on an ended context, the same as a gRPC call.
+type slowGranteeRollbackStorage struct {
+	metadata.Storage
+	path    string
+	uploads int32
+}
+
+func (s *slowGranteeRollbackStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req.Path == s.path {
+		if atomic.AddInt32(&s.uploads, 1) == 1 {
+			return nil, errtypes.PermissionDenied("injected upload failure for " + req.Path)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return s.Storage.Upload(ctx, req)
+}
+
+func (s *slowGranteeRollbackStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.Storage.Download(ctx, req)
+}
+
+// Break: the three rollback removals share one timeout. The slow removal of
+// the grantee entry uses all of it, and the removal of the share fails at
+// once. The share stays, and a new Share fails with AlreadyExists.
+func TestShareRollbackRemovesTheShareWhenTheGranteeRollbackIsSlow(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	old := rollbackTimeout
+	rollbackTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { rollbackTimeout = old })
+
+	ss := &slowGranteeRollbackStorage{Storage: f.storage, path: "/groups/group1/received.json"}
+	m, err := New(ss, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	_, err = m.Share(ctxOf("admin"), resourceInfo(0), grant(groupGrantee("group1")))
+	g.Expect(err).To(HaveOccurred())
+
+	f.expectEmpty(t, []string{"admin"}, nil, nil)
+	_, err = m.Share(ctxOf("admin"), resourceInfo(0), grant(userGrantee("einstein")))
+	g.Expect(err).ToNot(HaveOccurred(), "a new share of the same resource")
+	fresh, err := New(f.storage, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+	_, err = fresh.getByKey(ctxOf("admin"), &collaboration.ShareKey{ResourceId: resourceInfo(0).Id, Grantee: groupGrantee("group1")})
+	g.Expect(err).To(HaveOccurred(), "the rolled back group share is gone")
 }

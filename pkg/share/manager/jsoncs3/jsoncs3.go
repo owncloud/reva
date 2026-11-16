@@ -116,8 +116,8 @@ const tracerName = "jsoncs3"
 
 // rollbackTimeout limits the rollback of a failed Share. The rollback does not
 // use the cancellation of the request, because a cancelled request is a
-// common cause of the failure.
-const rollbackTimeout = 30 * time.Second
+// common cause of the failure. It is a variable, so the tests can make it short.
+var rollbackTimeout = 30 * time.Second
 
 // defaultStaleShareGracePeriod is the default of Manager.StaleShareGracePeriod.
 // An older version writes the grantee entry and the share at the same time.
@@ -380,29 +380,35 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 	spaceID := md.Id.StorageId + shareid.IDDelimiter + md.Id.SpaceId
 	granteeWritten := false
 	rollback := func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
-		defer cancel()
 		log := appctx.GetLogger(ctx)
+		// Each removal gets its own timeout. A slow removal must not use the
+		// time of the next one.
+		undo := func(what string, remove func(ctx context.Context) error) {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+			defer cancel()
+			if err := remove(ctx); err != nil {
+				log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the " + what)
+			}
+		}
 		// A failed grantee write keeps the share ID in memory. Remove it first,
 		// otherwise the next write of the grantee document uploads it.
 		if granteeWritten {
-			var err error
-			switch g.Grantee.Type {
-			case provider.GranteeType_GRANTEE_TYPE_USER:
-				err = m.UserReceivedStates.Remove(ctx, g.Grantee.GetUserId().GetOpaqueId(), spaceID, shareID)
-			case provider.GranteeType_GRANTEE_TYPE_GROUP:
-				err = m.GroupReceivedCache.Remove(ctx, g.Grantee.GetGroupId().GetOpaqueId(), shareID)
-			}
-			if err != nil {
-				log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the grantee entry")
-			}
+			undo("grantee entry", func(ctx context.Context) error {
+				switch g.Grantee.Type {
+				case provider.GranteeType_GRANTEE_TYPE_USER:
+					return m.UserReceivedStates.Remove(ctx, g.Grantee.GetUserId().GetOpaqueId(), spaceID, shareID)
+				case provider.GranteeType_GRANTEE_TYPE_GROUP:
+					return m.GroupReceivedCache.Remove(ctx, g.Grantee.GetGroupId().GetOpaqueId(), shareID)
+				}
+				return nil
+			})
 		}
-		if err := m.Cache.Remove(ctx, md.Id.StorageId, md.Id.SpaceId, shareID); err != nil {
-			log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the share in the provider cache")
-		}
-		if err := m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), shareID); err != nil {
-			log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the share in the created cache")
-		}
+		undo("share in the provider cache", func(ctx context.Context) error {
+			return m.Cache.Remove(ctx, md.Id.StorageId, md.Id.SpaceId, shareID)
+		})
+		undo("share in the created cache", func(ctx context.Context) error {
+			return m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), shareID)
+		})
 	}
 
 	err = runAll(
@@ -970,9 +976,12 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						Msg("failed to list shares in space")
 					continue
 				}
-				// An empty etag means that the space file was not found. That can be
-				// temporary, so it is no proof that a share is gone.
-				spaceFileRead := spaceShares.Etag != ""
+				// An empty etag means that the download of the space file got NotFound.
+				// That can be temporary, so it is no proof that a share is gone. A Stat
+				// that also gets NotFound is the proof. A failed first Share in a space
+				// leaves a grantee entry without a space file.
+				staleIsProven := spaceShares.Etag != ""
+				spaceFileChecked := false
 				// remove the stale shares of the space together, with one upload per document
 				var stale []string
 				staleOfGroup := map[string][]string{}
@@ -980,8 +989,12 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 					// Read the share from the same snapshot as the etag. A parallel
 					// sync can reset the live cache, and then a valid share looks stale.
 					s := spaceShares.Shares[shareID]
-					if s == nil && !spaceFileRead {
-						sublogr.Debug().Str("shareid", shareID).Msg("share not found, but the space file was not read. skipping the cleanup")
+					if s == nil && !staleIsProven && !spaceFileChecked {
+						spaceFileChecked = true
+						staleIsProven = m.Cache.SpaceFileMissing(gctx, storageID, spaceID)
+					}
+					if s == nil && !staleIsProven {
+						sublogr.Debug().Str("shareid", shareID).Msg("share not found, but the space file can exist. skipping the cleanup")
 						continue
 					}
 					if s == nil && !m.staleGracePeriodOver(shareID) {
@@ -997,6 +1010,7 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						}
 						continue
 					}
+					m.forgetStale(shareID)
 					sublogr = sublogr.With().Str("shareid", shareID).Logger()
 					if share.IsExpired(s) {
 						select {
@@ -1342,7 +1356,15 @@ func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Shar
 		// after an error: the gateway removes the storage grant in any case.
 		// The next listing of a grantee removes a stale grantee entry.
 		granteeErr := runAll(granteeFns...)
-		err = stderrors.Join(granteeErr, runAll(append(spaceFns, createdFns...)...))
+		createdErr := make(chan error, 1)
+		go func() { createdErr <- runAll(createdFns...) }()
+		// Only the removal of the shares decides the result. When the shares are
+		// gone, a retry gets NotFound, so an error makes the caller see a failed
+		// removal that it cannot repeat. A listing skips a stale created entry.
+		err = runAll(spaceFns...)
+		if leftover := stderrors.Join(granteeErr, <-createdErr); leftover != nil {
+			appctx.GetLogger(ctx).Warn().Err(leftover).Msg("removed the shares, but could not remove all entries. the next listing skips or removes them")
+		}
 	}
 	if err != nil {
 		span.RecordError(err)
@@ -1403,6 +1425,14 @@ func (m *Manager) staleGracePeriodOver(shareID string) bool {
 	}
 	delete(m.staleSince, shareID)
 	return true
+}
+
+// forgetStale stops the grace period of a share that a listing found again.
+// Two short losses of a share then do not add up to one long loss.
+func (m *Manager) forgetStale(shareID string) {
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	delete(m.staleSince, shareID)
 }
 
 // runAll runs the functions at the same time and returns all errors.

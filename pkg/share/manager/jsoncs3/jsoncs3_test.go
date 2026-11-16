@@ -314,7 +314,7 @@ var _ = Describe("Jsoncs3", func() {
 
 			cs.FailPath = "/groups/group1/received.json"
 			err = fm.Unshare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
-			Expect(err).To(HaveOccurred(), "the caller must see the failure")
+			Expect(err).ToNot(HaveOccurred(), "the share is removed, so Unshare reports success")
 			cs.FailPath = ""
 
 			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
@@ -335,13 +335,23 @@ var _ = Describe("Jsoncs3", func() {
 
 			cs.FailPath = "/users/einstein/received.json"
 			err = fm.Unshare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
-			Expect(err).To(HaveOccurred(), "the caller must see the failure")
+			Expect(err).ToNot(HaveOccurred(), "the share is removed, so Unshare reports success")
 			cs.FailPath = ""
 
 			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = fresh.GetShare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
 			Expect(err).To(HaveOccurred(), "the share must be gone")
+		})
+
+		It("returns an error when Unshare cannot remove the share", func() {
+			s, err := fm.Share(ctx, sharedResource2, groupGrant)
+			Expect(err).ToNot(HaveOccurred())
+
+			cs.FailPath = "/storages/storageid2/spaceid2.json"
+			err = fm.Unshare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
+			Expect(err).To(HaveOccurred(), "the share stays, so the caller must see the failure")
+			cs.FailPath = ""
 		})
 
 		It("allows a new Share after a Share that could not update the group cache", func() {
@@ -980,16 +990,16 @@ var _ = Describe("Jsoncs3", func() {
 					})
 
 					// A NotFound for the space file can be temporary. Then the provider cache
-					// has an empty space with no etag. That is no proof that the shares are gone.
-					It("keeps all entries when the space file cannot be found", func() {
+					// has an empty space with no etag. A listing removes the entries only
+					// after the grace period, so a temporary NotFound removes nothing.
+					It("keeps all entries when the space file cannot be found for less than the grace period", func() {
 						spaceFile := filepath.Join(tmpdir, "storages", "storageid", "spaceid.json")
 						content, err := os.ReadFile(spaceFile)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(os.Remove(spaceFile)).To(Succeed())
 
-						m2, err := jsoncs3.New(storage, nil, 0, nil, 0) // cold cache
+						m2, err := jsoncs3.New(storage, nil, 0, nil, 0) // cold cache, default grace period
 						Expect(err).ToNot(HaveOccurred())
-						m2.StaleShareGracePeriod = 0
 						_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
 						Expect(err).ToNot(HaveOccurred())
 
