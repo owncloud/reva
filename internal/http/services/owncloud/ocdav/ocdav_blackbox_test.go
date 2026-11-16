@@ -1112,6 +1112,82 @@ var _ = Describe("ocdav", func() {
 			})
 		})
 
+		Describe("COPY a file", func() {
+			// downloadStatus is the status the data server answers the
+			// internal download of the copy source with
+			var downloadStatus int
+
+			BeforeEach(func() {
+				downloadStatus = http.StatusOK
+			})
+
+			JustBeforeEach(func() {
+				dataSvr.Close()
+				dataSvr = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodGet {
+						w.WriteHeader(downloadStatus)
+						if downloadStatus == http.StatusOK {
+							_, _ = w.Write([]byte("content"))
+						}
+						return
+					}
+					w.WriteHeader(http.StatusOK)
+				}))
+
+				mockPathStat("./file", status.NewOK(ctx), &cs3storageprovider.ResourceInfo{
+					Id:   &cs3storageprovider.ResourceId{StorageId: "provider-1", SpaceId: "userspace", OpaqueId: "fileid"},
+					Type: cs3storageprovider.ResourceType_RESOURCE_TYPE_FILE,
+					Size: 7,
+				})
+				mockPathStat("./copy", status.NewNotFound(ctx, "not found"), nil)
+				mockPathStat(".", status.NewOK(ctx), &cs3storageprovider.ResourceInfo{
+					Id:   &cs3storageprovider.ResourceId{StorageId: "provider-1", SpaceId: "userspace", OpaqueId: "userspace"},
+					Type: cs3storageprovider.ResourceType_RESOURCE_TYPE_CONTAINER,
+				})
+				client.On("InitiateFileDownload", mock.Anything, mock.Anything).Return(&cs3gateway.InitiateFileDownloadResponse{
+					Status:    status.NewOK(ctx),
+					Protocols: []*cs3gateway.FileDownloadProtocol{{Protocol: "spaces", DownloadEndpoint: dataSvr.URL + "/download"}},
+				}, nil)
+				client.On("InitiateFileUpload", mock.Anything, mock.Anything).Return(&cs3gateway.InitiateFileUploadResponse{
+					Status:    status.NewOK(ctx),
+					Protocols: []*cs3gateway.FileUploadProtocol{{Protocol: "simple", UploadEndpoint: dataSvr.URL + "/upload"}},
+				}, nil)
+
+				rr = httptest.NewRecorder()
+				req, err = http.NewRequest("COPY", basePath+"/provider-1$userspace/file", strings.NewReader(""))
+				Expect(err).ToNot(HaveOccurred())
+				req = req.WithContext(ctx)
+				req.Header.Set(net.HeaderDestination, basePath+"/provider-1$userspace/copy")
+			})
+
+			It("returns 201 when the copy succeeds", func() {
+				handler.Handler().ServeHTTP(rr, req)
+				Expect(rr).To(HaveHTTPStatus(http.StatusCreated))
+			})
+
+			When("the source is still in postprocessing", func() {
+				BeforeEach(func() {
+					downloadStatus = http.StatusTooEarly
+				})
+
+				It("returns 425 so that the client can retry", func() {
+					handler.Handler().ServeHTTP(rr, req)
+					Expect(rr).To(HaveHTTPStatus(http.StatusTooEarly))
+				})
+			})
+
+			When("the download of the source fails", func() {
+				BeforeEach(func() {
+					downloadStatus = http.StatusInternalServerError
+				})
+
+				It("returns 500", func() {
+					handler.Handler().ServeHTTP(rr, req)
+					Expect(rr).To(HaveHTTPStatus(http.StatusInternalServerError))
+				})
+			})
+		})
+
 		Describe("MOVE a resource to the name it already has", func() {
 			// see https://github.com/owncloud/ocis/issues/1976. The id based dav route
 			// addresses the source by its own id and the destination relative to the
