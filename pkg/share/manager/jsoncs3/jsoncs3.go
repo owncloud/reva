@@ -114,6 +114,11 @@ import (
 // name is the Tracer name used to identify this instrumentation library.
 const tracerName = "jsoncs3"
 
+// rollbackTimeout limits the rollback of a failed Share. The rollback does not
+// use the cancellation of the request, because a cancelled request is a
+// common cause of the failure.
+const rollbackTimeout = 30 * time.Second
+
 func init() {
 	registry.Register("jsoncs3", NewDefault)
 }
@@ -355,8 +360,26 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 	// A listing that sees the grantee entry then always finds the share.
 	// When a write fails, remove what was written. Otherwise the share stays
 	// without a grantee entry, and a new Share fails with AlreadyExists.
+	spaceID := md.Id.StorageId + shareid.IDDelimiter + md.Id.SpaceId
+	granteeWritten := false
 	rollback := func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
 		log := appctx.GetLogger(ctx)
+		// A failed grantee write keeps the share ID in memory. Remove it first,
+		// otherwise the next write of the grantee document uploads it.
+		if granteeWritten {
+			var err error
+			switch g.Grantee.Type {
+			case provider.GranteeType_GRANTEE_TYPE_USER:
+				err = m.UserReceivedStates.Remove(ctx, g.Grantee.GetUserId().GetOpaqueId(), spaceID, shareID)
+			case provider.GranteeType_GRANTEE_TYPE_GROUP:
+				err = m.GroupReceivedCache.Remove(ctx, g.Grantee.GetGroupId().GetOpaqueId(), shareID)
+			}
+			if err != nil {
+				log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the grantee entry")
+			}
+		}
 		if err := m.Cache.Remove(ctx, md.Id.StorageId, md.Id.SpaceId, shareID); err != nil {
 			log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the share in the provider cache")
 		}
@@ -370,7 +393,7 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 		func() error { return m.CreatedCache.Add(ctx, s.GetCreator().GetOpaqueId(), shareID) },
 	)
 	if err == nil {
-		spaceID := md.Id.StorageId + shareid.IDDelimiter + md.Id.SpaceId
+		granteeWritten = true
 		// set flag for grantee to have access to share
 		switch g.Grantee.Type {
 		case provider.GranteeType_GRANTEE_TYPE_USER:
@@ -937,11 +960,9 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 				var stale []string
 				staleOfGroup := map[string][]string{}
 				for shareID, state := range w.rspace.States {
-					s, err := m.Cache.Get(gctx, storageID, spaceID, shareID, true)
-					if err != nil {
-						sublogr.Error().Err(err).Msg("could not retrieve share")
-						continue
-					}
+					// Read the share from the same snapshot as the etag. A parallel
+					// sync can reset the live cache, and then a valid share looks stale.
+					s := spaceShares.Shares[shareID]
 					if s == nil && !spaceFileRead {
 						sublogr.Debug().Str("shareid", shareID).Msg("share not found, but the space file was not read. skipping the cleanup")
 						continue
