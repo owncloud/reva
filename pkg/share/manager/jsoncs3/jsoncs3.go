@@ -629,15 +629,16 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 
 	statCache := make(map[string]struct{})
 	var ss []*collaboration.Share
+	// remove the expired shares of all spaces together, with one upload per document
+	var expired []*collaboration.Share
 	for providerID, spaces := range providerSpaces {
 		for spaceID := range spaces {
 			shares, err := m.Cache.ListSpace(ctx, providerID, spaceID)
 			if err != nil {
+				m.expireShares(ctx, expired)
 				return nil, err
 			}
 
-			// remove the expired shares of the space together, with one upload per document
-			var expired []*collaboration.Share
 			for _, s := range shares.Shares {
 				resourceID := s.GetResourceId()
 				sublog = sublog.With().Str("storageid", resourceID.GetStorageId()).Str("spaceid", resourceID.GetSpaceId()).Str("opaqueid", resourceID.GetOpaqueId()).Logger()
@@ -683,9 +684,9 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 
 				ss = append(ss, s)
 			}
-			m.expireShares(ctx, expired)
 		}
 	}
+	m.expireShares(ctx, expired)
 	span.SetStatus(codes.Ok, "")
 	return ss, nil
 }
@@ -713,8 +714,12 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 	}
 	work := make(chan w)
 	results := make(chan *collaboration.Share)
+	// The workers send the expired shares to this channel. The expiration runs
+	// after all workers stop, with one upload per document for all spaces.
+	expired := make(chan *collaboration.Share)
 
-	g, ctx := errgroup.WithContext(ctx)
+	// gctx is cancelled when g.Wait returns. Do not use it after the wait.
+	g, gctx := errgroup.WithContext(ctx)
 
 	// Distribute work
 	g.Go(func() error {
@@ -722,8 +727,8 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 		for ssid, ids := range list {
 			select {
 			case work <- w{ssid, ids}:
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-gctx.Done():
+				return gctx.Err()
 			}
 		}
 		return nil
@@ -734,7 +739,7 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 			for w := range work {
 				storageID, spaceID, _ := shareid.Decode(w.ssid)
 				// fetch all shares from space with one request
-				_, err := m.Cache.ListSpace(ctx, storageID, spaceID)
+				_, err := m.Cache.ListSpace(gctx, storageID, spaceID)
 				if err != nil {
 					sublog.Error().Err(err).
 						Str("storageid", storageID).
@@ -742,45 +747,65 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 						Msg("failed to list shares in space")
 					continue
 				}
-				// remove the expired shares of the space together, with one upload per document
-				var expired []*collaboration.Share
 				for shareID := range w.ids.IDs {
-					s, err := m.Cache.Get(ctx, storageID, spaceID, shareID, true)
+					s, err := m.Cache.Get(gctx, storageID, spaceID, shareID, true)
 					if err != nil || s == nil {
 						continue
 					}
 					if share.IsExpired(s) {
-						expired = append(expired, s)
+						select {
+						case expired <- s:
+						case <-gctx.Done():
+							return gctx.Err()
+						}
 						continue
 					}
 					if utils.UserEqual(user.GetId(), s.GetCreator()) {
 						if share.MatchesFilters(s, filters) {
 							select {
 							case results <- s:
-							case <-ctx.Done():
-								return ctx.Err()
+							case <-gctx.Done():
+								return gctx.Err()
 							}
 						}
 					}
 				}
-				m.expireShares(ctx, expired)
 			}
 			return nil
 		})
 	}
 
-	// Wait for things to settle down, then close results chan
+	// Wait for things to settle down, then close the channels
 	go func() {
 		_ = g.Wait() // error is checked later
 		close(results)
+		close(expired)
 	}()
 
 	ss := []*collaboration.Share{}
-	for n := range results {
-		ss = append(ss, n)
+	var expiredShares []*collaboration.Share
+	// Read both channels until the closer goroutine closes them. A nil channel
+	// blocks forever, so the select stops reading a closed channel.
+	for res, exp := results, expired; res != nil || exp != nil; {
+		select {
+		case s, ok := <-res:
+			if !ok {
+				res = nil
+				continue
+			}
+			ss = append(ss, s)
+		case s, ok := <-exp:
+			if !ok {
+				exp = nil
+				continue
+			}
+			expiredShares = append(expiredShares, s)
+		}
 	}
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+	m.expireShares(ctx, expiredShares)
+	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -872,8 +897,12 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 	}
 	work := make(chan w)
 	results := make(chan *collaboration.ReceivedShare)
+	// The workers send the expired shares to this channel. The expiration runs
+	// after all workers stop, with one upload per document for all spaces.
+	expired := make(chan *collaboration.Share)
 
-	g, ctx := errgroup.WithContext(ctx)
+	// gctx is cancelled when g.Wait returns. Do not use it after the wait.
+	g, gctx := errgroup.WithContext(ctx)
 
 	// Distribute work
 	g.Go(func() error {
@@ -881,8 +910,8 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 		for ssid, rspace := range ssids {
 			select {
 			case work <- w{ssid, rspace}:
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-gctx.Done():
+				return gctx.Err()
 			}
 		}
 		return nil
@@ -895,7 +924,7 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 				storageID, spaceID, _ := shareid.Decode(w.ssid)
 				sublogr := sublog.With().Str("storageid", storageID).Str("spaceid", spaceID).Logger()
 				// fetch all shares from space with one request
-				spaceShares, err := m.Cache.ListSpace(ctx, storageID, spaceID)
+				spaceShares, err := m.Cache.ListSpace(gctx, storageID, spaceID)
 				if err != nil {
 					sublogr.Error().Err(err).
 						Msg("failed to list shares in space")
@@ -904,12 +933,11 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 				// An empty etag means that the space file was not found. That can be
 				// temporary, so it is no proof that a share is gone.
 				spaceFileRead := spaceShares.Etag != ""
-				// remove the expired and the stale shares of the space together, with one upload per document
-				var expired []*collaboration.Share
+				// remove the stale shares of the space together, with one upload per document
 				var stale []string
 				staleOfGroup := map[string][]string{}
 				for shareID, state := range w.rspace.States {
-					s, err := m.Cache.Get(ctx, storageID, spaceID, shareID, true)
+					s, err := m.Cache.Get(gctx, storageID, spaceID, shareID, true)
 					if err != nil {
 						sublogr.Error().Err(err).Msg("could not retrieve share")
 						continue
@@ -929,7 +957,11 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 					}
 					sublogr = sublogr.With().Str("shareid", shareID).Logger()
 					if share.IsExpired(s) {
-						expired = append(expired, s)
+						select {
+						case expired <- s:
+						case <-gctx.Done():
+							return gctx.Err()
+						}
 						continue
 					}
 
@@ -943,19 +975,18 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 							}
 							select {
 							case results <- rs:
-							case <-ctx.Done():
-								return ctx.Err()
+							case <-gctx.Done():
+								return gctx.Err()
 							}
 						}
 					}
 				}
-				m.expireShares(ctx, expired)
 				if len(stale) > 0 {
-					if err := m.UserReceivedStates.RemoveMany(ctx, user.Id.OpaqueId, w.ssid, stale); err != nil {
+					if err := m.UserReceivedStates.RemoveMany(gctx, user.Id.OpaqueId, w.ssid, stale); err != nil {
 						sublogr.Error().Err(err).Strs("shareids", stale).Msg("could not remove stale shares from the user received states")
 					}
 					for group, ids := range staleOfGroup {
-						if err := m.GroupReceivedCache.RemoveMany(ctx, group, ids); err != nil {
+						if err := m.GroupReceivedCache.RemoveMany(gctx, group, ids); err != nil {
 							sublogr.Error().Err(err).Strs("shareids", ids).Str("groupid", group).Msg("could not remove stale shares from the group cache")
 						}
 					}
@@ -965,18 +996,37 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 		})
 	}
 
-	// Wait for things to settle down, then close results chan
+	// Wait for things to settle down, then close the channels
 	go func() {
 		_ = g.Wait() // error is checked later
 		close(results)
+		close(expired)
 	}()
 
 	rss := []*collaboration.ReceivedShare{}
-	for n := range results {
-		rss = append(rss, n)
+	var expiredShares []*collaboration.Share
+	// Read both channels until the closer goroutine closes them. A nil channel
+	// blocks forever, so the select stops reading a closed channel.
+	for res, exp := results, expired; res != nil || exp != nil; {
+		select {
+		case rs, ok := <-res:
+			if !ok {
+				res = nil
+				continue
+			}
+			rss = append(rss, rs)
+		case s, ok := <-exp:
+			if !ok {
+				exp = nil
+				continue
+			}
+			expiredShares = append(expiredShares, s)
+		}
 	}
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+	m.expireShares(ctx, expiredShares)
+	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
