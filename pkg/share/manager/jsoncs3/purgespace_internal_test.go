@@ -212,6 +212,7 @@ func TestSpaceDeletedEventRemovesTheGroupShares(t *testing.T) {
 func TestSpaceDeletedEventWithAFailedGroupWriteIsCleanedOnTheFirstListing(t *testing.T) {
 	g := NewWithT(t)
 	f := newPurgeFixture(t)
+	f.m.StaleShareGracePeriod = 0 // this test checks the cleanup, not the grace period
 
 	f.cs.FailPath = "/groups/group1/received.json"
 	f.deleteSpace(t)

@@ -319,6 +319,7 @@ var _ = Describe("Jsoncs3", func() {
 
 			fresh, err := jsoncs3.New(storage, nil, 0, nil, 0)
 			Expect(err).ToNot(HaveOccurred())
+			fresh.StaleShareGracePeriod = 0 // this test checks the cleanup, not the grace period
 			_, err = fresh.GetShare(ctx, &collaboration.ShareReference{Spec: &collaboration.ShareReference_Id{Id: s.Id}})
 			Expect(err).To(HaveOccurred(), "the share must be gone")
 			Expect(groupOf()).To(HaveKey(s.Id.OpaqueId), "the group entry stays until the next listing")
@@ -972,6 +973,8 @@ var _ = Describe("Jsoncs3", func() {
 					var ghostID string
 
 					BeforeEach(func() {
+						// These tests check the cleanup, not the grace period.
+						m.StaleShareGracePeriod = 0
 						ghostID = shareid.Encode("storageid", "spaceid", "ghost")
 						Expect(m.GroupReceivedCache.Add(ctx, "group1", ghostID)).To(Succeed())
 					})
@@ -986,6 +989,7 @@ var _ = Describe("Jsoncs3", func() {
 
 						m2, err := jsoncs3.New(storage, nil, 0, nil, 0) // cold cache
 						Expect(err).ToNot(HaveOccurred())
+						m2.StaleShareGracePeriod = 0
 						_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
 						Expect(err).ToNot(HaveOccurred())
 
@@ -1029,6 +1033,7 @@ var _ = Describe("Jsoncs3", func() {
 						cs := &helpers.CountingUploadStorage{Storage: storage}
 						m2, err := jsoncs3.New(cs, nil, 0, nil, 0)
 						Expect(err).ToNot(HaveOccurred())
+						m2.StaleShareGracePeriod = 0
 
 						_, err = m2.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
 						Expect(err).ToNot(HaveOccurred())

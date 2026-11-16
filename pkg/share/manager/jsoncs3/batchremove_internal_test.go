@@ -230,6 +230,7 @@ func TestListReceivedSharesRemovesExpiredSharesWithOneUploadPerDocument(t *testi
 func TestListReceivedSharesRemovesManyStaleGroupSharesWithOneUploadPerGroup(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
+	f.m.StaleShareGracePeriod = 0 // this test checks the cleanup, not the grace period
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
 	for _, gid := range []string{"group1", "group2"} {
 		for i := 0; i < 20; i++ {

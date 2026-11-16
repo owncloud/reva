@@ -119,6 +119,12 @@ const tracerName = "jsoncs3"
 // common cause of the failure.
 const rollbackTimeout = 30 * time.Second
 
+// defaultStaleShareGracePeriod is the default of Manager.StaleShareGracePeriod.
+// An older version writes the grantee entry and the share at the same time.
+// During a rolling upgrade, a listing can find the grantee entry before the
+// share is on storage. The grace period must be longer than such a write.
+const defaultStaleShareGracePeriod = 5 * time.Minute
+
 func init() {
 	registry.Register("jsoncs3", NewDefault)
 }
@@ -169,6 +175,14 @@ type Manager struct {
 
 	MaxConcurrency int
 
+	// StaleShareGracePeriod is the time that a pod waits before it removes a
+	// stale grantee entry. Zero removes the entry at the first listing.
+	StaleShareGracePeriod time.Duration
+
+	// staleSince holds the time when this pod first found each stale share.
+	staleMu    sync.Mutex
+	staleSince map[string]time.Time
+
 	gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient]
 	eventStream     events.Stream
 }
@@ -215,6 +229,9 @@ func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.Gate
 		gatewaySelector:    gatewaySelector,
 		eventStream:        es,
 		MaxConcurrency:     maxconcurrency,
+
+		StaleShareGracePeriod: defaultStaleShareGracePeriod,
+		staleSince:            map[string]time.Time{},
 	}
 
 	// listen for events
@@ -967,6 +984,10 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						sublogr.Debug().Str("shareid", shareID).Msg("share not found, but the space file was not read. skipping the cleanup")
 						continue
 					}
+					if s == nil && !m.staleGracePeriodOver(shareID) {
+						sublogr.Debug().Str("shareid", shareID).Msg("share not found. waiting for the grace period before the cleanup")
+						continue
+					}
 					if s == nil {
 						sublogr.Warn().Str("shareid", shareID).Msg("share not found. cleaning up")
 						stale = append(stale, shareID)
@@ -1352,6 +1373,36 @@ func (m *Manager) expireShares(ctx context.Context, shares []*collaboration.Shar
 			log.Error().Err(err).Str("shareid", s.GetId().GetOpaqueId()).Msg("failed to publish share expired event")
 		}
 	}
+}
+
+// staleGracePeriodOver reports if this pod found the share stale for longer
+// than StaleShareGracePeriod. The first call for a share starts the grace period.
+func (m *Manager) staleGracePeriodOver(shareID string) bool {
+	if m.StaleShareGracePeriod <= 0 {
+		return true
+	}
+	now := time.Now()
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	if m.staleSince == nil {
+		m.staleSince = map[string]time.Time{}
+	}
+	first, ok := m.staleSince[shareID]
+	if !ok {
+		// Forget the shares that no listing checked for a long time.
+		for id, t := range m.staleSince {
+			if now.Sub(t) > 10*m.StaleShareGracePeriod {
+				delete(m.staleSince, id)
+			}
+		}
+		m.staleSince[shareID] = now
+		return false
+	}
+	if now.Sub(first) < m.StaleShareGracePeriod {
+		return false
+	}
+	delete(m.staleSince, shareID)
+	return true
 }
 
 // runAll runs the functions at the same time and returns all errors.

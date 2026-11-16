@@ -185,6 +185,8 @@ func TestListReceivedSharesDoesNotRemoveValidGroupSharesWhenTheCacheIsReset(t *t
 	ns := &notFoundEverySecondDownloadStorage{Storage: f.storage, path: "/storages/storageid/spaceid.json"}
 	m, err := New(ns, nil, 0, nopStream{}, 0)
 	g.Expect(err).ToNot(HaveOccurred())
+	// With a grace period, no listing removes an entry, and the test proves nothing.
+	m.StaleShareGracePeriod = 0
 	// initialize reads m.initialized without the lock. Initialize before the
 	// parallel listings, so the race detector reports only the races of this test.
 	g.Expect(m.initialize(ctxOf("admin"))).To(Succeed())
