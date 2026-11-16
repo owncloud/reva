@@ -97,6 +97,18 @@ var _ = Describe("Sharecache", func() {
 			Expect(spaces["storageid:otherspace"].IDs).To(BeEmpty())
 		})
 
+		// An empty space entry makes each listing of the group read the space
+		// file again, also when the space has no share for the group.
+		It("removes the space entry with the last share of the space", func() {
+			Expect(c.RemoveMany(ctx, userid, []string{s1, s3})).To(Succeed())
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces).To(HaveKey("storageid:spaceid"), "the space still has a share")
+			Expect(spaces).ToNot(HaveKey("storageid:otherspace"))
+		})
+
 		It("does not upload when none of the shares is in the cache", func() {
 			cs := &countingStorage{Storage: storage}
 			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)

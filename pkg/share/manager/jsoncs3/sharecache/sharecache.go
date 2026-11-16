@@ -188,6 +188,10 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 			if c.has(userid, ssid, shareID) {
 				us, _ := c.UserShares.Load(userid)
 				delete(us.UserShares[ssid].IDs, shareID)
+				// An empty space entry makes each listing read the space file again.
+				if len(us.UserShares[ssid].IDs) == 0 {
+					delete(us.UserShares, ssid)
+				}
 				removed = true
 			}
 		}
