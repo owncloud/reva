@@ -212,12 +212,16 @@ func (c *Cache) Add(ctx context.Context, storageID, spaceID, shareID string, sha
 
 // Remove removes a share from the cache
 func (c *Cache) Remove(ctx context.Context, storageID, spaceID, shareID string) error {
-	return c.RemoveMany(ctx, storageID, spaceID, []string{shareID})
+	_, err := c.RemoveMany(ctx, storageID, spaceID, []string{shareID})
+	return err
 }
 
 // RemoveMany removes the given shares of one space with one upload.
 // It does not upload when none of the shares is in the space.
-func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, shareIDs []string) error {
+// It returns the IDs that this call removed. A share that another caller
+// removed first is not in the result. The CAS upload makes sure that only one
+// caller removes a share, also across pods.
+func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, shareIDs []string) ([]string, error) {
 	ctx, span := tracer.Start(ctx, "Remove")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.storageid", storageID), attribute.String("cs3.spaceid", spaceID), attribute.Int("cs3.sharecount", len(shareIDs)))
@@ -229,11 +233,14 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 	if !c.isSpaceCached(storageID, spaceID) {
 		err := c.syncWithRetry(ctx, storageID, spaceID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
+	var removed []string
 	persistFunc := func() error {
+		// A CAS conflict syncs the space and calls this function again.
+		removed = nil
 		spaces, ok := c.Providers.Load(storageID)
 		if !ok {
 			return nil
@@ -242,14 +249,13 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 		if !ok {
 			return nil
 		}
-		removed := false
 		for _, shareID := range shareIDs {
 			if _, ok := space.Shares[shareID]; ok {
 				delete(space.Shares, shareID)
-				removed = true
+				removed = append(removed, shareID)
 			}
 		}
-		if !removed {
+		if len(removed) == 0 {
 			return nil // nothing to remove, do not upload
 		}
 
@@ -277,8 +283,9 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 	)
 	if err == nil {
 		span.SetStatus(codes.Ok, "")
+		return removed, nil
 	}
-	return err
+	return nil, err
 }
 
 // Get returns one entry from the cache

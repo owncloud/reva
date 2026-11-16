@@ -1272,7 +1272,7 @@ func (m *Manager) purgeSpace(ctx context.Context, id *provider.StorageSpaceId) e
 		all = append(all, s)
 	}
 	var errs []error
-	if err := m.removeShares(ctx, all, true); err != nil {
+	if _, err := m.removeShares(ctx, all, true); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -1285,15 +1285,19 @@ func (m *Manager) purgeSpace(ctx context.Context, id *provider.StorageSpaceId) e
 // removeShare removes a share and its entries. Set purgingSpace when the
 // caller removes the space entry itself, because the space is deleted.
 func (m *Manager) removeShare(ctx context.Context, s *collaboration.Share, purgingSpace bool) error {
-	return m.removeShares(ctx, []*collaboration.Share{s}, purgingSpace)
+	_, err := m.removeShares(ctx, []*collaboration.Share{s}, purgingSpace)
+	return err
 }
 
 // removeShares removes shares and their entries. It uploads each touched
 // document once, also when it removes many shares from it.
 // Set purgingSpace when the caller removes the space entries itself.
-func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Share, purgingSpace bool) error {
+// It returns the IDs of the shares that this call removed from the space
+// entries. A share that another caller removed first is not in the result.
+// With purgingSpace, the result is empty.
+func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Share, purgingSpace bool) ([]string, error) {
 	if len(shares) == 0 {
-		return nil
+		return nil, nil
 	}
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "removeShares")
 	defer span.End()
@@ -1344,11 +1348,17 @@ func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Shar
 			return nil
 		})
 	}
+	var removedMu sync.Mutex
+	var removed []string
 	for sp, ids := range spaceShares {
 		spaceFns = append(spaceFns, func() error {
-			if err := m.Cache.RemoveMany(ctx, sp.storageID, sp.spaceID, ids); err != nil {
+			r, err := m.Cache.RemoveMany(ctx, sp.storageID, sp.spaceID, ids)
+			if err != nil {
 				return fmt.Errorf("could not remove shares %v from space %s: %w", ids, sp.spaceID, err)
 			}
+			removedMu.Lock()
+			removed = append(removed, r...)
+			removedMu.Unlock()
 			return nil
 		})
 	}
@@ -1380,20 +1390,32 @@ func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Shar
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
-	return err
+	// A failed space does not undo the removal in the other spaces, so return
+	// the removed IDs also with an error.
+	return removed, err
 }
 
 // expireShares removes expired shares, with one upload for each touched
-// document, and publishes a ShareExpired event for each share.
+// document. It publishes a ShareExpired event only for the shares that it
+// removed. Many listings can find the same expired share, and each event can
+// send a notification.
 func (m *Manager) expireShares(ctx context.Context, shares []*collaboration.Share) {
 	if len(shares) == 0 {
 		return
 	}
 	log := appctx.GetLogger(ctx)
-	if err := m.removeShares(ctx, shares, false); err != nil {
+	removedIDs, err := m.removeShares(ctx, shares, false)
+	if err != nil {
 		log.Error().Err(err).Int("count", len(shares)).Msg("failed to unshare expired shares")
 	}
+	removed := make(map[string]struct{}, len(removedIDs))
+	for _, id := range removedIDs {
+		removed[id] = struct{}{}
+	}
 	for _, s := range shares {
+		if _, ok := removed[s.GetId().GetOpaqueId()]; !ok {
+			continue // another caller removed it, or the removal failed
+		}
 		if err := events.Publish(ctx, m.eventStream, events.ShareExpired{
 			ShareID:        s.GetId(),
 			ShareOwner:     s.GetOwner(),

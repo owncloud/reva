@@ -91,7 +91,9 @@ var _ = Describe("Cache", func() {
 			cs := &helpers.CountingUploadStorage{Storage: storage}
 			c2 := providercache.New(cs, 0*time.Second)
 
-			Expect(c2.RemoveMany(ctx, storageID, spaceID, []string{"s1", "s2", "unknown"})).To(Succeed())
+			removed, err := c2.RemoveMany(ctx, storageID, spaceID, []string{"s1", "s2", "unknown"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(removed).To(ConsistOf("s1", "s2"), "only the shares that were in the space")
 			Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(1)))
 
 			fresh := providercache.New(storage, 0*time.Second)
@@ -105,8 +107,27 @@ var _ = Describe("Cache", func() {
 			cs := &helpers.CountingUploadStorage{Storage: storage}
 			c2 := providercache.New(cs, 0*time.Second)
 
-			Expect(c2.RemoveMany(ctx, storageID, spaceID, []string{"unknown1", "unknown2"})).To(Succeed())
+			removed, err := c2.RemoveMany(ctx, storageID, spaceID, []string{"unknown1", "unknown2"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(removed).To(BeEmpty())
 			Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(0)))
+		})
+
+		// Only one caller may report a share as removed. The callers use the
+		// result to send one event for each share.
+		It("does not report a share that another pod removed first", func() {
+			podA := providercache.New(storage, 0*time.Second)
+			podB := providercache.New(storage, 0*time.Second)
+			_, err := podB.ListSpace(ctx, storageID, spaceID) // pod B has the share in memory
+			Expect(err).ToNot(HaveOccurred())
+
+			removed, err := podA.RemoveMany(ctx, storageID, spaceID, []string{"s1"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(removed).To(ConsistOf("s1"))
+
+			removed, err = podB.RemoveMany(ctx, storageID, spaceID, []string{"s1", "s2"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(removed).To(ConsistOf("s2"), "pod A removed s1 first")
 		})
 	})
 
