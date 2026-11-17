@@ -241,3 +241,37 @@ func TestListReceivedSharesLogsOneShareIDForEachStaleShare(t *testing.T) {
 	}
 	g.Expect(lines).To(Equal(3))
 }
+
+// Break: a new stale ID drops the entries older than ten grace periods,
+// counted from the first time that the pod found them. With many pods, one
+// pod finds the same stale ID less often than that. Each listing then starts
+// the grace period again, and the pod never removes the stale entry.
+func TestStaleGracePeriodIsOverForAShareThatThePodFindsRarely(t *testing.T) {
+	g := NewWithT(t)
+	m := &Manager{StaleShareGracePeriod: 20 * time.Millisecond, staleForgetAfter: time.Hour}
+	g.Expect(m.staleGracePeriodOver("ghost")).To(BeFalse(), "the first listing starts the grace period")
+
+	time.Sleep(250 * time.Millisecond) // more than ten grace periods
+	g.Expect(m.staleGracePeriodOver("other")).To(BeFalse(), "a new stale ID")
+
+	g.Expect(m.staleGracePeriodOver("ghost")).To(BeTrue(), "the pod still knows the stale ID")
+}
+
+// Break: the pod forgets a stale ID that a listing found a short time ago,
+// because it counts from the first time that it found the ID.
+func TestStaleGracePeriodForgetsOnlyTheSharesThatNoListingFoundForALongTime(t *testing.T) {
+	g := NewWithT(t)
+	m := &Manager{StaleShareGracePeriod: time.Hour, staleForgetAfter: 150 * time.Millisecond}
+	m.staleGracePeriodOver("found-again")
+	m.staleGracePeriodOver("not-found-again")
+	time.Sleep(100 * time.Millisecond)
+	m.staleGracePeriodOver("found-again")
+	time.Sleep(100 * time.Millisecond)
+	m.staleGracePeriodOver("new") // a new stale ID drops the old entries
+
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	g.Expect(m.staleSince).To(HaveKey("found-again"), "a listing found it 100ms ago")
+	g.Expect(m.staleSince).ToNot(HaveKey("not-found-again"), "no listing found it for 200ms")
+	g.Expect(m.staleSince).To(HaveKey("new"))
+}

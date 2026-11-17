@@ -17,7 +17,9 @@ The share manager removes a stale entry only after a grace period of 5 minutes.
 An older version writes the grantee entry and the share at the same time.
 During a rolling upgrade, a listing can find the grantee entry before the share
 is on storage. Before, the listing removed this entry, and no group member saw
-the share.
+the share. Each pod counts the grace period itself. A pod remembers a stale
+entry for 24 hours after the last listing that found it, so the grace period
+also ends on a pod that finds the entry only once in some hours.
 
 A Remove on the provider cache, the user cache or the group cache no longer
 uploads the file when the share is not in it. A Remove on the created cache or

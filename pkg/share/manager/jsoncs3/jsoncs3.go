@@ -125,6 +125,11 @@ var rollbackTimeout = 30 * time.Second
 // share is on storage. The grace period must be longer than such a write.
 const defaultStaleShareGracePeriod = 5 * time.Minute
 
+// defaultStaleForgetAfter is the default of Manager.staleForgetAfter. With
+// many pods, one pod can find the same stale share only once in some hours.
+// A shorter time makes that pod start the grace period again on each listing.
+const defaultStaleForgetAfter = 24 * time.Hour
+
 func init() {
 	registry.Register("jsoncs3", NewDefault)
 }
@@ -179,9 +184,12 @@ type Manager struct {
 	// stale grantee entry. Zero removes the entry at the first listing.
 	StaleShareGracePeriod time.Duration
 
-	// staleSince holds the time when this pod first found each stale share.
+	// staleSince holds the times when this pod found each stale share.
 	staleMu    sync.Mutex
-	staleSince map[string]time.Time
+	staleSince map[string]staleSeen
+	// staleForgetAfter is the time after which this pod forgets a stale share
+	// that no listing found again. It limits the size of staleSince.
+	staleForgetAfter time.Duration
 
 	gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient]
 	eventStream     events.Stream
@@ -231,7 +239,8 @@ func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.Gate
 		MaxConcurrency:     maxconcurrency,
 
 		StaleShareGracePeriod: defaultStaleShareGracePeriod,
-		staleSince:            map[string]time.Time{},
+		staleSince:            map[string]staleSeen{},
+		staleForgetAfter:      defaultStaleForgetAfter,
 	}
 
 	// listen for events
@@ -1431,6 +1440,12 @@ func (m *Manager) expireShares(ctx context.Context, shares []*collaboration.Shar
 	}
 }
 
+// staleSeen holds the times when this pod found a stale share.
+type staleSeen struct {
+	first time.Time // the start of the grace period
+	last  time.Time // the time to forget the share is counted from here
+}
+
 // staleGracePeriodOver reports if this pod found the share stale for longer
 // than StaleShareGracePeriod. The first call for a share starts the grace period.
 func (m *Manager) staleGracePeriodOver(shareID string) bool {
@@ -1441,20 +1456,26 @@ func (m *Manager) staleGracePeriodOver(shareID string) bool {
 	m.staleMu.Lock()
 	defer m.staleMu.Unlock()
 	if m.staleSince == nil {
-		m.staleSince = map[string]time.Time{}
+		m.staleSince = map[string]staleSeen{}
 	}
-	first, ok := m.staleSince[shareID]
+	seen, ok := m.staleSince[shareID]
 	if !ok {
-		// Forget the shares that no listing checked for a long time.
-		for id, t := range m.staleSince {
-			if now.Sub(t) > 10*m.StaleShareGracePeriod {
+		// Forget the shares that no listing found for a long time.
+		forgetAfter := m.staleForgetAfter
+		if forgetAfter <= 0 {
+			forgetAfter = defaultStaleForgetAfter
+		}
+		for id, s := range m.staleSince {
+			if now.Sub(s.last) > forgetAfter {
 				delete(m.staleSince, id)
 			}
 		}
-		m.staleSince[shareID] = now
+		m.staleSince[shareID] = staleSeen{first: now, last: now}
 		return false
 	}
-	if now.Sub(first) < m.StaleShareGracePeriod {
+	if now.Sub(seen.first) < m.StaleShareGracePeriod {
+		seen.last = now
+		m.staleSince[shareID] = seen
 		return false
 	}
 	delete(m.staleSince, shareID)
