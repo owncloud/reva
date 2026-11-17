@@ -687,7 +687,9 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 
 			for _, s := range shares.Shares {
 				resourceID := s.GetResourceId()
-				sublog = sublog.With().Str("storageid", resourceID.GetStorageId()).Str("spaceid", resourceID.GetSpaceId()).Str("opaqueid", resourceID.GetOpaqueId()).Logger()
+				// A new logger for each share. Do not add the fields to sublog, or
+				// each log line carries the fields of all earlier shares.
+				log := sublog.With().Str("storageid", resourceID.GetStorageId()).Str("spaceid", resourceID.GetSpaceId()).Str("opaqueid", resourceID.GetOpaqueId()).Logger()
 				if share.IsExpired(s) {
 					expired = append(expired, s)
 					continue
@@ -707,23 +709,23 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 						}
 						client, err := m.gatewaySelector.Next()
 						if err != nil {
-							sublog.Error().Err(err).Msg("failed to select next gateway client")
+							log.Error().Err(err).Msg("failed to select next gateway client")
 							continue
 						}
 						res, err := client.Stat(ctx, req)
 						if err != nil {
-							sublog.Error().Err(err).Msg("failed to make stat call")
+							log.Error().Err(err).Msg("failed to make stat call")
 							continue
 						}
 						if res.Status.Code != rpcv1beta1.Code_CODE_OK {
-							sublog.Debug().Str("code", res.GetStatus().GetCode().String()).Msg(res.GetStatus().GetMessage())
+							log.Debug().Str("code", res.GetStatus().GetCode().String()).Msg(res.GetStatus().GetMessage())
 							continue
 						}
 						if !res.Info.PermissionSet.ListGrants {
-							sublog.Debug().Msg("user has no list grants permission")
+							log.Debug().Msg("user has no list grants permission")
 							continue
 						}
-						sublog.Debug().Msg("listing share for non participating user")
+						log.Debug().Msg("listing share for non participating user")
 						statCache[key] = struct{}{}
 					}
 				}
@@ -1017,7 +1019,6 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						continue
 					}
 					m.forgetStale(shareID)
-					sublogr = sublogr.With().Str("shareid", shareID).Logger()
 					if share.IsExpired(s) {
 						select {
 						case expired <- s:

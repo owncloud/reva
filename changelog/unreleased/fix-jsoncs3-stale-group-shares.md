@@ -53,4 +53,9 @@ When a space is deleted, the share manager now removes the created.json entry
 of each share also when the grantee entry cannot be removed. The share manager
 now logs the errors of this cleanup. Before, it sent them to a disabled logger.
 
+Each log line of a share listing now has the fields of one share only. Before,
+the listing added the fields of each share to the same logger. A later line
+then had the fields of all earlier shares, and a log search found the wrong
+share.
+
 https://github.com/owncloud/reva/pull/813

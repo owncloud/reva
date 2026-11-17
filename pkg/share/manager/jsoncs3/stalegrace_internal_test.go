@@ -24,7 +24,10 @@ package jsoncs3
 // remove it at once.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,10 +35,12 @@ import (
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 
 	. "github.com/onsi/gomega"
+	"github.com/rs/zerolog"
 )
 
 func receivedIDs(t *testing.T, m *Manager, user string, groups ...string) []string {
@@ -197,4 +202,42 @@ func TestListReceivedSharesCleansAStaleGroupEntryWithoutAnExtraUserDownload(t *t
 	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
 	g.Expect(downloadsDuringAListing()).To(Equal(normal), "the cleanup of a group entry does not read received.json of the user again")
 	g.Expect(groupIDsOnStorage(t, f, "group1")).ToNot(ContainElement(ghost), "the listing removes the stale entry")
+}
+
+// Break: the listing adds a shareid field to the space logger for each share
+// that it finds. A later log line of the same space then has many shareid
+// fields, and a log search shows the wrong share.
+func TestListReceivedSharesLogsOneShareIDForEachStaleShare(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.m.StaleShareGracePeriod = 0 // this test checks the log, not the grace period
+	for n := range 8 {
+		f.share(t, ctxOf("admin"), n, groupGrantee("group1"), nil)
+	}
+	ghosts := map[string]bool{}
+	for _, name := range []string{"ghost1", "ghost2", "ghost3"} {
+		id := shareid.Encode("storageid", "spaceid", name)
+		ghosts[id] = true
+		g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", id)).To(Succeed())
+	}
+
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf).Level(zerolog.WarnLevel)
+	_, err := f.m.ListReceivedShares(appctx.WithLogger(ctxOf("einstein", "group1"), &logger), nil, nil)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if !strings.Contains(line, "share not found. cleaning up") {
+			continue
+		}
+		lines++
+		g.Expect(strings.Count(line, `"shareid":`)).To(Equal(1), line)
+		var entry struct {
+			ShareID string `json:"shareid"`
+		}
+		g.Expect(json.Unmarshal([]byte(line), &entry)).To(Succeed())
+		g.Expect(ghosts).To(HaveKey(entry.ShareID), line)
+	}
+	g.Expect(lines).To(Equal(3))
 }
