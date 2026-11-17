@@ -275,3 +275,85 @@ func TestStaleGracePeriodForgetsOnlyTheSharesThatNoListingFoundForALongTime(t *t
 	g.Expect(m.staleSince).ToNot(HaveKey("not-found-again"), "no listing found it for 200ms")
 	g.Expect(m.staleSince).To(HaveKey("new"))
 }
+
+// Break: each new stale ID runs the sweep over all entries under the lock. A
+// listing that finds many new stale IDs then runs many full sweeps, and the
+// other listings of the pod wait for the lock.
+func TestStaleGracePeriodSweepsAtMostOnceInEachSweepInterval(t *testing.T) {
+	g := NewWithT(t)
+	now := time.Unix(0, 0)
+	m := &Manager{
+		StaleShareGracePeriod: time.Minute,
+		staleForgetAfter:      time.Hour,
+		staleClock:            func() time.Time { return now },
+	}
+	m.staleGracePeriodOver("old") // the first sweep
+
+	now = now.Add(59*time.Minute + 30*time.Second)
+	m.staleGracePeriodOver("a") // a sweep, but "old" is not too old yet
+	now = now.Add(40 * time.Second)
+	m.staleGracePeriodOver("b") // "old" is too old now, but the last sweep is 40 seconds ago
+
+	m.staleMu.Lock()
+	g.Expect(m.staleSince).To(HaveKey("old"), "no sweep in the interval after a sweep")
+	m.staleMu.Unlock()
+
+	now = now.Add(30 * time.Second)
+	m.staleGracePeriodOver("c") // a sweep: 70 seconds after the last sweep
+
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	g.Expect(m.staleSince).ToNot(HaveKey("old"), "the next sweep forgets it")
+	g.Expect(m.staleSince).To(HaveKey("a"))
+	g.Expect(m.staleSince).To(HaveKey("b"))
+	g.Expect(m.staleSince).To(HaveKey("c"))
+}
+
+func TestStaleForgetAfterIsLongerThanTheGracePeriod(t *testing.T) {
+	NewWithT(t).Expect(defaultStaleForgetAfter).To(BeNumerically(">", defaultStaleShareGracePeriod))
+}
+
+// Break: the listing forgets the grace period before the removal runs. When
+// the removal fails, the next listing starts a new grace period. The stale
+// entry then stays for one more grace period after each failed removal.
+func TestListReceivedSharesRetriesAFailedStaleRemovalWithoutANewGracePeriod(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.m.StaleShareGracePeriod = 200 * time.Millisecond
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
+	valid := receivedIDs(t, f.m, "einstein", "group1")
+	ghost := shareid.Encode("storageid", "spaceid", "ghost")
+	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
+
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the first listing starts the grace period")
+	time.Sleep(250 * time.Millisecond)
+
+	f.cs.FailPath = "/groups/group1/received.json"
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]))
+	f.cs.FailPath = ""
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0], ghost), "the removal failed")
+
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "the next listing removes the stale entry without a new grace period")
+}
+
+// Break: the listing forgets the grace period only when the removal fails,
+// and not after a successful removal. The pod then keeps the entry until the
+// sweep, and a new share with the same ID has no grace period.
+func TestListReceivedSharesForgetsAStaleShareAfterTheRemoval(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.m.StaleShareGracePeriod = 200 * time.Millisecond
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
+	ghost := shareid.Encode("storageid", "spaceid", "ghost")
+	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
+
+	receivedIDs(t, f.m, "einstein", "group1")
+	time.Sleep(250 * time.Millisecond)
+	receivedIDs(t, f.m, "einstein", "group1")
+	g.Expect(groupIDsOnStorage(t, f, "group1")).ToNot(ContainElement(ghost))
+
+	f.m.staleMu.Lock()
+	defer f.m.staleMu.Unlock()
+	g.Expect(f.m.staleSince).ToNot(HaveKey(ghost))
+}

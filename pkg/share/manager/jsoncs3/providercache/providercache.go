@@ -42,6 +42,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
+	"google.golang.org/protobuf/proto"
 )
 
 var tracer trace.Tracer
@@ -147,6 +148,24 @@ func (c *Cache) isSpaceCached(storageID, spaceID string) bool {
 	return ok
 }
 
+// hasAll reports if the space is in memory and has all the given shares.
+func (c *Cache) hasAll(storageID, spaceID string, shareIDs ...string) bool {
+	spaces, ok := c.Providers.Load(storageID)
+	if !ok {
+		return false
+	}
+	space, ok := spaces.Spaces.Load(spaceID)
+	if !ok {
+		return false
+	}
+	for _, shareID := range shareIDs {
+		if _, ok := space.Shares[shareID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // dropOnFailedUpload drops the space from memory after a failed upload that
 // is not a CAS conflict. The memory state is then different from the file,
 // and the etag did not change, so a sync gets NotModified and keeps it.
@@ -247,7 +266,12 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 	defer unlock()
 	span.AddEvent("got lock")
 
-	if !c.isSpaceCached(storageID, spaceID) {
+	// When a share is not in memory, sync first. A cold or stale cache does
+	// not show if the share is in the file. For example, a listing that got a
+	// temporary NotFound stores an empty space. Without the sync, the removal
+	// does not upload and the share stays in the file. When all shares are in
+	// memory, the CAS write in Persist detects stale state.
+	if !c.hasAll(storageID, spaceID, shareIDs...) {
 		err := c.syncWithRetry(ctx, storageID, spaceID)
 		if err != nil {
 			return nil, err
@@ -308,6 +332,91 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 		return removed, nil
 	}
 	return nil, err
+}
+
+// Update changes one share and uploads the space. It reads the share under
+// the space lock and gives a copy to the update function. A CAS conflict syncs
+// the space and calls the update function again with the new share.
+// The cache keeps the old share until the upload succeeds.
+// Update returns NotFound when the space does not have the share. Then it does
+// not upload, so it does not write a share that a parallel caller removed.
+func (c *Cache) Update(ctx context.Context, storageID, spaceID, shareID string, update func(*collaboration.Share)) (*collaboration.Share, error) {
+	ctx, span := tracer.Start(ctx, "Update")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.storageid", storageID), attribute.String("cs3.spaceid", spaceID), attribute.String("cs3.shareid", shareID))
+
+	unlock := c.LockSpace(spaceID)
+	defer unlock()
+	span.AddEvent("got lock")
+
+	// When the share is not in memory, sync first, as in RemoveMany. Else
+	// Update returns NotFound for a share that is in the file.
+	if !c.hasAll(storageID, spaceID, shareID) {
+		if err := c.syncWithRetry(ctx, storageID, spaceID); err != nil {
+			return nil, err
+		}
+	}
+
+	var updated *collaboration.Share
+	persistFunc := func() error {
+		// A CAS conflict syncs the space and calls this function again.
+		updated = nil
+		spaces, ok := c.Providers.Load(storageID)
+		if !ok {
+			return nil
+		}
+		space, ok := spaces.Spaces.Load(spaceID)
+		if !ok {
+			return nil
+		}
+		old, ok := space.Shares[shareID]
+		if !ok || old == nil {
+			return nil // the share is gone, do not upload
+		}
+		s := proto.Clone(old).(*collaboration.Share)
+		update(s)
+		space.Shares[shareID] = s
+
+		err := c.Persist(ctx, storageID, spaceID)
+		if err != nil {
+			// Put the old share back, so that memory agrees with the file.
+			// Persist does not change the etag when the upload fails.
+			space.Shares[shareID] = old
+			return err
+		}
+		updated = s
+		return nil
+	}
+
+	log := appctx.GetLogger(ctx).With().
+		Str("hostname", os.Getenv("HOSTNAME")).
+		Str("storageID", storageID).
+		Str("spaceID", spaceID).
+		Str("shareID", shareID).Logger()
+
+	err := cas.RetryPersist(ctx, 100, persistFunc,
+		func() error { return c.resyncAfterConflict(ctx, storageID, spaceID) },
+		func(err error) {
+			log.Debug().Err(err).Msg("CAS conflict persisting updated provider share, retrying...")
+		},
+		func(err error) {
+			span.SetStatus(codes.Error, fmt.Sprintf("persisting updated provider share failed. giving up: %s", err.Error()))
+			log.Error().Err(err).Msg("persisting updated provider share failed")
+		},
+		func(err error) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			log.Error().Err(err).Msg("persisting updated provider share failed. giving up.")
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, errtypes.NotFound(shareID)
+	}
+	span.SetStatus(codes.Ok, "")
+	return updated, nil
 }
 
 // Get returns one entry from the cache

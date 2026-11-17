@@ -92,3 +92,19 @@ func (n *NotModifiedStorage) Download(ctx context.Context, req metadata.Download
 	}
 	return res, nil
 }
+
+// ToggleNotFoundDownloadStorage fails each Download with errtypes.NotFound
+// while Fail is true. Use it to simulate a temporary NotFound after the cache
+// has read the file.
+type ToggleNotFoundDownloadStorage struct {
+	metadata.Storage
+	Fail atomic.Bool
+}
+
+// Download fails with errtypes.NotFound while Fail is true, else it delegates.
+func (t *ToggleNotFoundDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if t.Fail.Load() {
+		return nil, errtypes.NotFound("injected temporary not found: " + req.Path)
+	}
+	return t.Storage.Download(ctx, req)
+}

@@ -213,6 +213,52 @@ func TestListReceivedSharesDoesNotRemoveValidGroupSharesWhenTheCacheIsReset(t *t
 	g.Expect(l["storageid:spaceid"].IDs).To(HaveLen(shares), "the group cache keeps all valid shares")
 }
 
+// Break: listCreatedShares reads each share from the live provider cache, not
+// from the ListSpace snapshot. A parallel listing that gets a temporary
+// NotFound empties the live cache between the two reads. The creator then
+// sees only a part of the shares of the space.
+func TestListSharesReturnsAllOrNoSharesOfASpaceWhenTheCacheIsReset(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	const shares = 20
+	for i := 0; i < shares; i++ {
+		f.share(t, ctxOf("admin"), i, groupGrantee("group1"), nil)
+	}
+
+	ns := &notFoundEverySecondDownloadStorage{Storage: f.storage, path: "/storages/storageid/spaceid.json"}
+	m, err := New(ns, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(m.initialize(ctxOf("admin"))).To(Succeed())
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		lengths = map[int]int{}
+	)
+	for w := 0; w < 8; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				list, err := m.ListShares(ctxOf("admin"), nil)
+				if err != nil {
+					continue
+				}
+				mu.Lock()
+				lengths[len(list)]++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// A listing that gets the NotFound itself sees no shares. A listing that
+	// reads the space file sees all shares.
+	for l := range lengths {
+		g.Expect(l).To(Or(Equal(0), Equal(shares)), "the counts of the listings: %v", lengths)
+	}
+}
+
 // slowGranteeRollbackStorage fails the first upload of path, so Share rolls
 // back. Each later upload of path waits until the context ends. Each call
 // fails at once on an ended context, the same as a gRPC call.

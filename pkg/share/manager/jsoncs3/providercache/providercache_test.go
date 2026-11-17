@@ -31,6 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
+	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/providercache"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
@@ -150,6 +151,29 @@ var _ = Describe("Cache", func() {
 			shares, err := fresh.ListSpace(ctx, storageID, spaceID)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(shares.Shares).ToNot(HaveKey("s1"))
+		})
+		// Break: a parallel listing gets a temporary NotFound and stores an empty
+		// space with no etag. RemoveMany then finds no share, does not upload,
+		// and reports success, but the share stays in the file.
+		It("removes the shares after a temporary NotFound emptied the space in memory", func() {
+			ts := &helpers.ToggleNotFoundDownloadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}}
+			c2 := providercache.New(ts, 0*time.Second)
+			_, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			ts.Fail.Store(true)
+			_, err = c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			ts.Fail.Store(false)
+
+			removed, err := c2.RemoveMany(ctx, storageID, spaceID, []string{"s1"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(removed).To(ConsistOf("s1"))
+
+			fresh := providercache.New(storage, 0*time.Second)
+			shares, err := fresh.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(shares.Shares).ToNot(HaveKey("s1"))
+			Expect(shares.Shares).To(HaveKey("s2"))
 		})
 	})
 
@@ -282,6 +306,116 @@ var _ = Describe("Cache", func() {
 
 			Expect(err).To(HaveOccurred(),
 				"a confirmed-trashed path must surface as an error instead of being silently treated as empty")
+		})
+	})
+
+	// UpdateShare reads the share before it takes the space lock. Update must
+	// read the share again under the lock and write the change to the file.
+	Describe("Update", func() {
+		var expiration *typesv1beta1.Timestamp
+
+		setExpiration := func(s *collaboration.Share) { s.Expiration = expiration }
+		expirationOnStorage := func(id string) *typesv1beta1.Timestamp {
+			fresh := providercache.New(storage, 0*time.Second)
+			shares, err := fresh.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(shares.Shares).To(HaveKey(id))
+			return shares.Shares[id].GetExpiration()
+		}
+
+		BeforeEach(func() {
+			expiration = &typesv1beta1.Timestamp{Seconds: 42}
+			Expect(c.Add(ctx, storageID, spaceID, "s1", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "s1"}})).To(Succeed())
+		})
+
+		It("writes the change when the space is not in memory", func() {
+			c2 := providercache.New(storage, 0*time.Second)
+
+			updated, err := c2.Update(ctx, storageID, spaceID, "s1", setExpiration)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetExpiration()).To(Equal(expiration))
+			Expect(expirationOnStorage("s1")).To(Equal(expiration))
+		})
+
+		// Break: a failed upload of a parallel Add drops the space from memory.
+		// Persist then finds no space, and the update is lost without an error.
+		It("writes the change after a failed upload dropped the space", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := providercache.New(fs, 0*time.Second)
+			_, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(c2.Add(ctx, storageID, spaceID, "s2", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "s2"}})).ToNot(Succeed())
+
+			_, err = c2.Update(ctx, storageID, spaceID, "s1", setExpiration)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(expirationOnStorage("s1")).To(Equal(expiration))
+		})
+
+		It("applies the change again after a CAS conflict", func() {
+			podA := providercache.New(storage, 0*time.Second)
+			podB := providercache.New(storage, 0*time.Second)
+			_, err := podB.ListSpace(ctx, storageID, spaceID) // pod B has an old etag
+			Expect(err).ToNot(HaveOccurred())
+			Expect(podA.Add(ctx, storageID, spaceID, "s2", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "s2"}})).To(Succeed())
+
+			_, err = podB.Update(ctx, storageID, spaceID, "s1", setExpiration)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(expirationOnStorage("s1")).To(Equal(expiration))
+			Expect(expirationOnStorage("s2")).To(BeNil(), "the update keeps the share of pod A")
+		})
+
+		// Break: an update writes the share that it read before the lock. A
+		// parallel revoke on another pod is then undone.
+		It("returns NotFound and does not write a share that another pod removed", func() {
+			podA := providercache.New(storage, 0*time.Second)
+			podB := providercache.New(storage, 0*time.Second)
+			_, err := podB.ListSpace(ctx, storageID, spaceID) // pod B has the share in memory
+			Expect(err).ToNot(HaveOccurred())
+			Expect(podA.Remove(ctx, storageID, spaceID, "s1")).To(Succeed())
+
+			_, err = podB.Update(ctx, storageID, spaceID, "s1", setExpiration)
+			Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
+
+			fresh := providercache.New(storage, 0*time.Second)
+			shares, err := fresh.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(shares.Shares).ToNot(HaveKey("s1"))
+		})
+
+		// Break: a parallel listing gets a temporary NotFound and stores an empty
+		// space with no etag. Update then returns NotFound for a share that is
+		// in the file.
+		It("writes the change after a temporary NotFound emptied the space in memory", func() {
+			ts := &helpers.ToggleNotFoundDownloadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}}
+			c2 := providercache.New(ts, 0*time.Second)
+			_, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			ts.Fail.Store(true)
+			_, err = c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			ts.Fail.Store(false)
+
+			updated, err := c2.Update(ctx, storageID, spaceID, "s1", setExpiration)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetExpiration()).To(Equal(expiration))
+			Expect(expirationOnStorage("s1")).To(Equal(expiration))
+		})
+
+		// Break: the update changes the cached share in place. A reader that
+		// holds the share then sees a change that is not in the file.
+		It("does not change the share in memory when the upload fails", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := providercache.New(fs, 0*time.Second)
+			before, err := c2.Get(ctx, storageID, spaceID, "s1", false)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = c2.Update(ctx, storageID, spaceID, "s1", setExpiration)
+			Expect(err).To(HaveOccurred())
+			Expect(before.GetExpiration()).To(BeNil())
+
+			after, err := c2.Get(ctx, storageID, spaceID, "s1", false)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(after.GetExpiration()).To(BeNil())
 		})
 	})
 
