@@ -154,6 +154,24 @@ var _ = Describe("Cache", func() {
 	})
 
 	Describe("Add", func() {
+		// A failed upload does not change the etag. The next sync then gets
+		// NotModified and keeps the memory state. The memory state must not
+		// have the share, or this pod lists a share that is not in the file.
+		It("reads the file again after a failed upload", func() {
+			Expect(c.Add(ctx, storageID, spaceID, "s1", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "s1"}})).To(Succeed())
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := providercache.New(fs, 0*time.Second)
+			_, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.Add(ctx, storageID, spaceID, "s2", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "s2"}})).ToNot(Succeed())
+
+			shares, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(shares.Shares).To(HaveKey("s1"))
+			Expect(shares.Shares).ToNot(HaveKey("s2"))
+		})
+
 		It("adds a share", func() {
 			s, err := c.Get(ctx, storageID, spaceID, shareID, false)
 			Expect(err).ToNot(HaveOccurred())

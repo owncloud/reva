@@ -90,6 +90,17 @@ func New(s metadata.Storage, namespace, filename string, ttl time.Duration) Cach
 	}
 }
 
+// dropOnFailedUpload drops the user from memory after a failed upload that
+// is not a CAS conflict. The memory state is then different from the file,
+// and the etag did not change, so a sync gets NotModified and keeps it.
+// After the drop, the next call reads the file. A CAS conflict syncs anyway.
+// Call it with the user lock held.
+func (c *Cache) dropOnFailedUpload(err error, userid string) {
+	if err != nil && !cas.IsConflict(err) {
+		c.UserShares.Delete(userid)
+	}
+}
+
 // Add adds a share to the cache
 func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
@@ -118,7 +129,10 @@ func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
 		// add share id
 		us, _ := c.UserShares.Load(userid)
 		us.UserShares[ssid].IDs[shareID] = struct{}{}
-		return c.Persist(ctx, userid)
+		err := c.Persist(ctx, userid)
+		// With the share in memory, this pod lists a share that is not in the file.
+		c.dropOnFailedUpload(err, userid)
+		return err
 	}
 
 	log := appctx.GetLogger(ctx).With().
@@ -200,13 +214,8 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 		}
 
 		err := c.Persist(ctx, userid)
-		if err != nil && !cas.IsConflict(err) {
-			// The memory state is now different from the file, and the etag
-			// did not change, so a sync gets NotModified and keeps it. Without
-			// the shares in memory, a retry finds nothing to remove and does
-			// not upload. Drop the user, so that the next call reads the file.
-			c.UserShares.Delete(userid)
-		}
+		// Without the shares in memory, a retry finds nothing to remove and does not upload.
+		c.dropOnFailedUpload(err, userid)
 		return err
 	}
 

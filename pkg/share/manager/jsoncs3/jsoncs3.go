@@ -390,8 +390,9 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 				log.Error().Err(err).Str("shareid", shareID).Msg("could not roll back the " + what)
 			}
 		}
-		// A failed grantee write keeps the share ID in memory. Remove it first,
-		// otherwise the next write of the grantee document uploads it.
+		// A failed grantee write can still reach the storage, for example when
+		// the response times out. Remove the grantee entry first, so that no
+		// grantee entry stays without a share.
 		if granteeWritten {
 			undo("grantee entry", func(ctx context.Context) error {
 				switch g.Grantee.Type {

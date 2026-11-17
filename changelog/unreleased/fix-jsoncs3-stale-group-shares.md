@@ -32,6 +32,12 @@ the share back. A retry then found nothing to remove, did not upload, and
 reported success. In the user cache, this also occurred inside one Remove after
 a temporary upload error.
 
+The same applies to an Add. Before, a failed upload of an Add kept the new
+entry in memory. Then the pod listed a share or a share state that was not in
+the file, and the next write for the same document uploaded it. For example,
+a client got an error when it accepted a share, but this pod showed the share
+as accepted.
+
 The share manager now writes a share before the entry for the grantee. When a
 write fails, it removes the entries that it wrote, also the entry for the
 grantee. The removal also runs when the request was cancelled. Thus a failed

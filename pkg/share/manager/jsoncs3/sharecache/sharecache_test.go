@@ -160,6 +160,26 @@ var _ = Describe("Sharecache", func() {
 	})
 
 	Describe("Add", func() {
+		// A failed upload does not change the etag. The next sync then gets
+		// NotModified and keeps the memory state. The memory state must not
+		// have the share, or this pod lists a share that is not in the file.
+		It("reads the file again after a failed upload", func() {
+			s1 := shareid.Encode("storageid", "spaceid", "s1")
+			s2 := shareid.Encode("storageid", "spaceid", "s2")
+			Expect(c.Add(ctx, userid, s1)).To(Succeed())
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+			_, err := c2.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.Add(ctx, userid, s2)).ToNot(Succeed())
+
+			spaces, err := c2.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey(s1))
+			Expect(spaces["storageid:spaceid"].IDs).ToNot(HaveKey(s2))
+		})
+
 		It("retries a TooEarly CAS conflict on persist instead of aborting", func() {
 			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
 			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)

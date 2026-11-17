@@ -92,6 +92,17 @@ func (c *Cache) lockUser(userID string) func() {
 	return func() { lock.Unlock() }
 }
 
+// dropOnFailedUpload drops the user from memory after a failed upload that
+// is not a CAS conflict. The memory state is then different from the file,
+// and the etag did not change, so a sync gets NotModified and keeps it.
+// After the drop, the next sync reads the file. A CAS conflict syncs anyway.
+// Call it with the user lock held.
+func (c *Cache) dropOnFailedUpload(err error, userID string) {
+	if err != nil && !cas.IsConflict(err) {
+		c.ReceivedSpaces.Delete(userID)
+	}
+}
+
 // Add adds a new entry to the cache
 func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaboration.ReceivedShare) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
@@ -125,7 +136,10 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 			Hidden:     rs.Hidden,
 		}
 
-		return c.persist(ctx, userID)
+		err := c.persist(ctx, userID)
+		// With the new state in memory, this pod shows a state that is not in the file.
+		c.dropOnFailedUpload(err, userID)
+		return err
 	})
 	if err != nil {
 		span.RecordError(err)
@@ -208,14 +222,9 @@ func (c *Cache) RemoveMany(ctx context.Context, userID, spaceID string, shareIDs
 		}
 
 		err := c.persist(ctx, userID)
-		if err != nil && !cas.IsConflict(err) {
-			// The memory state is now different from the file, and the etag
-			// did not change, so a resync gets NotModified and keeps it.
-			// Without the shares in memory, the next attempt finds nothing to
-			// remove, does not upload and reports success. Drop the user, so
-			// that the next sync reads the file.
-			c.ReceivedSpaces.Delete(userID)
-		}
+		// Without the shares in memory, the next attempt finds nothing to
+		// remove, does not upload and reports success.
+		c.dropOnFailedUpload(err, userID)
 		return err
 	})
 	if err != nil {

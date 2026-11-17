@@ -147,6 +147,20 @@ func (c *Cache) isSpaceCached(storageID, spaceID string) bool {
 	return ok
 }
 
+// dropOnFailedUpload drops the space from memory after a failed upload that
+// is not a CAS conflict. The memory state is then different from the file,
+// and the etag did not change, so a sync gets NotModified and keeps it.
+// After the drop, the next call reads the file. A CAS conflict syncs anyway.
+// Call it with the space lock held.
+func (c *Cache) dropOnFailedUpload(err error, storageID, spaceID string) {
+	if err == nil || cas.IsConflict(err) {
+		return
+	}
+	if spaces, ok := c.Providers.Load(storageID); ok {
+		spaces.Spaces.Delete(spaceID)
+	}
+}
+
 // Add adds a share to the cache
 func (c *Cache) Add(ctx context.Context, storageID, spaceID, shareID string, share *collaboration.Share) error {
 	ctx, span := tracer.Start(ctx, "Add")
@@ -188,7 +202,10 @@ func (c *Cache) Add(ctx context.Context, storageID, spaceID, shareID string, sha
 		log.Info().Interface("shares", maps.Keys(space.Shares)).Str("New share", shareID).Msg("Adding share to space")
 		space.Shares[shareID] = share
 
-		return c.Persist(ctx, storageID, spaceID)
+		err := c.Persist(ctx, storageID, spaceID)
+		// With the share in memory, this pod lists a share that is not in the file.
+		c.dropOnFailedUpload(err, storageID, spaceID)
+		return err
 	}
 
 	err = cas.RetryPersist(ctx, 100, persistFunc,
@@ -260,13 +277,8 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 		}
 
 		err := c.Persist(ctx, storageID, spaceID)
-		if err != nil && !cas.IsConflict(err) {
-			// The memory state is now different from the file, and the etag
-			// did not change, so a sync gets NotModified and keeps it. Without
-			// the shares in memory, a retry finds nothing to remove and does
-			// not upload. Drop the space, so that the next call reads the file.
-			spaces.Spaces.Delete(spaceID)
-		}
+		// Without the shares in memory, a retry finds nothing to remove and does not upload.
+		c.dropOnFailedUpload(err, storageID, spaceID)
 		return err
 	}
 
