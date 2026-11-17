@@ -268,3 +268,58 @@ func TestShareRollbackRemovesTheShareWhenTheGranteeRollbackIsSlow(t *testing.T) 
 	_, err = fresh.getByKey(ctxOf("admin"), &collaboration.ShareKey{ResourceId: resourceInfo(0).Id, Grantee: groupGrantee("group1")})
 	g.Expect(err).To(HaveOccurred(), "the rolled back group share is gone")
 }
+
+// slowRollbackStorage fails each upload of failPath. The first upload of each
+// path in slowPaths works, and each later upload waits until the context ends.
+type slowRollbackStorage struct {
+	metadata.Storage
+	failPath  string
+	slowPaths map[string]bool
+	mu        sync.Mutex
+	uploaded  map[string]bool
+}
+
+func (s *slowRollbackStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req.Path == s.failPath {
+		return nil, errtypes.PermissionDenied("injected upload failure for " + req.Path)
+	}
+	if s.slowPaths[req.Path] {
+		s.mu.Lock()
+		again := s.uploaded[req.Path]
+		s.uploaded[req.Path] = true
+		s.mu.Unlock()
+		if again {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
+	return s.Storage.Upload(ctx, req)
+}
+
+// Break: the rollback removes the share from the provider cache and from the
+// created cache one after the other. Each removal can take the full rollback
+// timeout, so a failed Share blocks the request for the sum of them.
+func TestShareRollbackRemovesTheShareAndTheCreatedEntryAtTheSameTime(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	old := rollbackTimeout
+	rollbackTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { rollbackTimeout = old })
+
+	ss := &slowRollbackStorage{
+		Storage:   f.storage,
+		failPath:  "/groups/group1/received.json",
+		slowPaths: map[string]bool{"/storages/storageid/spaceid.json": true, "/users/admin/created.json": true},
+		uploaded:  map[string]bool{},
+	}
+	m, err := New(ss, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	start := time.Now()
+	_, err = m.Share(ctxOf("admin"), resourceInfo(0), grant(groupGrantee("group1")))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(time.Since(start)).To(BeNumerically("<", 2*rollbackTimeout), "the two slow removals run at the same time")
+}

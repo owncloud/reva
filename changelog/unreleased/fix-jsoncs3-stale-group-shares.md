@@ -44,7 +44,9 @@ The share manager now writes a share before the entry for the grantee. When a
 write fails, it removes the entries that it wrote, also the entry for the
 grantee. The removal also runs when the request was cancelled. Thus a failed
 share no longer blocks a new share with the same grantee, and it leaves no
-stale grantee entry.
+stale grantee entry. Each removal has its own timeout of 30 seconds. The share
+manager removes the share and the entry of the creator at the same time, so a
+failed share waits for at most two timeouts, not three.
 
 An unshare now removes the share also when the entry for the grantee cannot be
 removed. The gateway removes the storage grant in this case too. The next

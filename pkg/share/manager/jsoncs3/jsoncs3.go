@@ -413,12 +413,22 @@ func (m *Manager) Share(ctx context.Context, md *provider.ResourceInfo, g *colla
 				return nil
 			})
 		}
-		undo("share in the provider cache", func(ctx context.Context) error {
-			return m.Cache.Remove(ctx, md.Id.StorageId, md.Id.SpaceId, shareID)
-		})
-		undo("share in the created cache", func(ctx context.Context) error {
-			return m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), shareID)
-		})
+		// The two removals do not depend on each other. Run them at the same
+		// time, so that a failed Share does not wait for the sum of their timeouts.
+		_ = runAll(
+			func() error {
+				undo("share in the provider cache", func(ctx context.Context) error {
+					return m.Cache.Remove(ctx, md.Id.StorageId, md.Id.SpaceId, shareID)
+				})
+				return nil
+			},
+			func() error {
+				undo("share in the created cache", func(ctx context.Context) error {
+					return m.CreatedCache.Remove(ctx, s.GetCreator().GetOpaqueId(), shareID)
+				})
+				return nil
+			},
+		)
 	}
 
 	err = runAll(
