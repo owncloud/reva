@@ -259,7 +259,15 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 			return nil // nothing to remove, do not upload
 		}
 
-		return c.Persist(ctx, storageID, spaceID)
+		err := c.Persist(ctx, storageID, spaceID)
+		if err != nil && !cas.IsConflict(err) {
+			// The memory state is now different from the file, and the etag
+			// did not change, so a sync gets NotModified and keeps it. Without
+			// the shares in memory, a retry finds nothing to remove and does
+			// not upload. Drop the space, so that the next call reads the file.
+			spaces.Spaces.Delete(spaceID)
+		}
+		return err
 	}
 
 	log := appctx.GetLogger(ctx).With().

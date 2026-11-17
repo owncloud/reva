@@ -129,6 +129,28 @@ var _ = Describe("Cache", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(removed).To(ConsistOf("s2"), "pod A removed s1 first")
 		})
+
+		// A failed upload does not change the etag. The next sync then gets
+		// NotModified and keeps the memory state. The memory state must still
+		// have the share, or a retry finds nothing to remove and does not upload.
+		It("removes the shares on a retry after a failed upload", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := providercache.New(fs, 0*time.Second)
+			_, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = c2.RemoveMany(ctx, storageID, spaceID, []string{"s1"})
+			Expect(err).To(HaveOccurred())
+
+			removed, err := c2.RemoveMany(ctx, storageID, spaceID, []string{"s1"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(removed).To(ConsistOf("s1"))
+
+			fresh := providercache.New(storage, 0*time.Second)
+			shares, err := fresh.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(shares.Shares).ToNot(HaveKey("s1"))
+		})
 	})
 
 	Describe("Add", func() {

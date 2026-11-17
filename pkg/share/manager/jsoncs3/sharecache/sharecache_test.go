@@ -119,6 +119,25 @@ var _ = Describe("Sharecache", func() {
 			})).To(Succeed())
 			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
 		})
+
+		// A failed upload does not change the etag. The next sync then gets
+		// NotModified and keeps the memory state. The memory state must still
+		// have the shares, or a retry finds nothing to remove and does not upload.
+		It("removes the shares on a retry after a failed upload", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+			_, err := c2.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.RemoveMany(ctx, userid, []string{s1, s3})).ToNot(Succeed())
+			Expect(c2.RemoveMany(ctx, userid, []string{s1, s3})).To(Succeed())
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).ToNot(HaveKey(s1))
+			Expect(spaces).ToNot(HaveKey("storageid:otherspace"))
+		})
 	})
 
 	Describe("Persist", func() {

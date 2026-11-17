@@ -207,7 +207,16 @@ func (c *Cache) RemoveMany(ctx context.Context, userID, spaceID string, shareIDs
 			delete(rss.Spaces, spaceID)
 		}
 
-		return c.persist(ctx, userID)
+		err := c.persist(ctx, userID)
+		if err != nil && !cas.IsConflict(err) {
+			// The memory state is now different from the file, and the etag
+			// did not change, so a resync gets NotModified and keeps it.
+			// Without the shares in memory, the next attempt finds nothing to
+			// remove, does not upload and reports success. Drop the user, so
+			// that the next sync reads the file.
+			c.ReceivedSpaces.Delete(userID)
+		}
+		return err
 	})
 	if err != nil {
 		span.RecordError(err)

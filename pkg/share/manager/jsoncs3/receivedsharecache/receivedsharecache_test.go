@@ -217,6 +217,44 @@ var _ = Describe("Cache", func() {
 			Expect(c2.RemoveMany(ctx, userID, spaceID, []string{"unknown1", "unknown2"})).To(Succeed())
 			Expect(atomic.LoadInt32(&cs.Uploads)).To(Equal(int32(0)))
 		})
+
+		// A failed upload does not change the etag. The resync then gets
+		// NotModified and keeps the memory state. The memory state must still
+		// have the shares, or the next attempt finds nothing to remove, does not
+		// upload, and reports success.
+		It("removes the shares after a transient upload error", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: status.Error(codes.Unavailable, "injected")}
+			c2 := receivedsharecache.New(fs, 0*time.Second)
+			_, err := c2.List(ctx, userID)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.RemoveMany(ctx, userID, spaceID, []string{"s1", "s2", "s3"})).To(Succeed())
+			Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)), "one failed upload, one retry")
+
+			fresh := receivedsharecache.New(storage, 0*time.Second)
+			for _, id := range []string{"s1", "s2", "s3"} {
+				st, err := fresh.Get(ctx, userID, spaceID, id)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(st).To(BeNil(), id)
+			}
+		})
+
+		It("removes the shares on a retry after a failed upload", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := receivedsharecache.New(fs, 0*time.Second)
+			_, err := c2.List(ctx, userID)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.RemoveMany(ctx, userID, spaceID, []string{"s1", "s2", "s3"})).ToNot(Succeed())
+			Expect(c2.RemoveMany(ctx, userID, spaceID, []string{"s1", "s2", "s3"})).To(Succeed())
+
+			fresh := receivedsharecache.New(storage, 0*time.Second)
+			for _, id := range []string{"s1", "s2", "s3"} {
+				st, err := fresh.Get(ctx, userID, spaceID, id)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(st).To(BeNil(), id)
+			}
+		})
 	})
 
 	Describe("retryPersist's post-failure resync", func() {

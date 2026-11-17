@@ -71,3 +71,24 @@ func (a *AlwaysAbortedUploadStorage) Upload(_ context.Context, _ metadata.Upload
 	atomic.AddInt32(&a.Uploads, 1)
 	return nil, errtypes.Aborted("injected")
 }
+
+// NotModifiedStorage returns errtypes.NotModified when the etag of the file is
+// in IfNoneMatch, like the CS3 metadata storage. metadata.Disk ignores
+// IfNoneMatch and always sends the full file.
+type NotModifiedStorage struct {
+	metadata.Storage
+}
+
+// Download delegates to the wrapped Storage and returns errtypes.NotModified when the etag matches.
+func (n *NotModifiedStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	res, err := n.Storage.Download(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	for _, etag := range req.IfNoneMatch {
+		if etag != "" && etag == res.Etag {
+			return nil, errtypes.NotModified("not modified")
+		}
+	}
+	return res, nil
+}

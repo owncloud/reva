@@ -25,6 +25,13 @@ on the group cache no longer panics when the user or group has no entry for the
 space of the share, or when the share ID has no delimiter. Before, the panic
 stopped the process, also in an unshare.
 
+When the upload of a Remove fails, the cache now reads the file again on the
+next call. Before, the cache kept the share out of memory, but the share stayed
+in the file. A failed upload does not change the etag, so a sync did not bring
+the share back. A retry then found nothing to remove, did not upload, and
+reported success. In the user cache, this also occurred inside one Remove after
+a temporary upload error.
+
 The share manager now writes a share before the entry for the grantee. When a
 write fails, it removes the entries that it wrote, also the entry for the
 grantee. The removal also runs when the request was cancelled. Thus a failed
