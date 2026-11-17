@@ -380,7 +380,6 @@ var _ = Describe("Cache", func() {
 	})
 })
 
-
 // conflictThenNotFoundStorage returns initialData/initialEtag on the first
 // Download (cold-start sync), fails the first Upload with a CAS conflict,
 // then returns NotFound on the second Download (the post-conflict resync),

@@ -270,7 +270,9 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 
 	err := cas.RetryPersist(ctx, 100, persistFunc,
 		func() error { return c.resyncAfterConflict(ctx, storageID, spaceID) },
-		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting removed provider share, retrying...") },
+		func(err error) {
+			log.Debug().Err(err).Msg("CAS conflict persisting removed provider share, retrying...")
+		},
 		func(err error) {
 			span.SetStatus(codes.Error, fmt.Sprintf("persisting removed provider share failed. giving up: %s", err.Error()))
 			log.Error().Err(err).Msg("persisting removed provider share failed")
