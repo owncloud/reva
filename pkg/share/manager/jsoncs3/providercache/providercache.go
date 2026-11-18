@@ -607,7 +607,8 @@ func (c *Cache) PurgeSpace(ctx context.Context, storageID, spaceID string) error
 	if !ok {
 		return nil
 	}
-	newShares := &Shares{}
+	// Add does not sync a space that is in memory, and it writes to this map.
+	newShares := &Shares{Shares: map[string]*collaboration.Share{}}
 	if space, ok := spaces.Spaces.Load(spaceID); ok {
 		newShares.Etag = space.Etag // keep the etag to allow overwriting the state on the server
 	}

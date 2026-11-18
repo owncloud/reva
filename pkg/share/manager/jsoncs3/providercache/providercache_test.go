@@ -524,6 +524,19 @@ var _ = Describe("Cache", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil())
 			})
+
+			// PurgeSpace keeps the purged space in memory. Add does not sync a
+			// space that is in memory, so it writes to the map of that space.
+			It("adds a share to the purged space", func() {
+				Expect(c.PurgeSpace(ctx, storageID, spaceID)).To(Succeed())
+
+				share2 := &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share2"}}
+				Expect(c.Add(ctx, storageID, spaceID, "storageid$spaceid!share2", share2)).To(Succeed())
+
+				s, err := c.Get(ctx, storageID, spaceID, "storageid$spaceid!share2", false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).ToNot(BeNil())
+			})
 		})
 
 		Describe("All", func() {
