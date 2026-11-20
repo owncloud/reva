@@ -30,6 +30,7 @@ import (
 
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/sharecache"
+	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
@@ -68,6 +69,77 @@ var _ = Describe("Sharecache", func() {
 		}
 	})
 
+	// Many shares of one user or group go with one upload, also when they are in different spaces.
+	Describe("RemoveMany", func() {
+		var s1, s2, s3 string
+
+		BeforeEach(func() {
+			s1 = shareid.Encode("storageid", "spaceid", "s1")
+			s2 = shareid.Encode("storageid", "spaceid", "s2")
+			s3 = shareid.Encode("storageid", "otherspace", "s3")
+			for _, id := range []string{s1, s2, s3} {
+				Expect(c.Add(ctx, userid, id)).To(Succeed())
+			}
+		})
+
+		It("removes the given shares with one upload", func() {
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userid, []string{s1, s3, shareid.Encode("storageid", "spaceid", "unknown")})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)))
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveLen(1))
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey(s2))
+			Expect(spaces["storageid:otherspace"].IDs).To(BeEmpty())
+		})
+
+		// An empty space entry makes each listing of the group read the space
+		// file again, also when the space has no share for the group.
+		It("removes the space entry with the last share of the space", func() {
+			Expect(c.RemoveMany(ctx, userid, []string{s1, s3})).To(Succeed())
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces).To(HaveKey("storageid:spaceid"), "the space still has a share")
+			Expect(spaces).ToNot(HaveKey("storageid:otherspace"))
+		})
+
+		It("does not upload when none of the shares is in the cache", func() {
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userid, []string{
+				shareid.Encode("storageid", "spaceid", "unknown"),
+				shareid.Encode("storageid", "nospace", "unknown"),
+			})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
+		})
+
+		// A failed upload does not change the etag. The next sync then gets
+		// NotModified and keeps the memory state. The memory state must still
+		// have the shares, or a retry finds nothing to remove and does not upload.
+		It("removes the shares on a retry after a failed upload", func() {
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+			_, err := c2.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.RemoveMany(ctx, userid, []string{s1, s3})).ToNot(Succeed())
+			Expect(c2.RemoveMany(ctx, userid, []string{s1, s3})).To(Succeed())
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).ToNot(HaveKey(s1))
+			Expect(spaces).ToNot(HaveKey("storageid:otherspace"))
+		})
+	})
+
 	Describe("Persist", func() {
 		Context("with an existing entry", func() {
 			BeforeEach(func() {
@@ -88,6 +160,26 @@ var _ = Describe("Sharecache", func() {
 	})
 
 	Describe("Add", func() {
+		// A failed upload does not change the etag. The next sync then gets
+		// NotModified and keeps the memory state. The memory state must not
+		// have the share, or this pod lists a share that is not in the file.
+		It("reads the file again after a failed upload", func() {
+			s1 := shareid.Encode("storageid", "spaceid", "s1")
+			s2 := shareid.Encode("storageid", "spaceid", "s2")
+			Expect(c.Add(ctx, userid, s1)).To(Succeed())
+			fs := &helpers.ErrOnceUploadStorage{Storage: &helpers.NotModifiedStorage{Storage: storage}, Err: errtypes.PermissionDenied("injected")}
+			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+			_, err := c2.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(c2.Add(ctx, userid, s2)).ToNot(Succeed())
+
+			spaces, err := c2.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey(s1))
+			Expect(spaces["storageid:spaceid"].IDs).ToNot(HaveKey(s2))
+		})
+
 		It("retries a TooEarly CAS conflict on persist instead of aborting", func() {
 			fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.TooEarly("injected")}
 			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
@@ -137,6 +229,63 @@ var _ = Describe("Sharecache", func() {
 			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
 			Expect(c2.Remove(ctx, userid, shareID)).To(Succeed())
 			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)), "a cold Remove should sync first instead of blindly uploading an empty cache")
+		})
+
+		// The exact case from a production panic: a share in space-a, then a
+		// Remove of a share in space-b for the same user, on a warm cache.
+		It("does not panic on a warm cache when the share is in a space that the user has no entry for", func() {
+			Expect(c.Add(ctx, userid, "storageid:space-a:share1")).To(Succeed())
+
+			Expect(func() {
+				Expect(c.Remove(ctx, userid, "storageid:space-b:share2")).To(Succeed())
+			}).ToNot(Panic())
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:space-a"].IDs).To(HaveKey("storageid:space-a:share1"))
+		})
+
+		// shareid.Decode gives ("", "", id) for an ID with no delimiter, so the space key is ":".
+		It("does not panic and does not upload when the share ID has no delimiter", func() {
+			Expect(c.Add(ctx, userid, "storageid:spaceid:share1")).To(Succeed())
+
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+			Expect(func() {
+				Expect(c2.Remove(ctx, userid, "share-id-without-delimiter")).To(Succeed())
+			}).ToNot(Panic())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
+
+			Expect(func() {
+				Expect(c.Remove(ctx, userid, "share-id-without-delimiter")).To(Succeed())
+			}).ToNot(Panic(), "also on a warm cache")
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey("storageid:spaceid:share1"))
+		})
+
+		// The cleanup of a stale group share calls Remove on the group cache.
+		// The group can have entries in other spaces only.
+		It("does not panic when the user has no entry for the space of the share", func() {
+			Expect(c.Add(ctx, userid, shareid.Encode("storageid", "spaceid", "s1"))).To(Succeed())
+
+			Expect(func() {
+				Expect(c.Remove(ctx, userid, shareid.Encode("storageid", "otherspace", "s2"))).To(Succeed())
+			}).ToNot(Panic())
+
+			spaces, err := c.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey("storageid:spaceid:s1"))
+		})
+
+		It("does not upload when the share is not in the cache", func() {
+			Expect(c.Add(ctx, userid, shareid.Encode("storageid", "spaceid", "s1"))).To(Succeed())
+
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+			Expect(c2.Remove(ctx, userid, shareid.Encode("storageid", "spaceid", "unknown"))).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
 		})
 
 		It("clears the stale in-memory shares instead of returning deleted data", func() {
