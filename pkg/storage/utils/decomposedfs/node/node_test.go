@@ -360,6 +360,24 @@ var _ = Describe("Node", func() {
 		})
 	})
 
+	Describe("IsProcessing", func() {
+		// Left as-is: can't tell "not written yet" from "already removed" apart
+		// without a second signal. The race is closed on the write side instead
+		// (tree_test.go's InitNewNode spec).
+		It("cannot distinguish a mid-upload node from a finished one once the other attrs are written but StatusPrefix is not", func() {
+			// xattrs backend writes keys out of order and unlocked, so a reader
+			// can see every attr except StatusPrefix.
+			n, err := env.CreateTestFile("mid-write-file", "mid-write-blob", env.SpaceRootRes.OpaqueId, env.SpaceRootRes.SpaceId, 0)
+			Expect(err).ToNot(HaveOccurred())
+
+			read, err := node.ReadNode(env.Ctx, env.Lookup, n.SpaceID, n.ID, false, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(read.Exists).To(BeTrue())
+
+			Expect(n.IsProcessing(env.Ctx)).To(BeFalse())
+		})
+	})
+
 	Describe("SpaceOwnerOrManager", func() {
 		It("returns the space owner", func() {
 			n, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
