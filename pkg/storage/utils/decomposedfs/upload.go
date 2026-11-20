@@ -352,7 +352,8 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 					attributeName == prefixes.TypeAttr ||
 					attributeName == prefixes.BlobIDAttr ||
 					attributeName == prefixes.BlobsizeAttr ||
-					attributeName == prefixes.MTimeAttr
+					attributeName == prefixes.MTimeAttr ||
+					isAuthorAttr(attributeName)
 			}, f, true); err != nil {
 				return nil, err
 			}
@@ -385,6 +386,8 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 	attrs[prefixes.ChecksumPrefix+"adler32"] = info.Checksums.Adler32
 	// in the same batch, so marking the node costs no write of its own
 	attrs.SetString(prefixes.StatusPrefix, node.ProcessingStatus+sessionID)
+	// the uploader is the author of this content, recorded in the same batch
+	setAuthor(ctx, attrs)
 
 	mtime := time.Now()
 	if !info.MTime.IsZero() {
