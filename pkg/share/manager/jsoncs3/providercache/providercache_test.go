@@ -31,6 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
+	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/providercache"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
@@ -251,6 +252,79 @@ var _ = Describe("Cache", func() {
 				s, err = c.Get(ctx, storageID, spaceID, shareID, false)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).To(BeNil(), "stale in-memory share should not survive a NotFound resync")
+			})
+		})
+
+		Describe("Update", func() {
+			grantUpload := func(s *collaboration.Share) {
+				s.Permissions = &collaboration.SharePermissions{Permissions: &provider.ResourcePermissions{InitiateFileUpload: true}}
+			}
+
+			It("applies the mutation and persists it", func() {
+				s, err := c.Update(ctx, storageID, spaceID, shareID, grantUpload)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s.GetPermissions().GetPermissions().GetInitiateFileUpload()).To(BeTrue())
+
+				fresh := providercache.New(storage, 0*time.Second)
+				s, err = fresh.Get(ctx, storageID, spaceID, shareID, false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s.GetPermissions().GetPermissions().GetInitiateFileUpload()).To(BeTrue())
+			})
+
+			It("returns NotFound for an unknown share without writing", func() {
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.PreconditionFailed("injected")}
+				c2 := providercache.New(fs, 0*time.Second)
+
+				_, err := c2.Update(ctx, storageID, spaceID, "storageid$spaceid!unknown", grantUpload)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(BeZero())
+			})
+
+			It("rejects missing storage, space or share ids", func() {
+				_, err := c.Update(ctx, "", spaceID, shareID, grantUpload)
+				Expect(err).To(MatchError("missing storage id"))
+				_, err = c.Update(ctx, storageID, "", shareID, grantUpload)
+				Expect(err).To(MatchError("missing space id"))
+				_, err = c.Update(ctx, storageID, spaceID, "", grantUpload)
+				Expect(err).To(MatchError("missing share id"))
+			})
+
+			It("re-applies the mutation on top of a sibling writer's change after a CAS conflict", func() {
+				// a second cache instance (e.g. another replica) writes to the same space,
+				// so c's cached etag is stale and its first persist must fail the CAS check
+				sibling := providercache.New(storage, 0*time.Second)
+				otherShareID := "storageid$spaceid!share2"
+				Expect(sibling.Add(ctx, storageID, spaceID, otherShareID, &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share2"}})).To(Succeed())
+
+				calls := 0
+				s, err := c.Update(ctx, storageID, spaceID, shareID, func(s *collaboration.Share) {
+					calls++
+					grantUpload(s)
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s.GetPermissions().GetPermissions().GetInitiateFileUpload()).To(BeTrue())
+				Expect(calls).To(Equal(2), "the mutation must be re-applied to the resynced entry")
+
+				fresh := providercache.New(storage, 0*time.Second)
+				s, err = fresh.Get(ctx, storageID, spaceID, shareID, false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s.GetPermissions().GetPermissions().GetInitiateFileUpload()).To(BeTrue())
+				other, err := fresh.Get(ctx, storageID, spaceID, otherShareID, false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(other).ToNot(BeNil(), "the sibling's share must not be overwritten")
+			})
+
+			It("returns NotFound when the share was removed by a sibling writer", func() {
+				sibling := providercache.New(storage, 0*time.Second)
+				Expect(sibling.Remove(ctx, storageID, spaceID, shareID)).To(Succeed())
+
+				_, err := c.Update(ctx, storageID, spaceID, shareID, grantUpload)
+				Expect(err).To(BeAssignableToTypeOf(errtypes.NotFound("")))
+
+				fresh := providercache.New(storage, 0*time.Second)
+				s, err := fresh.Get(ctx, storageID, spaceID, shareID, false)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(s).To(BeNil(), "a removed share must not be resurrected by the update")
 			})
 		})
 

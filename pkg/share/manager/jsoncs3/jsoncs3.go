@@ -580,16 +580,11 @@ func (m *Manager) UpdateShare(ctx context.Context, ref *collaboration.ShareRefer
 		}
 	}
 
-	if fieldMask != nil {
-		for i := range fieldMask.Paths {
-			switch fieldMask.Paths[i] {
-			case "permissions":
-				toUpdate.Permissions = updated.Permissions
-			case "expiration":
-				toUpdate.Expiration = updated.Expiration
-			default:
-				return nil, errtypes.NotSupported("updating " + fieldMask.Paths[i] + " is not supported")
-			}
+	for _, path := range fieldMask.GetPaths() {
+		switch path {
+		case "permissions", "expiration":
+		default:
+			return nil, errtypes.NotSupported("updating " + path + " is not supported")
 		}
 	}
 
@@ -613,34 +608,23 @@ func (m *Manager) UpdateShare(ctx context.Context, ref *collaboration.ShareRefer
 		}
 	}
 
-	if p != nil {
-		toUpdate.Permissions = p
-	}
-	toUpdate.Mtime = utils.TSNow()
-
-	// Update provider cache
-	unlock := m.Cache.LockSpace(toUpdate.ResourceId.SpaceId)
-	defer unlock()
-	err := m.Cache.Persist(ctx, toUpdate.ResourceId.StorageId, toUpdate.ResourceId.SpaceId)
-	// when persisting fails
-	if _, ok := err.(errtypes.IsPreconditionFailed); ok {
-		// reupdate
-		toUpdate, err = m.get(ctx, ref) // does an implicit sync
-		if err != nil {
-			return nil, err
+	// Update provider cache. The mutation is applied under the space lock and
+	// re-applied to the resynced share if persisting hits a CAS conflict.
+	mutate := func(s *collaboration.Share) {
+		for _, path := range fieldMask.GetPaths() {
+			switch path {
+			case "permissions":
+				s.Permissions = updated.Permissions
+			case "expiration":
+				s.Expiration = updated.Expiration
+			}
 		}
-		toUpdate.Permissions = p
-		toUpdate.Mtime = utils.TSNow()
-
-		// persist again
-		err = m.Cache.Persist(ctx, toUpdate.ResourceId.StorageId, toUpdate.ResourceId.SpaceId)
-		// TODO try more often?
+		if p != nil {
+			s.Permissions = p
+		}
+		s.Mtime = utils.TSNow()
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	return toUpdate, nil
+	return m.Cache.Update(ctx, toUpdate.ResourceId.StorageId, toUpdate.ResourceId.SpaceId, toUpdate.Id.OpaqueId, mutate)
 }
 
 // ListShares returns the shares created by the user

@@ -266,6 +266,78 @@ func (c *Cache) Remove(ctx context.Context, storageID, spaceID, shareID string) 
 	return err
 }
 
+// Update applies mutate to a cached share and persists the space. The space
+// lock is held for the whole read-modify-write, and on a CAS conflict the
+// space is resynced and mutate is re-applied to the fresh entry before
+// retrying, so mutate must be safe to call more than once. It returns
+// NotFound if the share does not exist (anymore).
+func (c *Cache) Update(ctx context.Context, storageID, spaceID, shareID string, mutate func(*collaboration.Share)) (*collaboration.Share, error) {
+	ctx, span := tracer.Start(ctx, "Update")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.storageid", storageID), attribute.String("cs3.spaceid", spaceID), attribute.String("cs3.shareid", shareID))
+
+	switch {
+	case storageID == "":
+		return nil, fmt.Errorf("missing storage id")
+	case spaceID == "":
+		return nil, fmt.Errorf("missing space id")
+	case shareID == "":
+		return nil, fmt.Errorf("missing share id")
+	}
+
+	unlock := c.LockSpace(spaceID)
+	defer unlock()
+	span.AddEvent("got lock")
+
+	if !c.isSpaceCached(storageID, spaceID) {
+		if err := c.syncWithRetry(ctx, storageID, spaceID); err != nil {
+			return nil, err
+		}
+	}
+
+	log := appctx.GetLogger(ctx).With().
+		Str("hostname", os.Getenv("HOSTNAME")).
+		Str("storageID", storageID).
+		Str("spaceID", spaceID).
+		Str("shareID", shareID).Logger()
+
+	var updated *collaboration.Share
+	persistFunc := func() error {
+		// look the share up again on every attempt, a resync replaces the cached space
+		spaces, _ := c.Providers.Load(storageID)
+		space, _ := spaces.Spaces.Load(spaceID)
+		s := space.Shares[shareID]
+		if s == nil {
+			return errtypes.NotFound(shareID)
+		}
+		mutate(s)
+		updated = s
+
+		return c.Persist(ctx, storageID, spaceID)
+	}
+
+	err := cas.RetryPersist(ctx, 100, persistFunc,
+		func() error { return c.resyncAfterConflict(ctx, storageID, spaceID) },
+		func(err error) {
+			log.Debug().Err(err).Msg("CAS conflict persisting updated provider share, retrying...")
+		},
+		func(err error) {
+			span.SetStatus(codes.Error, fmt.Sprintf("persisting updated provider share failed. giving up: %s", err.Error()))
+			log.Error().Err(err).Msg("persisting updated provider share failed")
+		},
+		func(err error) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			log.Error().Err(err).Msg("persisting updated provider share failed. giving up.")
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	span.SetStatus(codes.Ok, "")
+	return updated, nil
+}
+
 // Get returns one entry from the cache
 func (c *Cache) Get(ctx context.Context, storageID, spaceID, shareID string, skipSync bool) (*collaboration.Share, error) {
 	ctx, span := tracer.Start(ctx, "Get")
