@@ -25,5 +25,33 @@
         }
       }
     ]
+  },
+  {
+    "domain": "sub.server.prv",
+    "services": [
+      {
+        "endpoint": {
+          "type": {
+            "name": "OCM"
+          },
+          "path": "https://sub.server.prv:9200/ocm/"
+        },
+        "host": "sub.server.prv:9200"
+      }
+    ]
+  },
+  {
+    "domain": "*.wild.server.prv",
+    "services": [
+      {
+        "endpoint": {
+          "type": {
+            "name": "OCM"
+          },
+          "path": "https://sub.wild.server.prv:9200/ocm/"
+        },
+        "host": "sub.wild.server.prv:9200"
+      }
+    ]
   }
 ]
