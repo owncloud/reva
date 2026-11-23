@@ -966,6 +966,131 @@ var _ = Describe("Sharesstorageprovider", func() {
 			})
 		})
 	})
+	Context("ListStorageSpaces", func() {
+		var (
+			shareEtags  map[string]string
+			shareMtimes map[string]*types.Timestamp
+		)
+
+		BeforeEach(func() {
+			shareEtags = map[string]string{
+				"shareddir":  `"etag-share1"`,
+				"shareddir2": `"etag-share2"`,
+			}
+			shareMtimes = map[string]*types.Timestamp{
+				"shareddir":  {Seconds: 100},
+				"shareddir2": {Seconds: 200},
+			}
+
+			sharingCollaborationClient.On("ListReceivedShares", mock.Anything, mock.Anything).Return(&collaboration.ListReceivedSharesResponse{
+				Status: status.NewOK(context.Background()),
+				Shares: []*collaboration.ReceivedShare{BaseShare, BaseShareTwo},
+			}, nil)
+
+			// testify uses the first matching expectation, so drop the generic stat (and
+			// list container) mocks registered above and add one returning etags and mtimes
+			gatewayClient.ExpectedCalls = nil
+			gatewayClient.On("Stat", mock.Anything, mock.AnythingOfType("*providerv1beta1.StatRequest")).Return(
+				func(_ context.Context, req *sprovider.StatRequest, _ ...grpc.CallOption) *sprovider.StatResponse {
+					id := req.GetRef().GetResourceId()
+					if _, ok := shareMtimes[id.GetOpaqueId()]; !ok {
+						return &sprovider.StatResponse{
+							Status: status.NewNotFound(context.Background(), "not found"),
+						}
+					}
+					return &sprovider.StatResponse{
+						Status: status.NewOK(context.Background()),
+						Info: &sprovider.ResourceInfo{
+							Type:  sprovider.ResourceType_RESOURCE_TYPE_CONTAINER,
+							Id:    id,
+							Etag:  shareEtags[id.GetOpaqueId()],
+							Mtime: shareMtimes[id.GetOpaqueId()],
+						},
+					}
+				}, nil)
+		})
+
+		spacesOfType := func(spaces []*sprovider.StorageSpace, spaceType string) []*sprovider.StorageSpace {
+			var result []*sprovider.StorageSpace
+			for _, space := range spaces {
+				if space.SpaceType == spaceType {
+					result = append(result, space)
+				}
+			}
+			return result
+		}
+
+		It("adds the etag of the shared resource to mountpoint spaces", func() {
+			res, err := s.(sprovider.SpacesAPIServer).ListStorageSpaces(ctx, &sprovider.ListStorageSpacesRequest{
+				Filters: []*sprovider.ListStorageSpacesRequest_Filter{
+					{
+						Type: sprovider.ListStorageSpacesRequest_Filter_TYPE_SPACE_TYPE,
+						Term: &sprovider.ListStorageSpacesRequest_Filter_SpaceType{SpaceType: "mountpoint"},
+					},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpc.Code_CODE_OK))
+
+			mountpoints := spacesOfType(res.StorageSpaces, "mountpoint")
+			Expect(mountpoints).To(HaveLen(2))
+			for _, space := range mountpoints {
+				Expect(space.RootInfo).ToNot(BeNil())
+				Expect(space.RootInfo.Etag).ToNot(BeEmpty())
+				Expect(utils.ReadPlainFromOpaque(space.Opaque, "etag")).To(Equal(space.RootInfo.Etag))
+			}
+		})
+
+		It("uses the etag of the most recently modified share for the shares jail", func() {
+			res, err := s.(sprovider.SpacesAPIServer).ListStorageSpaces(ctx, &sprovider.ListStorageSpacesRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpc.Code_CODE_OK))
+
+			virtual := spacesOfType(res.StorageSpaces, "virtual")
+			Expect(virtual).To(HaveLen(1))
+			Expect(utils.ReadPlainFromOpaque(virtual[0].Opaque, "etag")).To(Equal(`"etag-share2"`))
+		})
+
+		It("falls back to the default etag for the shares jail when the share has no etag", func() {
+			shareEtags["shareddir2"] = ""
+
+			res, err := s.(sprovider.SpacesAPIServer).ListStorageSpaces(ctx, &sprovider.ListStorageSpacesRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpc.Code_CODE_OK))
+
+			virtual := spacesOfType(res.StorageSpaces, "virtual")
+			Expect(virtual).To(HaveLen(1))
+			Expect(utils.ReadPlainFromOpaque(virtual[0].Opaque, "etag")).To(Equal("DECAFC00FEE"))
+		})
+
+		It("falls back to the default etag for mountpoint spaces when the share has no etag", func() {
+			shareEtags["shareddir"] = ""
+
+			res, err := s.(sprovider.SpacesAPIServer).ListStorageSpaces(ctx, &sprovider.ListStorageSpacesRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpc.Code_CODE_OK))
+
+			mountpoints := spacesOfType(res.StorageSpaces, "mountpoint")
+			Expect(mountpoints).To(HaveLen(2))
+			for _, space := range mountpoints {
+				if space.RootInfo.GetId().GetOpaqueId() == "shareddir" {
+					Expect(utils.ReadPlainFromOpaque(space.Opaque, "etag")).To(Equal("DECAFC00FEE"))
+				} else {
+					Expect(utils.ReadPlainFromOpaque(space.Opaque, "etag")).To(Equal(`"etag-share2"`))
+				}
+			}
+		})
+
+		It("falls back to the default etag when stating the shares jail and the share has no etag", func() {
+			shareEtags["shareddir2"] = ""
+
+			res, err := s.Stat(ctx, ShareJailStatRequest)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Status.Code).To(Equal(rpc.Code_CODE_OK))
+			Expect(res.Info.Etag).To(Equal("DECAFC00FEE"))
+		})
+	})
+
 	Context("with two accepted shares for the same resource", func() {
 		BeforeEach(func() {
 			BaseShare.Share.Id.OpaqueId = "multishare1"
