@@ -304,15 +304,103 @@ var _ = Describe("Sharecache", func() {
 			Expect(spaces).To(BeEmpty(), "stale in-memory shares should not survive a NotFound resync")
 		})
 	})
+
+	Describe("List", func() {
+		Context("when no cache file exists yet", func() {
+			It("creates an empty cache file on the first call", func() {
+				shares, err := c.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(shares).To(BeEmpty())
+
+				_, err = os.Stat(filepath.Join(tmpdir, "users", userid, "created.json"))
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("does not repeat the NotFound and the trash lookup on later calls", func() {
+				// a group that never received a share: the case from OCISDEV-1198
+				cs := &countingStorage{Storage: storage}
+				c2 := sharecache.New(cs, "groups", "received.json", 0*time.Second)
+
+				for i := 0; i < 3; i++ {
+					shares, err := c2.List(ctx, "group1")
+					Expect(err).ToNot(HaveOccurred())
+					Expect(shares).To(BeEmpty())
+				}
+				Expect(atomic.LoadInt32(&cs.notFounds)).To(Equal(int32(1)), "only the first call may get a NotFound")
+				Expect(atomic.LoadInt32(&cs.trashChecks)).To(Equal(int32(1)), "only the first call may look at the trash")
+				Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)), "the empty file is written once")
+			})
+
+			It("lets a new cache instance read the file without a NotFound", func() {
+				_, err := c.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred())
+
+				// a new instance, e.g. another replica or a restarted service
+				cs := &countingStorage{Storage: storage}
+				c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+				shares, err := c2.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(shares).To(BeEmpty())
+				Expect(atomic.LoadInt32(&cs.notFounds)).To(BeZero())
+				Expect(atomic.LoadInt32(&cs.uploads)).To(BeZero())
+			})
+
+			It("still succeeds when the empty file cannot be written", func() {
+				fs := &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.PermissionDenied("injected")}
+				c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+
+				shares, err := c2.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred(), "a failed write of the empty file must not fail the read")
+				Expect(shares).To(BeEmpty())
+				Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(1)))
+			})
+
+			It("does not overwrite a file another writer created after the NotFound", func() {
+				// another instance creates the file with a share ...
+				Expect(c.Add(ctx, userid, shareID)).To(Succeed())
+
+				// ... after this instance got its NotFound
+				fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.NotFound("injected: stale read")}
+				c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
+				_, err := c2.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred())
+
+				// the share is still on storage, and the next call returns it
+				shares, err := c2.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(shares).To(HaveLen(1))
+
+				c3 := sharecache.New(storage, "users", "created.json", 0*time.Second)
+				shares, err = c3.List(ctx, userid)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(shares).To(HaveLen(1))
+			})
+		})
+	})
 })
 
-// countingStorage counts Upload calls, to prove a cold Remove doesn't waste one.
+// countingStorage counts Upload calls, NotFound downloads and trash lookups.
 type countingStorage struct {
 	metadata.Storage
-	uploads int32
+	uploads     int32
+	notFounds   int32
+	trashChecks int32
 }
 
 func (c *countingStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
 	atomic.AddInt32(&c.uploads, 1)
 	return c.Storage.Upload(ctx, req)
+}
+
+func (c *countingStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	res, err := c.Storage.Download(ctx, req)
+	if _, ok := err.(errtypes.NotFound); ok {
+		atomic.AddInt32(&c.notFounds, 1)
+	}
+	return res, err
+}
+
+func (c *countingStorage) WasRecentlyDeleted(ctx context.Context, path string) (bool, error) {
+	atomic.AddInt32(&c.trashChecks, 1)
+	return c.Storage.WasRecentlyDeleted(ctx, path)
 }
