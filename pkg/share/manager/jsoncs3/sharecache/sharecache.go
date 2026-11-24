@@ -76,6 +76,17 @@ func (c *Cache) lockUser(ctx context.Context, userID string) (func(), error) {
 	return c.lockMap.Lock(ctx, userID)
 }
 
+// lockUserTraced waits for the lock of the user or group. A "Grab lock" span,
+// a child of the span in ctx, shows the wait. The caller keeps its own
+// context, so the work after the wait is not a child of the lock span.
+func (c *Cache) lockUserTraced(ctx context.Context, userID string) func() {
+	_, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
+	span.SetAttributes(attribute.String("cs3.userid", userID))
+	unlock := c.lockUser(userID)
+	span.End()
+	return unlock
+}
+
 // New returns a new Cache instance
 func New(s metadata.Storage, namespace, filename string, ttl time.Duration) Cache {
 	return Cache{
@@ -100,13 +111,10 @@ func (c *Cache) dropOnFailedUpload(err error, userid string) {
 
 // Add adds a share to the cache
 func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
-	if err != nil {
-		return err
-	}
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
+	unlock := c.lockUserTraced(ctx, userid)
 	defer unlock()
 
 	if _, ok := c.UserShares.Load(userid); !ok {
@@ -115,10 +123,6 @@ func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
 			return err
 		}
 	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
 
 	storageid, spaceid, _ := shareid.Decode(shareID)
 	ssid := storageid + shareid.IDDelimiter + spaceid
@@ -168,13 +172,10 @@ func (c *Cache) Remove(ctx context.Context, userid, shareID string) error {
 // The shares can be in different spaces. It does not upload when none of the
 // shares is in the cache.
 func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
-	if err != nil {
-		return err
-	}
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.Int("cs3.sharecount", len(shareIDs)))
+	unlock := c.lockUserTraced(ctx, userid)
 	defer unlock()
 
 	ssidOf := make(map[string]string, len(shareIDs))
@@ -194,10 +195,6 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 			break
 		}
 	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.Int("cs3.sharecount", len(shareIDs)))
 
 	persistFunc := func() error {
 		removed := false
@@ -247,13 +244,10 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 
 // List return the list of spaces/shares for the given user/group
 func (c *Cache) List(ctx context.Context, userid string) (map[string]SpaceShareIDs, error) {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "List")
+	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
-	if err != nil {
-		return nil, err
-	}
+	unlock := c.lockUserTraced(ctx, userid)
 	defer unlock()
 	if err := c.syncWithRetry(ctx, userid); err != nil {
 		return nil, err
