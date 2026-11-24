@@ -35,6 +35,8 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
 
@@ -43,6 +45,7 @@ import (
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
@@ -299,6 +302,8 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 
 	md, _ := metadata.FromOutgoingContext(ctx)
 	httpReq.Header.Add(ctxpkg.TokenHeader, md.Get(ctxpkg.TokenHeader)[0])
+	// Send the trace context. Then the work of the data server is in the trace of the request.
+	rtrace.Propagator.Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 	resp, err := cs3.dataGatewayClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -428,6 +433,8 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (*DownloadRes
 
 	md, _ := metadata.FromOutgoingContext(ctx)
 	hreq.Header.Add(ctxpkg.TokenHeader, md.Get(ctxpkg.TokenHeader)[0])
+	// Send the trace context. Then the work of the data server is in the trace of the request.
+	rtrace.Propagator.Inject(ctx, propagation.HeaderCarrier(hreq.Header))
 	resp, err := cs3.dataGatewayClient.Do(hreq)
 	if err != nil {
 		return nil, err
@@ -612,9 +619,17 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 		return ctx, nil
 	}
 
-	// we need to start a new context to get rid of an existing x-access-token in the outgoing context
-	authCtx := context.Background()
-	authCtx, span := tracer.Start(authCtx, "getAuthContext", trace.WithLinks(trace.LinkFromContext(ctx)))
+	// Start a new context. Then the x-access-token of the caller is not in the
+	// outgoing metadata. The new context has no deadline and no cancel of the
+	// caller. Copy only the span and the baggage of the caller. Then all calls
+	// of the operation stay in the trace of the request.
+	authCtx := trace.ContextWithSpan(context.Background(), trace.SpanFromContext(ctx))
+	authCtx = baggage.ContextWithBaggage(authCtx, baggage.FromContext(ctx))
+	authCtx = ctxpkg.ContextSetUser(authCtx, cs3.serviceUser)
+
+	// The span covers only the Authenticate call. The returned context does
+	// not hold it, so the next calls are children of the span of the caller.
+	spanCtx, span := tracer.Start(authCtx, "getAuthContext")
 	defer span.End()
 
 	selector, err := pool.GatewaySelector(cs3.gatewayAddr)
@@ -626,8 +641,6 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 		return nil, err
 	}
 
-	authCtx = ctxpkg.ContextSetUser(authCtx, cs3.serviceUser)
-
 	// The Authenticate call gets a context of its own: a gateway that is stuck
 	// on a downstream storage provider accepts the connection and then never
 	// answers, and there is nothing else that would ever end the wait. The
@@ -637,7 +650,7 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 	if timeout <= 0 {
 		timeout = defaultAuthRPCTimeout
 	}
-	rpcCtx, cancel := context.WithTimeout(authCtx, timeout)
+	rpcCtx, cancel := context.WithTimeout(spanCtx, timeout)
 	defer cancel()
 
 	start := time.Now()
