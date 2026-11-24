@@ -108,6 +108,22 @@ type fakeData struct {
 	putStatus atomic.Int32
 }
 
+func (p *tracedProvider) CreateContainer(context.Context, *provider.CreateContainerRequest) (*provider.CreateContainerResponse, error) {
+	return &provider.CreateContainerResponse{Status: &rpc.Status{Code: rpc.Code_CODE_OK}}, nil
+}
+
+func (p *tracedProvider) Stat(context.Context, *provider.StatRequest) (*provider.StatResponse, error) {
+	return &provider.StatResponse{Status: &rpc.Status{Code: rpc.Code_CODE_NOT_FOUND}}, nil
+}
+
+func (p *tracedProvider) Delete(context.Context, *provider.DeleteRequest) (*provider.DeleteResponse, error) {
+	return &provider.DeleteResponse{Status: &rpc.Status{Code: rpc.Code_CODE_OK}}, nil
+}
+
+func (p *tracedProvider) ListContainer(context.Context, *provider.ListContainerRequest) (*provider.ListContainerResponse, error) {
+	return &provider.ListContainerResponse{Status: &rpc.Status{Code: rpc.Code_CODE_OK}}, nil
+}
+
 // newTracedCS3 starts a fake gateway, a fake storage provider and a fake data
 // server. It returns a CS3 that authenticates as the service user.
 func newTracedCS3(t *testing.T) (*CS3, *traceRecorder) {

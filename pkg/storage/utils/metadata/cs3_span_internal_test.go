@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/owncloud/reva/v2/pkg/appctx"
 )
 
 var (
@@ -134,4 +136,59 @@ func TestDownloadSpanRecordsAnError(t *testing.T) {
 	assert.Equal(t, "error", attrs["metadata.result"].AsString())
 	assert.Equal(t, int64(http.StatusInternalServerError), attrs["http.response.status_code"].AsInt64())
 	assert.Equal(t, codes.Error, status.Code)
+}
+
+// In the single binary, each service sets the global tracer provider at its
+// start, and the last one wins. A span from the global provider then has the
+// service name of a random service, or it is dropped when that service has
+// tracing off. The spans must use the provider of the request context.
+func TestSpansUseTheTracerProviderOfTheContext(t *testing.T) {
+	global := recordSpans(t)
+	own := tracetest.NewInMemoryExporter()
+	ctx := appctx.WithTracerProvider(context.Background(), sdktrace.NewTracerProvider(sdktrace.WithSyncer(own)))
+	cs3, _, _ := newTracedCS3WithData(t)
+
+	_, err := cs3.Download(ctx, DownloadRequest{Path: "/doc.json"})
+	require.NoError(t, err)
+
+	inOwn := map[string]bool{}
+	for _, s := range own.GetSpans() {
+		inOwn[s.Name] = true
+	}
+	for _, name := range []string{"Download", "getAuthContext"} {
+		assert.True(t, inOwn[name], "the %s span must use the provider of the context", name)
+	}
+	for _, s := range global.GetSpans() {
+		assert.NotContains(t, []string{"Download", "getAuthContext"}, s.Name, "the %s span must not use the global provider", s.Name)
+	}
+}
+
+// The other operations must also show the path and the result.
+func TestOtherOperationSpansHaveThePathAndTheResult(t *testing.T) {
+	for name, tc := range map[string]struct {
+		call       func(cs3 *CS3) error
+		wantResult string
+	}{
+		"MakeDirIfNotExist": {func(cs3 *CS3) error { return cs3.MakeDirIfNotExist(context.Background(), "/users/u") }, "200"},
+		"Stat": {func(cs3 *CS3) error {
+			_, err := cs3.Stat(context.Background(), "/users/u")
+			return err
+		}, "404"},
+		"Delete": {func(cs3 *CS3) error { return cs3.Delete(context.Background(), "/users/u") }, "200"},
+		"ListDir": {func(cs3 *CS3) error {
+			_, err := cs3.ListDir(context.Background(), "/users/u")
+			return err
+		}, "200"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			exp := recordSpans(t)
+			cs3, _, _ := newTracedCS3WithData(t)
+
+			_ = tc.call(cs3)
+
+			attrs, _ := spanAttributes(t, exp, name)
+			assert.Equal(t, "/users/u", attrs["metadata.path"].AsString())
+			assert.Equal(t, tc.wantResult, attrs["metadata.result"].AsString())
+		})
+	}
 }
