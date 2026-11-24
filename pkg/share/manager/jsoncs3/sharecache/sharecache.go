@@ -258,6 +258,21 @@ func (c *Cache) List(ctx context.Context, userid string) (map[string]SpaceShareI
 	if !ok {
 		return r, nil
 	}
+	if us.Etag == "" {
+		// No file exists yet. Create the empty file, so the next sync gets a
+		// NotModified instead of another NotFound plus a trash lookup. Only a
+		// listing does this. Add writes the file anyway, and RemoveMany does
+		// not create it, because it removes nothing.
+		if err := c.Persist(ctx, userid); err != nil {
+			log := appctx.GetLogger(ctx).With().Str("userID", userid).Logger()
+			if cas.IsConflict(err) {
+				// Another replica created the file. The next sync reads it.
+				log.Debug().Err(err).Msg("empty share cache file already created by another writer")
+			} else {
+				log.Warn().Err(err).Msg("failed to create empty share cache file")
+			}
+		}
+	}
 
 	for ssid, cached := range us.UserShares {
 		r[ssid] = SpaceShareIDs{
@@ -315,13 +330,6 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 			return err
 		}
 		c.UserShares.Store(userID, &UserShareCache{UserShares: map[string]*SpaceShareIDs{}})
-		if resetOnNotFound {
-			// Create the empty file, so the next sync gets a NotModified instead of
-			// another NotFound plus a trash lookup.
-			if err := c.Persist(ctx, userID); err != nil {
-				log.Warn().Err(err).Msg("failed to create empty share cache file")
-			}
-		}
 		span.SetStatus(codes.Ok, "")
 		return nil
 	case errtypes.NotModified:

@@ -198,6 +198,21 @@ var _ = Describe("Sharecache", func() {
 			Expect(atomic.LoadInt32(&fs.Downloads)).To(Equal(int32(2)))
 		})
 
+		// Add writes the file with the share, so it does not write an empty file first.
+		It("makes exactly one upload when no file exists yet", func() {
+			s1 := shareid.Encode("storageid", "spaceid", "s1")
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+
+			Expect(c2.Add(ctx, userid, s1)).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)))
+
+			fresh := sharecache.New(storage, "users", "created.json", 0*time.Second)
+			spaces, err := fresh.List(ctx, userid)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces["storageid:spaceid"].IDs).To(HaveKey(s1))
+		})
+
 		It("stops retrying once the context is canceled instead of exhausting all 100 attempts", func() {
 			fs := &helpers.AlwaysAbortedUploadStorage{Storage: storage}
 			c2 := sharecache.New(fs, "users", "created.json", 0*time.Second)
@@ -220,6 +235,18 @@ var _ = Describe("Sharecache", func() {
 
 			err := c2.Remove(ctx, userid, shareID)
 			Expect(err).ToNot(HaveOccurred(), "TooEarly from write-lock contention should be retried, not treated as fatal")
+		})
+
+		// The Describe("RemoveMany") block above creates the file in its BeforeEach.
+		It("RemoveMany does not upload and creates no file when no file exists yet", func() {
+			cs := &countingStorage{Storage: storage}
+			c2 := sharecache.New(cs, "users", "created.json", 0*time.Second)
+
+			Expect(c2.RemoveMany(ctx, userid, []string{shareid.Encode("storageid", "spaceid", "s1")})).To(Succeed())
+			Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(0)))
+
+			_, err := os.Stat(filepath.Join(tmpdir, "users", userid, "created.json"))
+			Expect(os.IsNotExist(err)).To(BeTrue(), "no file was created, got %v", err)
 		})
 
 		It("does not waste a round trip on a cold cache when the remote file already exists", func() {
