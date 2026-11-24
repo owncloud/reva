@@ -113,7 +113,7 @@ func (bfp *BruteForceProtection) Verify(ctx context.Context, shareToken string) 
 		return false
 	}
 
-	updatedList := bfp.cleanAttempts(attemptList)
+	updatedList := CleanAttempts(attemptList, bfp.timeGap)
 	if len(attemptList) != len(updatedList) {
 		sublog.Debug().Msg("Cleaning obsolete attempts")
 		if _, err := bfp.writeWithRetry(shareToken, nil, sublog); err != nil {
@@ -129,52 +129,6 @@ func (bfp *BruteForceProtection) Verify(ctx context.Context, shareToken string) 
 		Msg("Verification for brute force protection done")
 
 	return updatedListCount <= bfp.maxAttempts
-}
-
-// Ensure the attempt is added in the right possition. Since multiple attempts
-// can happen very closely, the attempt at time 73 might have been registered
-// before the attempt at time 72
-func (bfp *BruteForceProtection) insertAttempt(attemptList []*attemptData, attempt *attemptData) []*attemptData {
-	if attempt == nil {
-		return attemptList
-	}
-
-	var i int
-	for i = 0; i < len(attemptList); i++ {
-		if attemptList[i].Timestamp > attempt.Timestamp {
-			break
-		}
-	}
-
-	return append(attemptList[:i], append([]*attemptData{attempt}, attemptList[i:]...)...)
-}
-
-// cleanAttempts will remove obsolete attempt data
-func (bfp *BruteForceProtection) cleanAttempts(attemptList []*attemptData) []*attemptData {
-	minTimestamp := time.Now().Add(-1 * bfp.timeGap).Unix()
-
-	var index int
-	for index = 0; index < len(attemptList); index++ {
-		if attemptList[index].Timestamp >= minTimestamp {
-			break
-		}
-	}
-
-	return attemptList[index:]
-}
-
-// areEqualLists checks that both lists have the same data
-func (bfp *BruteForceProtection) areEqualLists(a, b []*attemptData) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	for i := 0; i < len(a); i++ { // already checked that the length of both lists are the same
-		if a[i].Timestamp != b[i].Timestamp {
-			return false
-		}
-	}
-	return true
 }
 
 // writeWithRetry will write the attempt data for the share. You can use a
@@ -204,7 +158,7 @@ func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *atte
 
 	tries := 0
 	for tries = 0; tries < maxWriteRetries; tries++ {
-		updatedList := bfp.cleanAttempts(bfp.insertAttempt(attemptList, attempt))
+		updatedList := CleanAttempts(InsertAttempt(attemptList, attempt), bfp.timeGap)
 		if len(updatedList) == 0 {
 			// if all attempts expired, delete the info
 			// the new attempt shouldn't have expired, so this shouldn't happen
@@ -228,11 +182,10 @@ func (bfp *BruteForceProtection) writeWithRetry(shareToken string, attempt *atte
 			return 0, err
 		}
 
-		// TODO: the areEqualLists might be too strict. We might just need
-		// to check that the data we want to add is present despite there
-		// could be additional data from other replicas
-		if bfp.areEqualLists(attemptList, updatedList) {
-			// if both lists are equal, the write was successful
+		if IsSubsetOfAttempts(attemptList, updatedList) {
+			// Note: both attemptList and updatedList MUST be sorted by timestamp.
+			// Check if the updated list is a subset of the list just obtained.
+			// If so, the write was successful despite having additional data.
 			break
 		}
 
