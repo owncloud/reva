@@ -7,8 +7,6 @@ import (
 
 	backoff "github.com/cenkalti/backoff/v5"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
-	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
-	"github.com/rs/zerolog"
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -102,19 +100,14 @@ func RetryPersist(ctx context.Context, maxRetries int, persistFunc, resyncFunc f
 	return err
 }
 
-// DecideNotFoundReset reports whether a NotFound download result should be treated as a
-// legitimately empty resource (reset) rather than a lost update (error). A resync with a
-// prior etag never resets silently; otherwise the backend's trash state decides, failing
-// open (reset=true) when the backend can't tell (e.g. Disk). trashed is only meaningful
-// when reset is false, to pick the right log reason.
-func DecideNotFoundReset(ctx context.Context, storage metadata.Storage, path string, resetOnNotFound, hadPriorEtag bool, log zerolog.Logger) (reset, trashed bool) {
-	if !resetOnNotFound && hadPriorEtag {
-		return false, false
-	}
-	trashed, terr := storage.WasRecentlyDeleted(ctx, path)
-	if terr != nil {
-		log.Warn().Err(terr).Msg("could not check trash state, assuming not deleted")
-		return true, false
-	}
-	return !trashed, trashed
+// DecideNotFoundReset reports whether a NotFound download result is an empty
+// resource (reset) or a lost update (error). Only a resync after a CAS conflict
+// with a known etag is a lost update: the file existed, and now it is missing.
+// In all other cases the file does not exist yet, and the cache resets to empty.
+//
+// The function does not look at the trash. The jsoncs3 caches never delete
+// their files, so a trash lookup cannot find a real race. It also cannot match
+// on decomposedfs, and it costs two calls for each NotFound.
+func DecideNotFoundReset(resetOnNotFound, hadPriorEtag bool) bool {
+	return resetOnNotFound || !hadPriorEtag
 }

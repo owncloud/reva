@@ -260,9 +260,9 @@ func (c *Cache) List(ctx context.Context, userid string) (map[string]SpaceShareI
 	}
 	if us.Etag == "" {
 		// No file exists yet. Create the empty file, so the next sync gets a
-		// NotModified instead of another NotFound plus a trash lookup. Only a
-		// listing does this. Add writes the file anyway, and RemoveMany does
-		// not create it, because it removes nothing.
+		// NotModified instead of another NotFound. Only a listing does this.
+		// Add writes the file anyway, and RemoveMany does not create it,
+		// because it removes nothing.
 		if err := c.Persist(ctx, userid); err != nil {
 			log := appctx.GetLogger(ctx).With().Str("userID", userid).Logger()
 			if cas.IsConflict(err) {
@@ -320,13 +320,9 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	case nil:
 		span.AddEvent("updating local cache")
 	case errtypes.NotFound:
-		if reset, trashed := cas.DecideNotFoundReset(ctx, c.storage, userCreatedPath, resetOnNotFound, hadEtag, log); !reset {
+		if !cas.DecideNotFoundReset(resetOnNotFound, hadEtag) {
 			span.SetStatus(codes.Error, err.Error())
-			if trashed {
-				log.Error().Err(err).Msg("lost update: backing file was recently trashed")
-			} else {
-				log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
-			}
+			log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
 			return err
 		}
 		c.UserShares.Store(userID, &UserShareCache{UserShares: map[string]*SpaceShareIDs{}})

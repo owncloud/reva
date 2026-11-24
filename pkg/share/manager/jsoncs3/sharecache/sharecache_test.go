@@ -33,6 +33,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata/mocks"
+	"github.com/stretchr/testify/mock"
 )
 
 var _ = Describe("Sharecache", func() {
@@ -343,7 +345,21 @@ var _ = Describe("Sharecache", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("does not repeat the NotFound and the trash lookup on later calls", func() {
+			// The NotFound must not cause more storage calls than the write of
+			// the empty file, for example a lookup in the trash.
+			It("makes no storage call after the NotFound download except the write of the empty file", func() {
+				st := mocks.NewStorage(GinkgoT())
+				st.EXPECT().Download(mock.Anything, mock.Anything).Return(nil, errtypes.NotFound("received.json")).Once()
+				st.EXPECT().MakeDirIfNotExist(mock.Anything, mock.Anything).Return(nil).Once()
+				st.EXPECT().Upload(mock.Anything, mock.Anything).Return(&metadata.UploadResponse{Etag: "etag"}, nil).Once()
+				c2 := sharecache.New(st, "groups", "received.json", 0*time.Second)
+
+				shares, err := c2.List(ctx, "group1")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(shares).To(BeEmpty())
+			})
+
+			It("does not repeat the NotFound on later calls", func() {
 				// a group that never received a share: the case from OCISDEV-1198
 				cs := &countingStorage{Storage: storage}
 				c2 := sharecache.New(cs, "groups", "received.json", 0*time.Second)
@@ -354,7 +370,6 @@ var _ = Describe("Sharecache", func() {
 					Expect(shares).To(BeEmpty())
 				}
 				Expect(atomic.LoadInt32(&cs.notFounds)).To(Equal(int32(1)), "only the first call may get a NotFound")
-				Expect(atomic.LoadInt32(&cs.trashChecks)).To(Equal(int32(1)), "only the first call may look at the trash")
 				Expect(atomic.LoadInt32(&cs.uploads)).To(Equal(int32(1)), "the empty file is written once")
 			})
 
@@ -406,12 +421,11 @@ var _ = Describe("Sharecache", func() {
 	})
 })
 
-// countingStorage counts Upload calls, NotFound downloads and trash lookups.
+// countingStorage counts Upload calls and NotFound downloads.
 type countingStorage struct {
 	metadata.Storage
-	uploads     int32
-	notFounds   int32
-	trashChecks int32
+	uploads   int32
+	notFounds int32
 }
 
 func (c *countingStorage) Upload(ctx context.Context, req metadata.UploadRequest) (*metadata.UploadResponse, error) {
@@ -425,9 +439,4 @@ func (c *countingStorage) Download(ctx context.Context, req metadata.DownloadReq
 		atomic.AddInt32(&c.notFounds, 1)
 	}
 	return res, err
-}
-
-func (c *countingStorage) WasRecentlyDeleted(ctx context.Context, path string) (bool, error) {
-	atomic.AddInt32(&c.trashChecks, 1)
-	return c.Storage.WasRecentlyDeleted(ctx, path)
 }

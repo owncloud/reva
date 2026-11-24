@@ -36,6 +36,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/providercache"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata/mocks"
+	"github.com/stretchr/testify/mock"
 )
 
 var _ = Describe("Cache", func() {
@@ -77,6 +79,21 @@ var _ = Describe("Cache", func() {
 		if tmpdir != "" {
 			os.RemoveAll(tmpdir)
 		}
+	})
+
+	Describe("ListSpace", func() {
+		// Each listing of a space without shares gets this NotFound. The
+		// NotFound must not cause more storage calls, for example a lookup in
+		// the trash.
+		It("makes no storage call after the NotFound download", func() {
+			st := mocks.NewStorage(GinkgoT())
+			st.EXPECT().Download(mock.Anything, mock.Anything).Return(nil, errtypes.NotFound("spaceid.json")).Once()
+			c2 := providercache.New(st, 0*time.Second)
+
+			shares, err := c2.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(shares.Shares).To(BeEmpty())
+		})
 	})
 
 	// Many shares in one space go with one upload, for example in a purge or
@@ -281,8 +298,10 @@ var _ = Describe("Cache", func() {
 		})
 
 		It("[hypothesis, unfixed] a cold-start sync has no way to detect the same race, confirming the gap is structural, not call-site-specific", func() {
-			// Disk's WasRecentlyDeleted always answers false (no trash), so this
-			// documents a known, accepted gap. Diagnosis: DOCS/RESEARCH_OCISDEV-855_IDEAL.md.
+			// Without an etag, a NotFound always resets the cache. This documents
+			// a known, accepted gap: the jsoncs3 caches never delete their files,
+			// so only a manual delete can cause this race. A lookup in the trash
+			// does not close the gap.
 			fs := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.NotFound("injected: cold sync races a deletion")}
 			c2 := providercache.New(fs, 0*time.Second)
 
@@ -291,21 +310,6 @@ var _ = Describe("Cache", func() {
 
 			Expect(err).ToNot(HaveOccurred(),
 				"cold-start sync unconditionally treats NotFound as safe-to-reset -- there is no etag to gate on, confirming no defense exists here")
-		})
-
-		It("errors on a cold-start NotFound when the backend confirms the file was trashed", func() {
-			// Closes the gap above for backends that can answer the question
-			// (CS3/decomposedfs, via WasRecentlyDeleted). Disk can't (always
-			// false), so this is backend-specific, not a general fix.
-			base := &helpers.ErrOnceDownloadStorage{Storage: storage, Err: errtypes.NotFound("injected: cold sync races a deletion")}
-			fs := &trashAwareStorage{Storage: base, trashed: true}
-			c2 := providercache.New(fs, 0*time.Second)
-
-			newShareID := "storageid$spaceid!cold-share"
-			err := c2.Add(ctx, storageID, spaceID, newShareID, &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "cold-share"}})
-
-			Expect(err).To(HaveOccurred(),
-				"a confirmed-trashed path must surface as an error instead of being silently treated as empty")
 		})
 	})
 
@@ -608,15 +612,4 @@ func (c *conflictThenNotFoundStorage) uploadedContent() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.content
-}
-
-// trashAwareStorage overrides WasRecentlyDeleted with a fixed answer,
-// simulating a backend (CS3/decomposedfs) that can confirm trash state.
-type trashAwareStorage struct {
-	metadata.Storage
-	trashed bool
-}
-
-func (t *trashAwareStorage) WasRecentlyDeleted(_ context.Context, _ string) (bool, error) {
-	return t.trashed, nil
 }
