@@ -82,10 +82,10 @@ func TestDecideNotFoundReset(t *testing.T) {
 		hadPriorEtag    bool
 		want            bool
 	}{
-		"cold sync without etag":          {resetOnNotFound: true, hadPriorEtag: false, want: true},
-		"sync with etag":                  {resetOnNotFound: true, hadPriorEtag: true, want: true},
-		"resync after conflict, no etag":  {resetOnNotFound: false, hadPriorEtag: false, want: true},
-		"resync after conflict with etag": {resetOnNotFound: false, hadPriorEtag: true, want: false},
+		"cold sync without etag":           {resetOnNotFound: true, hadPriorEtag: false, want: true},
+		"sync with etag, file disappeared": {resetOnNotFound: true, hadPriorEtag: true, want: true},
+		"resync after conflict, no etag":   {resetOnNotFound: false, hadPriorEtag: false, want: true},
+		"resync after conflict with etag":  {resetOnNotFound: false, hadPriorEtag: true, want: false},
 	}
 
 	for name, tc := range tests {
