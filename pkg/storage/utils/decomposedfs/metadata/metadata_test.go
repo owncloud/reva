@@ -53,6 +53,35 @@ var _ = Describe("Backend", func() {
 		}
 	})
 
+	Describe("XattrsBackend", func() {
+		BeforeEach(func() {
+			backend = metadata.NewXattrsBackend(tmpdir, cache.Config{
+				Database: tmpdir,
+			})
+		})
+
+		Describe("Purge", func() {
+			JustBeforeEach(func() {
+				Expect(os.WriteFile(file, []byte{}, 0600)).To(Succeed())
+				err := backend.SetMultiple(context.Background(), file, map[string][]byte{"user.ocis.foo": []byte("bar")}, true)
+				Expect(err).ToNot(HaveOccurred())
+				// an upload to an existing node keeps the lock file
+				Expect(os.WriteFile(backend.LockfilePath(file), []byte{}, 0600)).To(Succeed())
+
+				Expect(backend.Purge(context.Background(), file)).To(Succeed())
+			})
+
+			It("removes the attributes", func() {
+				_, err := backend.Get(context.Background(), file, "user.ocis.foo")
+				Expect(err).To(HaveOccurred())
+			})
+
+			It("removes the lock file", func() {
+				Expect(backend.LockfilePath(file)).ToNot(BeAnExistingFile())
+			})
+		})
+	})
+
 	Describe("MessagePackBackend", func() {
 		BeforeEach(func() {
 			backend = metadata.NewMessagePackBackend(tmpdir, cache.Config{
@@ -215,6 +244,26 @@ var _ = Describe("Backend", func() {
 
 				_, err = backend.Get(context.Background(), file, "foo")
 				Expect(err).To(HaveOccurred())
+			})
+		})
+
+		Describe("Purge", func() {
+			JustBeforeEach(func() {
+				// a locked write creates the metadata file and the lock file
+				err := backend.SetMultiple(context.Background(), file, map[string][]byte{"foo": []byte("bar")}, true)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(backend.MetadataPath(file)).To(BeAnExistingFile())
+				Expect(backend.LockfilePath(file)).To(BeAnExistingFile())
+
+				Expect(backend.Purge(context.Background(), file)).To(Succeed())
+			})
+
+			It("removes the metadata file", func() {
+				Expect(backend.MetadataPath(file)).ToNot(BeAnExistingFile())
+			})
+
+			It("removes the lock file", func() {
+				Expect(backend.LockfilePath(file)).ToNot(BeAnExistingFile())
 			})
 		})
 
