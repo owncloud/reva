@@ -249,10 +249,9 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 
-	unlock, err := c.lockUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
+	_, lockSpan := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
+	unlock := c.lockUser(userID)
+	lockSpan.End()
 	defer unlock()
 
 	err = c.syncWithRetry(ctx, userID)
@@ -426,12 +425,14 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	}
 
 	newSpaces := &Spaces{}
+	span.SetAttributes(attribute.Int("metadata.bytes", len(dlres.Content)))
 	err = json.Unmarshal(dlres.Content, newSpaces)
 	if err != nil {
 		span.SetStatus(codes.Error, fmt.Sprintf("Failed to unmarshal the received share: %s", err.Error()))
 		log.Error().Err(err).Msg("Failed to unmarshal the received share")
 		return err
 	}
+	span.AddEvent("decoded")
 	newSpaces.etag = dlres.Etag
 
 	c.ReceivedSpaces.Store(userID, newSpaces)

@@ -344,12 +344,14 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	}
 
 	newShareCache := &UserShareCache{}
+	span.SetAttributes(attribute.Int("metadata.bytes", len(dlres.Content)))
 	err = json.Unmarshal(dlres.Content, newShareCache)
 	if err != nil {
 		span.SetStatus(codes.Error, fmt.Sprintf("Failed to unmarshal the share cache: %s", err.Error()))
 		log.Error().Err(err).Msg("Failed to unmarshal the share cache")
 		return err
 	}
+	span.AddEvent("decoded")
 	newShareCache.Etag = dlres.Etag
 
 	c.UserShares.Store(userID, newShareCache)

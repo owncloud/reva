@@ -699,6 +699,7 @@ func (c *Cache) doSync(ctx context.Context, storageID, spaceID string, resetOnNo
 
 	span.AddEvent("updating local cache")
 	newShares := &Shares{}
+	span.SetAttributes(attribute.Int("metadata.bytes", len(dlres.Content)))
 	err = json.Unmarshal(dlres.Content, newShares)
 	if err != nil {
 		span.RecordError(err)
@@ -706,6 +707,7 @@ func (c *Cache) doSync(ctx context.Context, storageID, spaceID string, resetOnNo
 		log.Error().Err(err).Msg("unmarshaling provider cache failed")
 		return err
 	}
+	span.AddEvent("decoded")
 	newShares.Etag = dlres.Etag
 
 	spaces.Spaces.Store(spaceID, newShares)
