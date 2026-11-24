@@ -856,7 +856,7 @@ func (s *svc) removeSpaceShare(ctx context.Context, ref *provider.ResourceId, gr
 	}
 	if permissions == nil {
 		// The grantee is missing; assume it was already removed
-		return &collaboration.RemoveShareResponse{Status: status.NewOK(ctx)}, nil
+		return &collaboration.RemoveShareResponse{Status: status.NewNotFound(ctx, "grantee not found")}, nil
 	}
 
 	if len(listGrantRes.Grants) == 1 || !isSpaceManagerRemaining(listGrantRes.Grants, grantee) {
