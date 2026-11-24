@@ -42,11 +42,17 @@ var _ = Describe("Tree", func() {
 		env *helpers.TestEnv
 
 		t *tree.Tree
+
+		envConfig map[string]interface{}
 	)
+
+	BeforeEach(func() {
+		envConfig = nil
+	})
 
 	JustBeforeEach(func() {
 		var err error
-		env, err = helpers.NewTestEnv(nil)
+		env, err = helpers.NewTestEnv(envConfig)
 		Expect(err).ToNot(HaveOccurred())
 		t = env.Tree
 		env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(&provider.ResourcePermissions{
@@ -223,6 +229,77 @@ var _ = Describe("Tree", func() {
 					_, err = os.Stat(trashPath)
 					Expect(err).To(HaveOccurred())
 				})
+			})
+		})
+	})
+
+	// OCISDEV-1658: the messagepack backend keeps the .mlock file while the node exists.
+	// Delete and purge must not leave it, or other files of the node, behind.
+	Context("with an existing file and the messagepack metadata backend", func() {
+		var (
+			n *node.Node
+		)
+
+		BeforeEach(func() {
+			envConfig = map[string]interface{}{
+				"metadata_backend": "messagepack",
+				// the metadata cache is shared in the process: use a new database for each env
+				"filemetadatacache": map[string]interface{}{"cache_database": uuid.New().String()},
+			}
+		})
+
+		JustBeforeEach(func() {
+			var err error
+			n, err = env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+				ResourceId: env.SpaceRootRes,
+				Path:       "dir1/file1",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(n.Exists).To(BeTrue())
+		})
+
+		Describe("Delete", func() {
+			JustBeforeEach(func() {
+				Expect(t.Delete(env.Ctx, n)).To(Succeed())
+			})
+
+			It("leaves no metadata files at the original location", func() {
+				Expect(env.Lookup.MetadataBackend().MetadataPath(n.InternalPath())).ToNot(BeAnExistingFile())
+				Expect(env.Lookup.MetadataBackend().LockfilePath(n.InternalPath())).ToNot(BeAnExistingFile())
+			})
+		})
+
+		Describe("PurgeRecycleItemFunc", func() {
+			const revisionBlobID = "revision-blob-id"
+
+			JustBeforeEach(func() {
+				env.Blobstore.On("Delete", mock.Anything).Return(nil)
+
+				// add a revision of the file
+				revisionPath := n.InternalPath() + node.RevisionIDDelimiter + "2026-11-10T08:43:15.41023Z"
+				Expect(os.WriteFile(revisionPath, []byte{}, 0600)).To(Succeed())
+				Expect(env.Lookup.MetadataBackend().SetMultiple(env.Ctx, revisionPath, map[string][]byte{
+					prefixes.BlobIDAttr:   []byte(revisionBlobID),
+					prefixes.BlobsizeAttr: []byte("3"),
+				}, true)).To(Succeed())
+
+				Expect(t.Delete(env.Ctx, n)).To(Succeed())
+
+				_, purgeFunc, err := t.PurgeRecycleItemFunc(env.Ctx, n.SpaceRoot.ID, n.ID, "")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(purgeFunc()).To(Succeed())
+			})
+
+			It("leaves no files of the node behind", func() {
+				leftovers, err := filepath.Glob(n.InternalPath() + "*")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(leftovers).To(BeEmpty())
+			})
+
+			It("deletes the blob of the revision", func() {
+				env.Blobstore.AssertCalled(GinkgoT(), "Delete", mock.MatchedBy(func(bn *node.Node) bool {
+					return bn.BlobID == revisionBlobID
+				}))
 			})
 		})
 	})
