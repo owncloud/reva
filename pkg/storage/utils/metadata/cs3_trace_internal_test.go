@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,14 +101,38 @@ func (p *tracedProvider) InitiateFileUpload(ctx context.Context, _ *provider.Ini
 	}, nil
 }
 
+// fakeData controls the answers of the fake data server. A status of 0 means
+// 200. A GET with If-None-Match "etag" gets 304.
+type fakeData struct {
+	getStatus atomic.Int32
+	putStatus atomic.Int32
+}
+
 // newTracedCS3 starts a fake gateway, a fake storage provider and a fake data
 // server. It returns a CS3 that authenticates as the service user.
 func newTracedCS3(t *testing.T) (*CS3, *traceRecorder) {
+	cs3, rec, _ := newTracedCS3WithData(t)
+	return cs3, rec
+}
+
+func newTracedCS3WithData(t *testing.T) (*CS3, *traceRecorder, *fakeData) {
 	t.Helper()
 	rec := &traceRecorder{traces: map[string]trace.TraceID{}}
+	fd := &fakeData{}
 
 	data := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.record("HTTP "+r.Method, propagation.HeaderCarrier(r.Header))
+		status := fd.getStatus.Load()
+		if r.Method == http.MethodPut {
+			status = fd.putStatus.Load()
+		}
+		if r.Method == http.MethodGet && r.Header.Get("If-None-Match") == "etag" {
+			status = http.StatusNotModified
+		}
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(int(status))
+			return
+		}
 		w.Header().Set("Etag", "etag")
 		w.Header().Set("Last-Modified", time.Now().Format(time.RFC1123Z))
 		_, _ = w.Write([]byte("{}"))
@@ -131,7 +156,7 @@ func newTracedCS3(t *testing.T) (*CS3, *traceRecorder) {
 	cs3.useSystemUser = true
 	cs3.machineAuthAPIKey = "secret"
 	cs3.serviceUser = &user.User{Id: &user.UserId{OpaqueId: "service-user"}}
-	return cs3, rec
+	return cs3, rec, fd
 }
 
 // requestContext returns a context with the span of an incoming request.

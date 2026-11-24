@@ -35,7 +35,9 @@ import (
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
@@ -219,9 +221,15 @@ func (cs3 *CS3) SimpleUpload(ctx context.Context, uploadpath string, content []b
 }
 
 // Upload uploads a file to the metadata storage
-func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse, error) {
+func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (_ *UploadResponse, err error) {
 	ctx, span := tracer.Start(ctx, "Upload")
 	defer span.End()
+	httpStatus := 0
+	defer func() {
+		endMetadataSpan(span, req.Path, httpStatus, len(req.Content), err,
+			attribute.String("metadata.condition", uploadCondition(req)),
+			attribute.Bool("metadata.conflict", metadataResult(err) == resultConflict))
+	}()
 
 	log := appctx.GetLogger(ctx)
 	log.Debug().Str("path", req.Path).Msg("cs3.Upload.start")
@@ -309,6 +317,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 		return nil, err
 	}
 	defer resp.Body.Close()
+	httpStatus = resp.StatusCode
 	log.Debug().Str("path", req.Path).Int("status", resp.StatusCode).Msg("cs3.Upload.put_done")
 	if err := errtypes.NewErrtypeFromHTTPStatusCode(resp.StatusCode, httpReq.URL.Path); err != nil {
 		return nil, err
@@ -322,6 +331,66 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 		Etag:   etag,
 		FileID: resp.Header.Get("OC-Fileid"),
 	}, nil
+}
+
+// Values of the span attribute metadata.result.
+const (
+	resultOK          = "200"
+	resultNotModified = "304"
+	resultNotFound    = "404"
+	resultConflict    = "conflict"
+	resultError       = "error"
+)
+
+// metadataResult classifies the result of a download or an upload. A 304, a
+// 404 and a CAS conflict are expected results, not errors.
+func metadataResult(err error) string {
+	switch err.(type) {
+	case nil:
+		return resultOK
+	case errtypes.NotModified:
+		return resultNotModified
+	case errtypes.NotFound:
+		return resultNotFound
+	case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly:
+		return resultConflict
+	default:
+		return resultError
+	}
+}
+
+// uploadCondition returns the CAS condition of an upload.
+func uploadCondition(req UploadRequest) string {
+	switch {
+	case req.IfMatchEtag != "":
+		return "if-match"
+	case len(req.IfNoneMatch) > 0:
+		return "if-none-match"
+	case !req.IfUnmodifiedSince.IsZero():
+		return "if-unmodified-since"
+	default:
+		return "none"
+	}
+}
+
+// endMetadataSpan adds the result of a download or an upload to the span.
+// Then a trace shows a 304, a 404 or a CAS conflict. httpStatus is 0 when the
+// call did not get an HTTP answer.
+func endMetadataSpan(span trace.Span, path string, httpStatus, size int, err error, attrs ...attribute.KeyValue) {
+	result := metadataResult(err)
+	span.SetAttributes(
+		attribute.String("metadata.path", path),
+		attribute.String("metadata.result", result),
+		attribute.Int("metadata.bytes", size),
+	)
+	if httpStatus != 0 {
+		span.SetAttributes(attribute.Int("http.response.status_code", httpStatus))
+	}
+	span.SetAttributes(attrs...)
+	if result == resultError {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 }
 
 // Stat returns the metadata for the given path
@@ -368,9 +437,17 @@ func (cs3 *CS3) SimpleDownload(ctx context.Context, downloadpath string) (conten
 }
 
 // Download reads a file from the metadata storage
-func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (*DownloadResponse, error) {
+func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (out *DownloadResponse, err error) {
 	ctx, span := tracer.Start(ctx, "Download")
 	defer span.End()
+	httpStatus := 0
+	defer func() {
+		size := 0
+		if out != nil {
+			size = len(out.Content)
+		}
+		endMetadataSpan(span, req.Path, httpStatus, size, err)
+	}()
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -440,6 +517,7 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (*DownloadRes
 		return nil, err
 	}
 	defer resp.Body.Close()
+	httpStatus = resp.StatusCode
 
 	dres := DownloadResponse{}
 
