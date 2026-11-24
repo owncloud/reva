@@ -19,6 +19,7 @@
 package tree_test
 
 import (
+	"context"
 	"os"
 	"path"
 	"path/filepath"
@@ -676,6 +677,87 @@ var _ = Describe("Tree", func() {
 			Expect(err).To(HaveOccurred())
 			_, ok := err.(errtypes.IsAlreadyExists)
 			Expect(ok).To(BeTrue(), "expected errtypes.AlreadyExists, got %T: %v", err, err)
+		})
+
+		// OCISDEV-1658: a failed create must not leave the node file and its metadata behind.
+		// The messagepack backend writes the processing status to a .mpk file.
+		Context("with the messagepack metadata backend", func() {
+			var (
+				parentNode *node.Node
+				newNode    func() *node.Node
+			)
+
+			BeforeEach(func() {
+				envConfig = map[string]interface{}{
+					"metadata_backend": "messagepack",
+					// the metadata cache is shared in the process: use a new database for each env
+					"filemetadatacache": map[string]interface{}{"cache_database": uuid.New().String()},
+				}
+			})
+
+			JustBeforeEach(func() {
+				var err error
+				parentNode, err = env.CreateTestDir("initnewnodecleanupdir", &provider.Reference{
+					ResourceId: env.SpaceRootRes,
+					Path:       "/initnewnodecleanupdir",
+				})
+				Expect(err).ToNot(HaveOccurred())
+
+				newNode = func() *node.Node {
+					nn := node.New(parentNode.SpaceID, uuid.New().String(), parentNode.ID, "newfile", 0, "", provider.ResourceType_RESOURCE_TYPE_FILE, nil, env.Lookup)
+					nn.SpaceRoot = parentNode.SpaceRoot
+					return nn
+				}
+			})
+
+			expectNoFilesOf := func(nn *node.Node) {
+				leftovers, err := filepath.Glob(nn.InternalPath() + "*")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(leftovers).To(BeEmpty())
+			}
+
+			Context("when another upload took the name", func() {
+				It("removes its own node files and keeps the link of the other upload", func() {
+					winner := newNode()
+					unlock, err := t.InitNewNode(env.Ctx, winner, 0)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(unlock()).To(Succeed())
+
+					loser := newNode()
+					_, err = t.InitNewNode(env.Ctx, loser, 0)
+					Expect(err).To(BeAssignableToTypeOf(errtypes.AlreadyExists("")))
+
+					expectNoFilesOf(loser)
+					Expect(winner.InternalPath()).To(BeAnExistingFile())
+					target, err := os.Readlink(filepath.Join(winner.ParentPath(), winner.Name))
+					Expect(err).ToNot(HaveOccurred())
+					Expect(target).To(HaveSuffix(lookup.Pathify(winner.ID, 4, 2)))
+				})
+			})
+
+			Context("when the quota is exceeded", func() {
+				var originalCheckQuota = node.CheckQuota
+
+				BeforeEach(func() {
+					node.CheckQuota = func(context.Context, *node.Node, bool, uint64, uint64) (bool, error) {
+						return false, errtypes.InsufficientStorage("quota exceeded")
+					}
+				})
+				AfterEach(func() {
+					node.CheckQuota = originalCheckQuota
+				})
+
+				It("removes its node files and links nothing", func() {
+					nn := newNode()
+
+					_, err := t.InitNewNode(env.Ctx, nn, 1)
+					Expect(err).To(BeAssignableToTypeOf(errtypes.InsufficientStorage("")))
+
+					expectNoFilesOf(nn)
+					_, err = os.Lstat(filepath.Join(nn.ParentPath(), nn.Name))
+					Expect(os.IsNotExist(err)).To(BeTrue())
+				})
+			})
 		})
 	})
 })
