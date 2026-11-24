@@ -75,3 +75,24 @@ func TestIsTransientGRPCStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestDecideNotFoundReset(t *testing.T) {
+	tests := map[string]struct {
+		resetOnNotFound bool
+		hadPriorEtag    bool
+		want            bool
+	}{
+		"cold sync without etag":           {resetOnNotFound: true, hadPriorEtag: false, want: true},
+		"sync with etag, file disappeared": {resetOnNotFound: true, hadPriorEtag: true, want: true},
+		"resync after conflict, no etag":   {resetOnNotFound: false, hadPriorEtag: false, want: true},
+		"resync after conflict with etag":  {resetOnNotFound: false, hadPriorEtag: true, want: false},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := DecideNotFoundReset(tc.resetOnNotFound, tc.hadPriorEtag); got != tc.want {
+				t.Errorf("DecideNotFoundReset(%v, %v) = %v, want %v", tc.resetOnNotFound, tc.hadPriorEtag, got, tc.want)
+			}
+		})
+	}
+}

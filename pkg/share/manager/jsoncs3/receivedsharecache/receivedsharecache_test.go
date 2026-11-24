@@ -31,6 +31,8 @@ import (
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/receivedsharecache"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata/mocks"
+	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -83,6 +85,19 @@ var _ = Describe("Cache", func() {
 		Context("when no cache file exists yet", func() {
 			It("returns empty spaces", func() {
 				spaces, err := c.List(ctx, userID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(spaces).To(BeEmpty())
+			})
+
+			// Each listing of a user without received shares gets this NotFound.
+			// The NotFound must not cause more storage calls, for example a
+			// lookup in the trash.
+			It("makes no storage call after the NotFound download", func() {
+				st := mocks.NewStorage(GinkgoT())
+				st.EXPECT().Download(mock.Anything, mock.Anything).Return(nil, errtypes.NotFound("received.json")).Once()
+				c2 := receivedsharecache.New(st, 0*time.Second)
+
+				spaces, err := c2.List(ctx, userID)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(spaces).To(BeEmpty())
 			})
