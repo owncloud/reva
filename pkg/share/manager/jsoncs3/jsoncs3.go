@@ -121,6 +121,9 @@ const tracerName = "jsoncs3"
 // common cause of the failure. It is a variable, so the tests can make it short.
 var rollbackTimeout = 30 * time.Second
 
+// defaultListTimeout is the default of Manager.ListTimeout.
+const defaultListTimeout = 10 * time.Second
+
 // defaultStaleShareGracePeriod is the default of Manager.StaleShareGracePeriod.
 // An older version writes the grantee entry and the share at the same time.
 // During a rolling upgrade, a listing can find the grantee entry before the
@@ -154,14 +157,17 @@ var (
 )
 
 type config struct {
-	GatewayAddr       string       `mapstructure:"gateway_addr"`
-	MaxConcurrency    int          `mapstructure:"max_concurrency"`
-	ProviderAddr      string       `mapstructure:"provider_addr"`
-	ServiceUserID     string       `mapstructure:"service_user_id"`
-	ServiceUserIdp    string       `mapstructure:"service_user_idp"`
-	MachineAuthAPIKey string       `mapstructure:"machine_auth_apikey"`
-	CacheTTL          int          `mapstructure:"ttl"`
-	Events            EventOptions `mapstructure:"events"`
+	GatewayAddr       string `mapstructure:"gateway_addr"`
+	MaxConcurrency    int    `mapstructure:"max_concurrency"`
+	ProviderAddr      string `mapstructure:"provider_addr"`
+	ServiceUserID     string `mapstructure:"service_user_id"`
+	ServiceUserIdp    string `mapstructure:"service_user_idp"`
+	MachineAuthAPIKey string `mapstructure:"machine_auth_apikey"`
+	CacheTTL          int    `mapstructure:"ttl"`
+	// ListTimeout is the time budget of ListReceivedShares in seconds. Zero
+	// selects the default. A negative value switches the budget off.
+	ListTimeout int          `mapstructure:"list_timeout"`
+	Events      EventOptions `mapstructure:"events"`
 }
 
 // EventOptions are the configurable options for events
@@ -192,6 +198,10 @@ type Manager struct {
 	initialized bool
 
 	MaxConcurrency int
+
+	// ListTimeout is the total time budget of ListReceivedShares. Zero means no
+	// budget. When the budget is over, the listing returns an error.
+	ListTimeout time.Duration
 
 	// StaleShareGracePeriod is the time that a pod waits before it removes a
 	// stale grantee entry. Zero removes the entry at the first listing.
@@ -238,7 +248,17 @@ func NewDefault(m map[string]interface{}) (share.Manager, error) {
 		}
 	}
 
-	return New(s, gatewaySelector, c.CacheTTL, es, c.MaxConcurrency)
+	m2, err := New(s, gatewaySelector, c.CacheTTL, es, c.MaxConcurrency)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case c.ListTimeout > 0:
+		m2.ListTimeout = time.Duration(c.ListTimeout) * time.Second
+	case c.ListTimeout < 0:
+		m2.ListTimeout = 0
+	}
+	return m2, nil
 }
 
 // New returns a new manager instance.
@@ -254,6 +274,7 @@ func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.Gate
 		gatewaySelector:    gatewaySelector,
 		eventStream:        es,
 		MaxConcurrency:     maxconcurrency,
+		ListTimeout:        defaultListTimeout,
 
 		StaleShareGracePeriod: defaultStaleShareGracePeriod,
 		staleSince:            map[string]staleSeen{},
@@ -920,6 +941,17 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 		user = u
 	}
 
+	// The listing has a total time budget. The reads of the group loop and of
+	// the workers log an error and continue. Without the check of the context
+	// after them, a listing that ran out of time would look like a complete
+	// list. The expiration after the listing uses the context of the caller.
+	callerCtx := ctx
+	if m.ListTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.ListTimeout)
+		defer cancel()
+	}
+
 	ssids := map[string]*receivedsharecache.Space{}
 	// groupsOfShare holds the groups that give each share ID, for the cleanup of
 	// stale group shares. The workers below only read it.
@@ -950,6 +982,12 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 				groupsOfShare[shareid] = append(groupsOfShare[shareid], group)
 			}
 		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	// add all spaces the user has receved shares for, this includes mount points and share state for groups
@@ -1125,7 +1163,12 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 	}
 
 	err = g.Wait()
-	m.expireShares(ctx, expiredShares)
+	m.expireShares(callerCtx, expiredShares)
+	if err == nil {
+		// A worker logs a failed read and continues. If the budget ended the
+		// read, the list is not complete.
+		err = ctx.Err()
+	}
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
