@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
 
@@ -11,7 +12,7 @@ import (
 // it counts each kind of call correctly.
 func TestCountingStorageCountsByResult(t *testing.T) {
 	counts := &callCounts{}
-	s := &countingStorage{Storage: newCASStorage(), counts: counts}
+	s := &countingStorage{Storage: helpers.NewCASStorage(), counts: counts}
 	ctx := context.Background()
 
 	if _, err := s.Download(ctx, metadata.DownloadRequest{Path: "doc.json"}); err == nil {

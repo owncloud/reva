@@ -7,7 +7,7 @@ package jsoncs3_test
 // on an old commit and on a new commit, and benchstat can compare the
 // results. See README.benchmarks.md for the steps.
 //
-// The storage is casStorage (bench_fakes_test.go): an in-memory storage with a
+// The storage is helpers.CASStorage (testhelpers/casstorage.go): an in-memory storage with a
 // correct CAS check. countingStorage wraps it. The wrapper counts the calls
 // and waits a fixed time for each call (JSONCS3_BENCH_RTT, default 1ms),
 // because the in-memory storage has no network cost and a lock convoy would
@@ -35,6 +35,7 @@ import (
 
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3"
+	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
 )
 
 const (
@@ -73,7 +74,7 @@ func benchConcurrency(b *testing.B) int {
 // benchFixture is one metadata storage and one event stream that many
 // managers share. A manager is one pod.
 type benchFixture struct {
-	store   *casStorage
+	store   *helpers.CASStorage
 	storage *countingStorage
 	stream  *countingStream
 	counts  *callCounts
@@ -83,7 +84,7 @@ type benchFixture struct {
 func newBenchFixture(b *testing.B) *benchFixture {
 	b.Helper()
 	counts := &callCounts{}
-	store := newCASStorage()
+	store := helpers.NewCASStorage()
 	f := &benchFixture{
 		store:   store,
 		storage: &countingStorage{Storage: store, counts: counts},

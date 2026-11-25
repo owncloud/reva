@@ -1,4 +1,4 @@
-package jsoncs3_test
+package helpers
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func isConflict(err error) bool {
 }
 
 func TestCASStorageRefusesASecondCreate(t *testing.T) {
-	s := newCASStorage()
+	s := NewCASStorage()
 	ctx := context.Background()
 	if _, err := s.Upload(ctx, metadata.UploadRequest{Path: "doc.json", Content: []byte("a"), IfNoneMatch: []string{"*"}}); err != nil {
 		t.Fatalf("first create: %v", err)
@@ -33,7 +33,7 @@ func TestCASStorageRefusesASecondCreate(t *testing.T) {
 // metadata.Disk accepts an If-Match on a missing file. The fake must refuse
 // it, because the file that the writer read is gone.
 func TestCASStorageRefusesIfMatchOnAMissingFile(t *testing.T) {
-	s := newCASStorage()
+	s := NewCASStorage()
 	_, err := s.Upload(context.Background(), metadata.UploadRequest{Path: "doc.json", Content: []byte("a"), IfMatchEtag: "old"})
 	if !isConflict(err) {
 		t.Fatalf("want a conflict, got %v", err)
@@ -41,7 +41,7 @@ func TestCASStorageRefusesIfMatchOnAMissingFile(t *testing.T) {
 }
 
 func TestCASStorageRefusesAStaleIfMatch(t *testing.T) {
-	s := newCASStorage()
+	s := NewCASStorage()
 	ctx := context.Background()
 	first, err := s.Upload(ctx, metadata.UploadRequest{Path: "doc.json", Content: []byte("a")})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestCASStorageRefusesAStaleIfMatch(t *testing.T) {
 // metadata.Disk computes the etag from mtime and size. Two writes of the same
 // size can then get the same etag. The fake gives each write a new etag.
 func TestCASStorageGivesEachWriteANewEtag(t *testing.T) {
-	s := newCASStorage()
+	s := NewCASStorage()
 	ctx := context.Background()
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
@@ -75,7 +75,7 @@ func TestCASStorageGivesEachWriteANewEtag(t *testing.T) {
 }
 
 func TestCASStorageDownloadResults(t *testing.T) {
-	s := newCASStorage()
+	s := NewCASStorage()
 	ctx := context.Background()
 	if _, err := s.Download(ctx, metadata.DownloadRequest{Path: "doc.json"}); err == nil {
 		t.Fatal("missing file: want NotFound")
@@ -108,7 +108,7 @@ func TestCASStorageDownloadResults(t *testing.T) {
 // Many writers increment a counter with read, change, and If-Match write. No
 // increment may get lost.
 func TestCASStorageLosesNoIncrement(t *testing.T) {
-	s := newCASStorage()
+	s := NewCASStorage()
 	ctx := context.Background()
 	if _, err := s.Upload(ctx, metadata.UploadRequest{Path: "n", Content: []byte("0")}); err != nil {
 		t.Fatal(err)
