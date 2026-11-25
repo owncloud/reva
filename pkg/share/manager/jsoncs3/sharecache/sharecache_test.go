@@ -149,14 +149,17 @@ var _ = Describe("Sharecache", func() {
 			})
 
 			It("updates the etag", func() {
-				uc, _ := c.UserShares.Load(userid)
-				oldEtag := uc.Etag
+				download := func() *metadata.DownloadResponse {
+					res, err := storage.Download(ctx, metadata.DownloadRequest{Path: "/users/user/created.json"})
+					Expect(err).ToNot(HaveOccurred())
+					return res
+				}
+				oldEtag := download().Etag
 				Expect(oldEtag).ToNot(BeEmpty())
 
 				Expect(c.Persist(ctx, userid)).To(Succeed())
 
-				uc, _ = c.UserShares.Load(userid)
-				Expect(uc.Etag).ToNot(Equal(oldEtag))
+				Expect(download().Etag).ToNot(Equal(oldEtag))
 			})
 		})
 	})

@@ -307,6 +307,11 @@ func (s *Store[T]) lock(ctx context.Context, p string) func() {
 // file. This download does not join a running read, because that read can
 // have an old body.
 func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (changed bool, err error)) (err error) {
+	// The lock span is a child of the span of the caller. The wait is not
+	// part of the Persist span.
+	unlock := s.lock(ctx, p)
+	defer unlock()
+
 	ctx, span := s.startSpan(ctx, "Persist", p)
 	defer span.End()
 	defer func() {
@@ -317,9 +322,6 @@ func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (change
 			span.SetStatus(codes.Ok, "")
 		}
 	}()
-
-	unlock := s.lock(ctx, p)
-	defer unlock()
 
 	start := s.load(p)
 	base := start

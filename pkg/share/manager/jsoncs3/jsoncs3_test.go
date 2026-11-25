@@ -941,8 +941,7 @@ var _ = Describe("Jsoncs3", func() {
 				err = os.WriteFile(filepath.Join(tmpdir, "users/admin/created.json"), bytes, 0x755)
 				Expect(err).ToNot(HaveOccurred())
 
-				cc, _ := m.CreatedCache.UserShares.Load("admin")
-				cc.Etag = "reset1" // trigger reload
+				// The file changed on the storage, so the next read gets a new etag.
 				shares, err = m.ListShares(ctx, nil)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(len(shares)).To(Equal(2))
