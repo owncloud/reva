@@ -51,12 +51,12 @@ func TestSyncSpanHasTheSizeAndTheDecode(t *testing.T) {
 
 	var syncs []tracetest.SpanStub
 	for _, s := range exp.GetSpans() {
-		if s.Name == "syncWithLock" {
+		if s.Name == "Sync" {
 			syncs = append(syncs, s)
 		}
 	}
 	if len(syncs) != 1 {
-		t.Fatalf("got %d syncWithLock spans, want 1", len(syncs))
+		t.Fatalf("got %d Sync spans, want 1", len(syncs))
 	}
 	var size int64 = -1
 	for _, kv := range syncs[0].Attributes {
@@ -88,10 +88,11 @@ func TestLockSpanIsAChildOfTheMethodSpan(t *testing.T) {
 	}
 	ctx, exp := recordingCtx()
 	c := providercache.New(storage, 0)
-	if _, err := c.ListSpace(ctx, "storageid", "spaceid"); err != nil {
+	share := &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "storageid:spaceid:share1"}}
+	if err := c.Add(ctx, "storageid", "spaceid", "storageid:spaceid:share1", share); err != nil {
 		t.Fatal(err)
 	}
-	assertLockSpan(t, exp, "ListSpace", "syncWithLock", "cs3.spaceid", "spaceid")
+	assertLockSpan(t, exp, "Add", "Sync", "cs3.spaceid", "spaceid")
 }
 
 func assertLockSpan(t *testing.T, exp *tracetest.InMemoryExporter, method, work, key, value string) {

@@ -228,21 +228,19 @@ var _ = Describe("Cache", func() {
 
 		It("sets the etag", func() {
 			Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
-			spaces, ok := c.Providers.Load(storageID)
-			Expect(ok).To(BeTrue())
-			space, ok := spaces.Spaces.Load(spaceID)
-			Expect(ok).To(BeTrue())
+			space, err := c.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
 			Expect(space.Etag).ToNot(BeEmpty())
 		})
 
 		It("updates the etag", func() {
 			Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
-			spaces, ok := c.Providers.Load(storageID)
-			Expect(ok).To(BeTrue())
-			space, ok := spaces.Spaces.Load(spaceID)
-			Expect(ok).To(BeTrue())
+			space, err := c.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
 			old := space.Etag
 			Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
+			space, err = c.ListSpace(ctx, storageID, spaceID)
+			Expect(err).ToNot(HaveOccurred())
 			Expect(space.Etag).ToNot(Equal(old))
 		})
 
@@ -277,7 +275,11 @@ var _ = Describe("Cache", func() {
 				"Add should give up once the context is canceled instead of busy-spinning through all 100 persist attempts")
 		})
 
-		It("fails instead of dropping other shares when the post-conflict resync finds the file gone", func() {
+		// An administrator deleted the file while the write was in progress.
+		// The write creates the document again with this one change. The
+		// storage refuses the upload if another writer created the document
+		// first (If-None-Match: *). The jsoncs3 code never deletes a file.
+		It("creates the document again with the one change when the file vanished after a conflict", func() {
 			otherShareID := "storageid$spaceid!other-share"
 			otherShare := &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "other-share"}}
 			initial := providercache.Shares{Shares: map[string]*collaboration.Share{
@@ -291,10 +293,12 @@ var _ = Describe("Cache", func() {
 			c2 := providercache.New(fs, 0*time.Second)
 
 			newShareID := "storageid$spaceid!share3"
-			addErr := c2.Add(ctx, storageID, spaceID, newShareID, &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share3"}})
-			Expect(addErr).To(HaveOccurred(), "a backing file that vanished mid-retry must surface as an error, not a partial write")
-			Expect(addErr).To(BeAssignableToTypeOf(errtypes.NotFound("")))
-			Expect(fs.uploadedContent()).To(BeNil(), "no write should ever reach the storage once the resync reports NotFound")
+			Expect(c2.Add(ctx, storageID, spaceID, newShareID, &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "share3"}})).To(Succeed())
+
+			var written providercache.Shares
+			Expect(json.Unmarshal(fs.uploadedContent(), &written)).To(Succeed())
+			Expect(written.Shares).To(HaveLen(1))
+			Expect(written.Shares).To(HaveKey(newShareID))
 		})
 
 		It("[hypothesis, unfixed] a cold-start sync has no way to detect the same race, confirming the gap is structural, not call-site-specific", func() {
@@ -461,12 +465,12 @@ var _ = Describe("Cache", func() {
 
 			It("updates the etag", func() {
 				Expect(c.Add(ctx, storageID, spaceID, shareID, share1)).To(Succeed())
-				spaces, ok := c.Providers.Load(storageID)
-				Expect(ok).To(BeTrue())
-				space, ok := spaces.Spaces.Load(spaceID)
-				Expect(ok).To(BeTrue())
+				space, err := c.ListSpace(ctx, storageID, spaceID)
+				Expect(err).ToNot(HaveOccurred())
 				old := space.Etag
 				Expect(c.Remove(ctx, storageID, spaceID, shareID)).To(Succeed())
+				space, err = c.ListSpace(ctx, storageID, spaceID)
+				Expect(err).ToNot(HaveOccurred())
 				Expect(space.Etag).ToNot(Equal(old))
 			})
 
@@ -507,25 +511,33 @@ var _ = Describe("Cache", func() {
 			})
 
 			It("updates the etag", func() {
-				spaces, ok := c.Providers.Load(storageID)
-				Expect(ok).To(BeTrue())
-				space, ok := spaces.Spaces.Load(spaceID)
-				Expect(ok).To(BeTrue())
+				space, err := c.ListSpace(ctx, storageID, spaceID)
+				Expect(err).ToNot(HaveOccurred())
 				oldEtag := space.Etag
 
 				Expect(c.Persist(ctx, storageID, spaceID)).To(Succeed())
+				space, err = c.ListSpace(ctx, storageID, spaceID)
+				Expect(err).ToNot(HaveOccurred())
 				Expect(space.Etag).ToNot(Equal(oldEtag))
 			})
 
 		})
 
 		Describe("PersistWithTime", func() {
-			It("does not persist if the etag changed", func() {
+			// The etag in memory is old. The upload gets a conflict, the cache
+			// reads the file again, and the second upload succeeds. The
+			// conflict does not reach the caller.
+			It("resolves a conflict after the etag changed", func() {
+				before, err := c.ListSpace(ctx, storageID, spaceID)
+				Expect(err).ToNot(HaveOccurred())
 				time.Sleep(1 * time.Nanosecond)
 				path := filepath.Join(tmpdir, "storages/storageid/spaceid.json")
 				now := time.Now()
 				_ = os.Chtimes(path, now, now) // this only works for the file backend
-				Expect(c.Persist(ctx, storageID, spaceID)).ToNot(Succeed())
+				Expect(c.Persist(ctx, storageID, spaceID)).To(Succeed())
+				after, err := c.ListSpace(ctx, storageID, spaceID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(after.Etag).ToNot(Equal(before.Etag))
 			})
 		})
 
@@ -556,7 +568,7 @@ var _ = Describe("Cache", func() {
 			It("returns all entries", func() {
 				entries, err := c.All(ctx)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(entries.Count()).To(Equal(1))
+				Expect(entries).To(HaveLen(1))
 			})
 
 			It("does not leak the space lock when syncWithLock fails", func() {

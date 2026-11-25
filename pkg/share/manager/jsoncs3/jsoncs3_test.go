@@ -41,6 +41,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	sharespkg "github.com/owncloud/reva/v2/pkg/share"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3"
+	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/providercache"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/sharecache"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 	helpers "github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/testhelpers"
@@ -581,22 +582,8 @@ var _ = Describe("Jsoncs3", func() {
 				Expect(s).ToNot(BeNil())
 				Expect(s.Permissions.Permissions.InitiateFileUpload).To(BeFalse())
 
-				// Change providercache on disk
-				spaces, ok := m.Cache.Providers.Load("storageid")
-				Expect(ok).To(BeTrue())
-				cache, ok := spaces.Spaces.Load("spaceid")
-				Expect(ok).To(BeTrue())
-				cache.Shares[share.Id.OpaqueId].Permissions.Permissions.InitiateFileUpload = true
-				bytes, err := json.Marshal(cache)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
-				Expect(err).ToNot(HaveOccurred())
-
-				// Reset providercache in memory
-				cache.Shares[share.Id.OpaqueId].Permissions.Permissions.InitiateFileUpload = false
-
-				// Set local cache etag to something other then on disk
-				cache.Etag = "reset1" // trigger reload
+				// Another pod changes the space file. This pod holds the old etag.
+				allowUploadOnDisk(storage, share.Id.OpaqueId)
 				s, err = m.GetShare(ctx, shareRef)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(s).ToNot(BeNil())
@@ -891,21 +878,8 @@ var _ = Describe("Jsoncs3", func() {
 				Expect(shares[0].Id.OpaqueId).To(Equal(share.Id.OpaqueId))
 				Expect(shares[0].Permissions.Permissions.InitiateFileUpload).To(BeFalse())
 
-				// Change providercache on disk
-				spaces, ok := m.Cache.Providers.Load("storageid")
-				Expect(ok).To(BeTrue())
-				cache, ok := spaces.Spaces.Load("spaceid")
-				Expect(ok).To(BeTrue())
-				cache.Shares[share.Id.OpaqueId].Permissions.Permissions.InitiateFileUpload = true
-				bytes, err := json.Marshal(cache)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
-				Expect(err).ToNot(HaveOccurred())
-
-				// Reset providercache in memory
-				cache.Shares[share.Id.OpaqueId].Permissions.Permissions.InitiateFileUpload = false
-
-				cache.Etag = "reset1" // trigger reload
+				// Another pod changes the space file. This pod holds the old etag.
+				allowUploadOnDisk(storage, share.Id.OpaqueId)
 				shares, err = m.ListShares(ctx, nil)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(len(shares)).To(Equal(1))
@@ -980,21 +954,8 @@ var _ = Describe("Jsoncs3", func() {
 				Expect(len(received)).To(Equal(1))
 				Expect(received[0].Share.Permissions.Permissions.InitiateFileUpload).To(BeFalse())
 
-				// Change providercache on disk
-				spaces, ok := m.Cache.Providers.Load("storageid")
-				Expect(ok).To(BeTrue())
-				cache, ok := spaces.Spaces.Load("spaceid")
-				Expect(ok).To(BeTrue())
-				cache.Shares[share.Id.OpaqueId].Permissions.Permissions.InitiateFileUpload = true
-				bytes, err := json.Marshal(cache)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
-				Expect(err).ToNot(HaveOccurred())
-
-				// Reset providercache in memory
-				cache.Shares[share.Id.OpaqueId].Permissions.Permissions.InitiateFileUpload = false
-
-				cache.Etag = "reset1" // trigger reload
+				// Another pod changes the space file. This pod holds the old etag.
+				allowUploadOnDisk(storage, share.Id.OpaqueId)
 				received, err = m.ListReceivedShares(granteeCtx, []*collaboration.Filter{}, nil)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(len(received)).To(Equal(1))
@@ -1520,3 +1481,18 @@ var _ = Describe("Jsoncs3", func() {
 		})
 	})
 })
+
+// allowUploadOnDisk sets InitiateFileUpload of a share in the space file on the
+// storage. It simulates a write of another pod. The manager under test keeps
+// its old entry and etag until its next read.
+func allowUploadOnDisk(storage metadata.Storage, shareID string) {
+	content, err := storage.SimpleDownload(context.Background(), "storages/storageid/spaceid.json")
+	Expect(err).ToNot(HaveOccurred())
+	var space providercache.Shares
+	Expect(json.Unmarshal(content, &space)).To(Succeed())
+	Expect(space.Shares).To(HaveKey(shareID))
+	space.Shares[shareID].Permissions.Permissions.InitiateFileUpload = true
+	bytes, err := json.Marshal(&space)
+	Expect(err).ToNot(HaveOccurred())
+	Expect(storage.SimpleUpload(context.Background(), "storages/storageid/spaceid.json", bytes)).To(Succeed())
+}

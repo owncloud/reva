@@ -1644,10 +1644,10 @@ func (m *Manager) CleanupStaleShares(ctx context.Context) {
 	// loops. Then each document gets one upload, and the loops do not change
 	// the maps that they read.
 	var orphaned []*collaboration.Share
-	providers.Range(func(storage string, spaces *providercache.Spaces) bool {
-		log.Info().Str("storage", storage).Interface("spaceCount", spaces.Spaces.Count()).Msg("checking storage")
+	for storage, spaces := range providers {
+		log.Info().Str("storage", storage).Int("spaceCount", len(spaces)).Msg("checking storage")
 
-		spaces.Spaces.Range(func(space string, shares *providercache.Shares) bool {
+		for space, shares := range spaces {
 			log.Info().Str("storage", storage).Str("space", space).Interface("shareCount", len(shares.Shares)).Msg("checking space")
 
 			for _, s := range shares.Shares {
@@ -1664,12 +1664,8 @@ func (m *Manager) CleanupStaleShares(ctx context.Context) {
 					orphaned = append(orphaned, s)
 				}
 			}
-
-			return true
-		})
-
-		return true
-	})
+		}
+	}
 
 	removed, err := m.removeShares(ctx, orphaned, false)
 	if err != nil {

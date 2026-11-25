@@ -130,6 +130,10 @@ func (s *Store[T]) publish(p string, start, next *Entry[T]) bool {
 	return true
 }
 
+// Peek returns the published entry of the path without a download. It returns
+// nil when the store has no entry.
+func (s *Store[T]) Peek(p string) *Entry[T] { return s.load(p) }
+
 // Forget drops the entry of the path. The next call reads the document again.
 func (s *Store[T]) Forget(p string) {
 	s.mu.Lock()
