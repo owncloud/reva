@@ -1,0 +1,2 @@
+ok
+{"Shares":{"storage$space!d":{"id":{"opaque_id":"storage$space!d"},"resource_id":{"storage_id":"storage","opaque_id":"file","space_id":"space"},"grantee":{"type":1,"Id":{"UserId":{"opaque_id":"u"}},"opaque":{"map":{"k":{"decoder":"plain","value":"dg=="}}}}}},"Etag":""}
