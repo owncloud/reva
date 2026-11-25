@@ -12,7 +12,6 @@ import (
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/genproto/protobuf/field_mask"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -280,7 +279,7 @@ func TestCleanupRunLinksToTheListingThatFoundTheSuspect(t *testing.T) {
 	g.Expect(run).ToNot(BeNil())
 	g.Expect(run.Parent.IsValid()).To(BeFalse(), "a root span")
 	g.Expect(run.Links).ToNot(BeEmpty())
-	g.Expect(run.Links[0].SpanContext.TraceID()).To(Equal(trace.TraceID(listSpan.SpanContext.TraceID())))
+	g.Expect(run.Links[0].SpanContext.TraceID()).To(Equal(listSpan.SpanContext.TraceID()))
 }
 
 func fieldMaskState() *field_mask.FieldMask {

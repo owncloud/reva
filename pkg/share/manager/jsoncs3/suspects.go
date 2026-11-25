@@ -298,7 +298,7 @@ func (m *Manager) cleanupMissing(ctx context.Context, missing []*suspect) {
 	}
 	m.dropSuspects(present...)
 
-	var fns []func() error
+	fns := make([]func() error, 0, len(userIDs)+len(groupIDs)+len(creatorIDs))
 	var failedMu sync.Mutex
 	failed := map[string]bool{}
 	fail := func(ids []string) {

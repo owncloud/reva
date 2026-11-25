@@ -73,8 +73,8 @@ func TestExpireSharesPublishesOneEventWhenTwoPodsExpireTheSameShare(t *testing.T
 	_, err = b.Cache.ListSpace(ctxOf("admin"), "storageid", "spaceid") // pod B finds the share
 	g.Expect(err).ToNot(HaveOccurred())
 
-	a.expireShares(ctxOf("admin"), []*collaboration.Share{s})
-	b.expireShares(ctxOf("admin"), []*collaboration.Share{s})
+	_ = a.expireShares(ctxOf("admin"), []*collaboration.Share{s})
+	_ = b.expireShares(ctxOf("admin"), []*collaboration.Share{s})
 
 	g.Expect(atomic.LoadInt32(&podA.expired)).To(Equal(int32(1)), "the pod that removed the share")
 	g.Expect(atomic.LoadInt32(&podB.expired)).To(Equal(int32(0)), "the share was already gone")
@@ -92,7 +92,7 @@ func TestExpireSharesPublishesNoEventWhenTheRemovalFails(t *testing.T) {
 	m, err := New(cs, nil, 0, stream, 0)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	m.expireShares(ctxOf("admin"), []*collaboration.Share{s})
+	_ = m.expireShares(ctxOf("admin"), []*collaboration.Share{s})
 
 	g.Expect(atomic.LoadInt32(&stream.expired)).To(Equal(int32(0)))
 }
