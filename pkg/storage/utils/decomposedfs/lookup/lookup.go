@@ -34,9 +34,9 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/options"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/pkg/errors"
 	"github.com/rogpeppe/go-internal/lockedfile"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -47,7 +47,7 @@ const (
 )
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/lookup")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/lookup")
 }
 
 // Lookup implements transformations from filepath to node and back
