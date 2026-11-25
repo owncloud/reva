@@ -29,9 +29,9 @@ func spansNamed(exp *tracetest.InMemoryExporter, name string) []tracetest.SpanSt
 	return found
 }
 
-// Each listing reads the user document under the user lock. The trace must
-// show the wait for the lock, as the other methods of the cache do.
-func TestListHasALockSpan(t *testing.T) {
+// A listing does not take a lock. A hot user document must not make a lock
+// convoy at a login peak. Only a writer takes the lock of the document.
+func TestListTakesNoLock(t *testing.T) {
 	storage, err := metadata.NewDiskStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -43,13 +43,8 @@ func TestListHasALockSpan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lists := spansNamed(exp, "List")
-	locks := spansNamed(exp, "Grab lock")
-	if len(lists) != 1 || len(locks) != 1 {
-		t.Fatalf("got %d List spans and %d Grab lock spans, want 1 and 1", len(lists), len(locks))
-	}
-	if locks[0].Parent.SpanID() != lists[0].SpanContext.SpanID() {
-		t.Fatal("the Grab lock span must be a child of the List span")
+	if lists, locks := spansNamed(exp, "List"), spansNamed(exp, "Grab lock"); len(lists) != 1 || len(locks) != 0 {
+		t.Fatalf("got %d List spans and %d Grab lock spans, want 1 and 0", len(lists), len(locks))
 	}
 }
 
