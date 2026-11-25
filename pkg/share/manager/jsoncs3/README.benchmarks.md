@@ -109,6 +109,14 @@ Rules:
   different toolchain than `go.mod`. `GOWORK=off` prevents this.
 - Run the two commits one after the other on an idle machine. Repeat the
   pair if the results vary.
+- Compare `allocs/op` and the call counts first. They are the same in each
+  run, so a change in them is real. A change of the time can also come from
+  the machine state.
+- Compare runs of the same session. Do not compare a new run with an older
+  result file. Other work on the machine, for example a running oCIS or
+  Docker, can change the time by several percent.
+- To find the commit that changed a value, run the benchmark in a worktree
+  for each commit between the two.
 - The fake event stream only counts the events. A manager reads no events in
   the benchmarks.
 
