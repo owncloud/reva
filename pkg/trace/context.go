@@ -52,9 +52,9 @@ func ContextGetTracerProvider(ctx context.Context) trace.TracerProvider {
 // TracerProvider. Use it in code that also runs outside of a request, for
 // example at a start or in an event handler, so that its spans still get
 // recorded.
+//
+// Without a provider in the context, it returns the provider of a recording
+// parent span, if the context has one.
 func ContextGetTracerProviderOrDefault(ctx context.Context) trace.TracerProvider {
-	if p, ok := ctx.Value(ctxKey{}).(trace.TracerProvider); ok {
-		return p
-	}
-	return DefaultProvider()
+	return providerOf(ctx)
 }

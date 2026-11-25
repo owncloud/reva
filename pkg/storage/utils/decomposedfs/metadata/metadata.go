@@ -23,14 +23,14 @@ import (
 	"errors"
 	"io"
 
-	"go.opentelemetry.io/otel"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/metadata")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/metadata")
 }
 
 var errUnconfiguredError = errors.New("no metadata backend configured. Bailing out")
