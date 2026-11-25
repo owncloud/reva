@@ -59,6 +59,11 @@ func startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 // of the span in ctx, shows the wait. The caller keeps its own context, so the
 // work after the wait is not a child of the lock span.
 func (c *Cache) lockSpaceTraced(ctx context.Context, spaceID string) func() {
+	// A lock span is only useful under a recorded parent span. With tracing
+	// off, the parent is never recorded, so do not pay for the span.
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return c.LockSpace(spaceID)
+	}
 	_, span := startSpan(ctx, "Grab lock")
 	span.SetAttributes(attribute.String("cs3.spaceid", spaceID))
 	unlock := c.LockSpace(spaceID)
