@@ -88,8 +88,12 @@ func getShareManager(c *config) (share.Manager, error) {
 	return nil, errtypes.NotFound("driver not found: " + c.Driver)
 }
 
+// Close stops the background work of the share manager, if it has some.
 // TODO(labkode): add ctx to Close.
 func (s *service) Close() error {
+	if c, ok := s.sm.(interface{ Close() }); ok {
+		c.Close()
+	}
 	return nil
 }
 

@@ -20,8 +20,9 @@ package jsoncs3
 
 // An older version writes the grantee entry and the share at the same time.
 // During a rolling upgrade, a listing can find the grantee entry before the
-// share is on storage. That entry is not stale yet, so a listing must not
-// remove it at once.
+// share is on storage. That entry is not stale yet, so the cleanup must not
+// remove it at once. The listing only notes a suspect. The cleanup loop of the
+// pod removes the entry after the grace period, when the share is still missing.
 
 import (
 	"bytes"
@@ -66,10 +67,10 @@ func groupIDsOnStorage(t *testing.T, f *batchFixture, gid string) []string {
 	return ids
 }
 
-// Break: a listing removes a grantee entry at the first time that it finds
+// Break: the cleanup removes a grantee entry at the first time that it finds
 // no share for it. An older pod writes the share a moment later, but no
 // group member sees the share any more.
-func TestListReceivedSharesKeepsAGroupEntryThatIsWrittenBeforeTheShare(t *testing.T) {
+func TestCleanupKeepsAGroupEntryThatIsWrittenBeforeTheShare(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
@@ -82,8 +83,10 @@ func TestListReceivedSharesKeepsAGroupEntryThatIsWrittenBeforeTheShare(t *testin
 	id := shareid.Encode("storageid", "spaceid", "written-by-an-older-pod")
 	g.Expect(oldPod.GroupReceivedCache.Add(ctxOf("admin"), "group1", id)).To(Succeed())
 
-	// A new pod lists in the window before the share is on storage.
+	// A new pod lists and cleans in the window before the share is on storage.
 	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the share is not on storage yet")
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0], id), "the grace period is not over")
 
 	// The older pod writes the share.
 	s := &collaboration.Share{
@@ -100,11 +103,13 @@ func TestListReceivedSharesKeepsAGroupEntryThatIsWrittenBeforeTheShare(t *testin
 	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0], id), "the group member sees the new share")
 }
 
-// Break: the listing ignores the grace period and removes the stale entry
+// Break: the cleanup ignores the grace period and removes the stale entry
 // at once, or it never removes the stale entry.
-func TestListReceivedSharesRemovesAStaleGroupEntryAfterTheGracePeriod(t *testing.T) {
+func TestCleanupRemovesAStaleGroupEntryAfterTheGracePeriod(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
+	now := time.Now()
+	f.m.staleClock = func() time.Time { return now }
 	f.m.StaleShareGracePeriod = 200 * time.Millisecond
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
 	valid := receivedIDs(t, f.m, "einstein", "group1")
@@ -112,37 +117,44 @@ func TestListReceivedSharesRemovesAStaleGroupEntryAfterTheGracePeriod(t *testing
 	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
 
 	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the stale entry is not listed")
-	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0], ghost), "the first listing keeps the stale entry")
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0], ghost), "the first cleanup keeps the stale entry")
 
-	time.Sleep(250 * time.Millisecond)
-	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]))
-	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "a listing after the grace period removes the stale entry")
+	now = now.Add(250 * time.Millisecond)
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "a cleanup after the grace period removes the stale entry")
 }
 
-// Break: the listing keeps a stale entry when the space file does not exist.
+// Break: the cleanup keeps a stale entry when the space file does not exist.
 // A failed first Share in a space leaves a grantee entry, but no space file.
-// Each listing then skips the entry again, and nothing removes it.
-func TestListReceivedSharesRemovesAStaleGroupEntryWhenTheSpaceFileDoesNotExist(t *testing.T) {
+// Nothing would remove it.
+func TestCleanupRemovesAStaleGroupEntryWhenTheSpaceFileDoesNotExist(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
+	now := time.Now()
+	f.m.staleClock = func() time.Time { return now }
 	f.m.StaleShareGracePeriod = 200 * time.Millisecond
 	ghost := shareid.Encode("storageid", "spaceid", "ghost")
 	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
 
 	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(BeEmpty())
-	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(ghost), "the first listing keeps the stale entry")
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(ghost), "the first cleanup keeps the stale entry")
 
-	time.Sleep(250 * time.Millisecond)
-	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(BeEmpty())
-	g.Expect(groupIDsOnStorage(t, f, "group1")).To(BeEmpty(), "a listing after the grace period removes the stale entry")
+	now = now.Add(250 * time.Millisecond)
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(BeEmpty(), "a cleanup after the grace period removes the stale entry")
 }
 
-// Break: the grace period does not restart when a listing finds the share
-// again. Two short losses of the space file, longer apart than the grace
-// period, then look like one long loss, and the listing removes a valid entry.
-func TestListReceivedSharesRestartsTheGracePeriodWhenTheShareIsFoundAgain(t *testing.T) {
+// Break: the cleanup decides from the time of an old loss. The space file was
+// away for a short time during a listing, and it is back at the next run. A
+// grace period that is over must not remove the valid entry. The cleanup reads
+// the space document again before it removes an entry.
+func TestCleanupReadsTheSpaceAgainBeforeItRemovesAnEntry(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
+	now := time.Now()
+	f.m.staleClock = func() time.Time { return now }
 	f.m.StaleShareGracePeriod = 200 * time.Millisecond
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
 	valid := receivedIDs(t, f.m, "einstein", "group1")
@@ -158,11 +170,16 @@ func TestListReceivedSharesRestartsTheGracePeriodWhenTheShareIsFoundAgain(t *tes
 	}
 
 	loseSpaceFileDuringAListing()
-	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the space file is back")
-	time.Sleep(250 * time.Millisecond)
-	loseSpaceFileDuringAListing()
+	g.Expect(f.m.suspectCount()).To(Equal(1))
+	now = now.Add(100 * time.Millisecond)
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(f.m.suspectCount()).To(Equal(1), "inside the grace period")
 
-	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "two short losses do not remove the entry")
+	now = now.Add(250 * time.Millisecond) // the grace period is over
+	f.m.CleanupSuspects(ctxOf("admin"))   // the space file is back: nothing to remove
+
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "the entry is valid")
+	g.Expect(f.m.suspectCount()).To(BeZero())
 }
 
 // countingDownloadStorage counts the downloads of path.
@@ -182,7 +199,7 @@ func (c *countingDownloadStorage) Download(ctx context.Context, req metadata.Dow
 // Break: the cleanup also sends the stale IDs of a group to the received.json
 // of the user. These IDs are not in that file, so the user cache downloads it
 // again only to find nothing to remove.
-func TestListReceivedSharesCleansAStaleGroupEntryWithoutAnExtraUserDownload(t *testing.T) {
+func TestCleanupOfAStaleGroupEntryDoesNotReadTheUserDocument(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
@@ -190,24 +207,23 @@ func TestListReceivedSharesCleansAStaleGroupEntryWithoutAnExtraUserDownload(t *t
 	m, err := New(cd, nil, 0, nopStream{}, 0)
 	g.Expect(err).ToNot(HaveOccurred())
 	m.StaleShareGracePeriod = 0 // this test checks the cleanup, not the grace period
-	downloadsDuringAListing := func() int32 {
-		before := atomic.LoadInt32(&cd.downloads)
-		_ = receivedIDs(t, m, "einstein", "group1")
-		return atomic.LoadInt32(&cd.downloads) - before
-	}
-	_ = downloadsDuringAListing() // warm up the caches
-	normal := downloadsDuringAListing()
+	_ = receivedIDs(t, m, "einstein", "group1")
 
 	ghost := shareid.Encode("storageid", "spaceid", "ghost")
 	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
-	g.Expect(downloadsDuringAListing()).To(Equal(normal), "the cleanup of a group entry does not read received.json of the user again")
-	g.Expect(groupIDsOnStorage(t, f, "group1")).ToNot(ContainElement(ghost), "the listing removes the stale entry")
+	_ = receivedIDs(t, m, "einstein", "group1")
+	before := atomic.LoadInt32(&cd.downloads)
+
+	m.CleanupSuspects(ctxOf("admin"))
+
+	g.Expect(atomic.LoadInt32(&cd.downloads)).To(Equal(before), "the cleanup of a group entry does not read received.json of the user")
+	g.Expect(groupIDsOnStorage(t, f, "group1")).ToNot(ContainElement(ghost), "the cleanup removes the stale entry")
 }
 
-// Break: the listing adds a shareid field to the space logger for each share
-// that it finds. A later log line of the same space then has many shareid
-// fields, and a log search shows the wrong share.
-func TestListReceivedSharesLogsOneShareIDForEachStaleShare(t *testing.T) {
+// Break: the cleanup adds a shareid field to a shared logger for each share
+// that it finds. A later log line then has many shareid fields, and a log
+// search shows the wrong share.
+func TestCleanupLogsOneShareIDForEachStaleShare(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	f.m.StaleShareGracePeriod = 0 // this test checks the log, not the grace period
@@ -220,11 +236,12 @@ func TestListReceivedSharesLogsOneShareIDForEachStaleShare(t *testing.T) {
 		ghosts[id] = true
 		g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", id)).To(Succeed())
 	}
+	_, err := f.m.ListReceivedShares(ctxOf("einstein", "group1"), nil, nil)
+	g.Expect(err).ToNot(HaveOccurred())
 
 	var buf bytes.Buffer
 	logger := zerolog.New(&buf).Level(zerolog.WarnLevel)
-	_, err := f.m.ListReceivedShares(appctx.WithLogger(ctxOf("einstein", "group1"), &logger), nil, nil)
-	g.Expect(err).ToNot(HaveOccurred())
+	f.m.CleanupSuspects(appctx.WithLogger(ctxOf("admin"), &logger))
 
 	lines := 0
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -242,44 +259,56 @@ func TestListReceivedSharesLogsOneShareIDForEachStaleShare(t *testing.T) {
 	g.Expect(lines).To(Equal(3))
 }
 
-// Break: a new stale ID drops the entries older than ten grace periods,
+// Break: a new suspect drops the entries older than ten grace periods,
 // counted from the first time that the pod found them. With many pods, one
-// pod finds the same stale ID less often than that. Each listing then starts
-// the grace period again, and the pod never removes the stale entry.
-func TestStaleGracePeriodIsOverForAShareThatThePodFindsRarely(t *testing.T) {
+// pod finds the same stale ID less often than that. The pod then never
+// removes the stale entry.
+func TestSuspectIsKeptForAShareThatThePodFindsRarely(t *testing.T) {
 	g := NewWithT(t)
-	m := &Manager{StaleShareGracePeriod: 20 * time.Millisecond, staleForgetAfter: time.Hour}
-	g.Expect(m.staleGracePeriodOver("ghost")).To(BeFalse(), "the first listing starts the grace period")
+	now := time.Unix(1000, 0)
+	m := &Manager{StaleShareGracePeriod: 20 * time.Millisecond, staleForgetAfter: time.Hour, staleClock: func() time.Time { return now }}
+	m.noteSuspect(context.Background(), suspectInput{shareID: "ghost", reason: suspectMissing})
+	_, missing := m.snapshotSuspects(now)
+	g.Expect(missing).To(BeEmpty(), "the first listing starts the grace period")
 
-	time.Sleep(250 * time.Millisecond) // more than ten grace periods
-	g.Expect(m.staleGracePeriodOver("other")).To(BeFalse(), "a new stale ID")
+	now = now.Add(250 * time.Millisecond) // more than ten grace periods
+	m.noteSuspect(context.Background(), suspectInput{shareID: "other", reason: suspectMissing})
 
-	g.Expect(m.staleGracePeriodOver("ghost")).To(BeTrue(), "the pod still knows the stale ID")
+	_, missing = m.snapshotSuspects(now)
+	ids := []string{}
+	for _, s := range missing {
+		ids = append(ids, s.shareID)
+	}
+	g.Expect(ids).To(ConsistOf("ghost"), "the pod still knows the stale ID, and the new one starts its grace period")
 }
 
-// Break: the pod forgets a stale ID that a listing found a short time ago,
+// Break: the pod forgets a suspect that a listing found a short time ago,
 // because it counts from the first time that it found the ID.
-func TestStaleGracePeriodForgetsOnlyTheSharesThatNoListingFoundForALongTime(t *testing.T) {
+func TestSuspectsForgetOnlyTheSharesThatNoListingFoundForALongTime(t *testing.T) {
 	g := NewWithT(t)
-	m := &Manager{StaleShareGracePeriod: time.Hour, staleForgetAfter: 150 * time.Millisecond}
-	m.staleGracePeriodOver("found-again")
-	m.staleGracePeriodOver("not-found-again")
-	time.Sleep(100 * time.Millisecond)
-	m.staleGracePeriodOver("found-again")
-	time.Sleep(100 * time.Millisecond)
-	m.staleGracePeriodOver("new") // a new stale ID drops the old entries
+	now := time.Unix(1000, 0)
+	m := &Manager{StaleShareGracePeriod: time.Hour, staleForgetAfter: 150 * time.Second, staleClock: func() time.Time { return now }}
+	note := func(id string) {
+		m.noteSuspect(context.Background(), suspectInput{shareID: id, reason: suspectMissing})
+	}
+	note("found-again")
+	note("not-found-again")
+	now = now.Add(100 * time.Second)
+	note("found-again")
+	now = now.Add(100 * time.Second)
+	note("new") // a new suspect starts a sweep
 
-	m.staleMu.Lock()
-	defer m.staleMu.Unlock()
-	g.Expect(m.staleSince).To(HaveKey("found-again"), "a listing found it 100ms ago")
-	g.Expect(m.staleSince).ToNot(HaveKey("not-found-again"), "no listing found it for 200ms")
-	g.Expect(m.staleSince).To(HaveKey("new"))
+	m.suspects.mu.Lock()
+	defer m.suspects.mu.Unlock()
+	g.Expect(m.suspects.byID).To(HaveKey("found-again"), "a listing found it 100s ago")
+	g.Expect(m.suspects.byID).ToNot(HaveKey("not-found-again"), "no listing found it for 200s")
+	g.Expect(m.suspects.byID).To(HaveKey("new"))
 }
 
-// Break: each new stale ID runs the sweep over all entries under the lock. A
-// listing that finds many new stale IDs then runs many full sweeps, and the
+// Break: each new suspect runs the sweep over all entries under the lock. A
+// listing that finds many new suspects then runs many full sweeps, and the
 // other listings of the pod wait for the lock.
-func TestStaleGracePeriodSweepsAtMostOnceInEachSweepInterval(t *testing.T) {
+func TestSuspectsSweepAtMostOnceInEachSweepInterval(t *testing.T) {
 	g := NewWithT(t)
 	now := time.Unix(0, 0)
 	m := &Manager{
@@ -287,73 +316,78 @@ func TestStaleGracePeriodSweepsAtMostOnceInEachSweepInterval(t *testing.T) {
 		staleForgetAfter:      time.Hour,
 		staleClock:            func() time.Time { return now },
 	}
-	m.staleGracePeriodOver("old") // the first sweep
+	note := func(id string) {
+		m.noteSuspect(context.Background(), suspectInput{shareID: id, reason: suspectMissing})
+	}
+	note("old") // the first sweep
 
 	now = now.Add(59*time.Minute + 30*time.Second)
-	m.staleGracePeriodOver("a") // a sweep, but "old" is not too old yet
+	note("a") // a sweep, but "old" is not too old yet
 	now = now.Add(40 * time.Second)
-	m.staleGracePeriodOver("b") // "old" is too old now, but the last sweep is 40 seconds ago
+	note("b") // "old" is too old now, but the last sweep is 40 seconds ago
 
-	m.staleMu.Lock()
-	g.Expect(m.staleSince).To(HaveKey("old"), "no sweep in the interval after a sweep")
-	m.staleMu.Unlock()
+	m.suspects.mu.Lock()
+	g.Expect(m.suspects.byID).To(HaveKey("old"), "no sweep in the interval after a sweep")
+	m.suspects.mu.Unlock()
 
 	now = now.Add(30 * time.Second)
-	m.staleGracePeriodOver("c") // a sweep: 70 seconds after the last sweep
+	note("c") // a sweep: 70 seconds after the last sweep
 
-	m.staleMu.Lock()
-	defer m.staleMu.Unlock()
-	g.Expect(m.staleSince).ToNot(HaveKey("old"), "the next sweep forgets it")
-	g.Expect(m.staleSince).To(HaveKey("a"))
-	g.Expect(m.staleSince).To(HaveKey("b"))
-	g.Expect(m.staleSince).To(HaveKey("c"))
+	m.suspects.mu.Lock()
+	defer m.suspects.mu.Unlock()
+	g.Expect(m.suspects.byID).ToNot(HaveKey("old"), "the next sweep forgets it")
+	g.Expect(m.suspects.byID).To(HaveKey("a"))
+	g.Expect(m.suspects.byID).To(HaveKey("b"))
+	g.Expect(m.suspects.byID).To(HaveKey("c"))
 }
 
 func TestStaleForgetAfterIsLongerThanTheGracePeriod(t *testing.T) {
 	NewWithT(t).Expect(defaultStaleForgetAfter).To(BeNumerically(">", defaultStaleShareGracePeriod))
 }
 
-// Break: the listing forgets the grace period before the removal runs. When
-// the removal fails, the next listing starts a new grace period. The stale
-// entry then stays for one more grace period after each failed removal.
-func TestListReceivedSharesRetriesAFailedStaleRemovalWithoutANewGracePeriod(t *testing.T) {
+// Break: the cleanup forgets the suspect before the removal runs. When the
+// removal fails, the next run starts a new grace period. The stale entry then
+// stays for one more grace period after each failed removal.
+func TestCleanupRetriesAFailedStaleRemovalWithoutANewGracePeriod(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
+	now := time.Now()
+	f.m.staleClock = func() time.Time { return now }
 	f.m.StaleShareGracePeriod = 200 * time.Millisecond
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil) // a valid share, so the space file exists
 	valid := receivedIDs(t, f.m, "einstein", "group1")
 	ghost := shareid.Encode("storageid", "spaceid", "ghost")
 	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
 
-	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the first listing starts the grace period")
-	time.Sleep(250 * time.Millisecond)
+	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]), "the listing starts the grace period")
+	now = now.Add(250 * time.Millisecond)
 
 	f.cs.FailPath = "/groups/group1/received.json"
-	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]))
+	f.m.CleanupSuspects(ctxOf("admin"))
 	f.cs.FailPath = ""
 	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0], ghost), "the removal failed")
 
-	g.Expect(receivedIDs(t, f.m, "einstein", "group1")).To(ConsistOf(valid[0]))
-	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "the next listing removes the stale entry without a new grace period")
+	f.m.CleanupSuspects(ctxOf("admin"))
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "the next run removes the stale entry without a new grace period")
 }
 
-// Break: the listing forgets the grace period only when the removal fails,
-// and not after a successful removal. The pod then keeps the entry until the
-// sweep, and a new share with the same ID has no grace period.
-func TestListReceivedSharesForgetsAStaleShareAfterTheRemoval(t *testing.T) {
+// Break: the cleanup forgets the suspect only when the removal fails, and not
+// after a successful removal. A new share with the same ID then has no grace
+// period.
+func TestCleanupForgetsASuspectAfterTheRemoval(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
+	now := time.Now()
+	f.m.staleClock = func() time.Time { return now }
 	f.m.StaleShareGracePeriod = 200 * time.Millisecond
 	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
 	ghost := shareid.Encode("storageid", "spaceid", "ghost")
 	g.Expect(f.m.GroupReceivedCache.Add(ctxOf("admin"), "group1", ghost)).To(Succeed())
 
 	receivedIDs(t, f.m, "einstein", "group1")
-	time.Sleep(250 * time.Millisecond)
-	receivedIDs(t, f.m, "einstein", "group1")
+	now = now.Add(250 * time.Millisecond)
+	f.m.CleanupSuspects(ctxOf("admin"))
 	g.Expect(groupIDsOnStorage(t, f, "group1")).ToNot(ContainElement(ghost))
 
-	f.m.staleMu.Lock()
-	defer f.m.staleMu.Unlock()
-	g.Expect(f.m.staleSince).ToNot(HaveKey(ghost))
+	g.Expect(f.m.suspectCount()).To(BeZero())
 }
