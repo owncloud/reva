@@ -217,14 +217,14 @@ func TestUploadCallsStayInTheTraceOfTheRequest(t *testing.T) {
 	}
 }
 
-// The trace fix must not change the lifetime of the calls. A cancel of the
-// request does not stop a metadata call yet. That is a separate change.
-func TestDownloadStillIgnoresTheCancelOfTheRequest(t *testing.T) {
+// A cancel of the request stops the metadata call. Before, the call ran with
+// a context that had no cancel of the caller.
+func TestDownloadStopsWhenTheRequestIsCancelled(t *testing.T) {
 	cs3, _ := newTracedCS3(t)
 	ctx, _ := requestContext()
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
 
 	_, err := cs3.Download(ctx, DownloadRequest{Path: "/some/file"})
-	assert.NoError(t, err)
+	assert.Error(t, err)
 }

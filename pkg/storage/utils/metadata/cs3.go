@@ -29,13 +29,11 @@ import (
 	"strconv"
 	"time"
 
-	gateway "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	user "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -113,6 +111,8 @@ type CS3 struct {
 	serviceUser       *user.User
 	machineAuthAPIKey string
 	authRPCTimeout    time.Duration
+	now               func() time.Time // clock of the token cache, replaced in tests
+	tokens            tokenCache
 
 	dataGatewayClient *http.Client
 }
@@ -154,12 +154,12 @@ func (cs3 *CS3) Init(ctx context.Context, spaceid string) (err error) {
 	ctx, span := startSpan(ctx, "Init")
 	defer span.End()
 
-	client, err := cs3.spacesClient()
-	if err != nil {
-		return err
-	}
+	return cs3.withAuth(ctx, func(ctx context.Context) error { return cs3.initSpace(ctx, spaceid) })
+}
 
-	ctx, err = cs3.getAuthContext(ctx)
+// initSpace is the body of Init. Init runs it with the machine token.
+func (cs3 *CS3) initSpace(ctx context.Context, spaceid string) (err error) {
+	client, err := cs3.spacesClient()
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func (cs3 *CS3) Init(ctx context.Context, spaceid string) (err error) {
 	case cssr.Status.Code == rpc.Code_CODE_ALREADY_EXISTS:
 		return errtypes.AlreadyExists(fmt.Sprintf("user %s does not have access to metadata space %s, but it exists", cs3.serviceUser.Id.OpaqueId, spaceid))
 	default:
-		return errtypes.NewErrtypeFromStatus(cssr.Status)
+		return statusToErr(cssr.Status)
 	}
 	return nil
 }
@@ -239,11 +239,18 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (_ *UploadRespons
 	log := appctx.GetLogger(ctx)
 	log.Debug().Str("path", req.Path).Msg("cs3.Upload.start")
 
+	var res *UploadResponse
+	err = cs3.withAuth(ctx, func(ctx context.Context) (err error) {
+		res, err = cs3.upload(ctx, req, &httpStatus)
+		return err
+	})
+	return res, err
+}
+
+// upload is the body of Upload. Upload runs it with the machine token.
+func (cs3 *CS3) upload(ctx context.Context, req UploadRequest, httpStatus *int) (*UploadResponse, error) {
+	log := appctx.GetLogger(ctx)
 	client, err := cs3.providerClient()
-	if err != nil {
-		return nil, err
-	}
-	ctx, err = cs3.getAuthContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +295,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (_ *UploadRespons
 		return nil, err
 	}
 	if res.Status.Code != rpc.Code_CODE_OK {
-		return nil, errtypes.NewErrtypeFromStatus(res.Status)
+		return nil, statusToErr(res.Status)
 	}
 
 	var endpoint string
@@ -305,7 +312,7 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (_ *UploadRespons
 
 	log.Debug().Str("path", req.Path).Str("endpoint", endpoint).Msg("cs3.Upload.initiate_done")
 
-	httpReq, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(req.Content))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(req.Content))
 	if err != nil {
 		return nil, err
 	}
@@ -322,9 +329,9 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (_ *UploadRespons
 		return nil, err
 	}
 	defer resp.Body.Close()
-	httpStatus = resp.StatusCode
+	*httpStatus = resp.StatusCode
 	log.Debug().Str("path", req.Path).Int("status", resp.StatusCode).Msg("cs3.Upload.put_done")
-	if err := errtypes.NewErrtypeFromHTTPStatusCode(resp.StatusCode, httpReq.URL.Path); err != nil {
+	if err := httpStatusToErr(resp.StatusCode, httpReq.URL.Path); err != nil {
 		return nil, err
 	}
 	etag := resp.Header.Get("Etag")
@@ -406,11 +413,17 @@ func (cs3 *CS3) Stat(ctx context.Context, path string) (_ *provider.ResourceInfo
 	defer span.End()
 	defer func() { endMetadataSpan(span, path, 0, -1, err) }()
 
+	var info *provider.ResourceInfo
+	err = cs3.withAuth(ctx, func(ctx context.Context) (err error) {
+		info, err = cs3.stat(ctx, path)
+		return err
+	})
+	return info, err
+}
+
+// stat is the body of Stat. Stat runs it with the machine token.
+func (cs3 *CS3) stat(ctx context.Context, path string) (*provider.ResourceInfo, error) {
 	client, err := cs3.providerClient()
-	if err != nil {
-		return nil, err
-	}
-	ctx, err = cs3.getAuthContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +440,7 @@ func (cs3 *CS3) Stat(ctx context.Context, path string) (_ *provider.ResourceInfo
 		return nil, err
 	}
 	if res.Status.Code != rpc.Code_CODE_OK {
-		return nil, errtypes.NewErrtypeFromStatus(res.Status)
+		return nil, statusToErr(res.Status)
 	}
 
 	return res.Info, nil
@@ -457,11 +470,16 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (out *Downloa
 		endMetadataSpan(span, req.Path, httpStatus, size, err)
 	}()
 
+	err = cs3.withAuth(ctx, func(ctx context.Context) (err error) {
+		out, err = cs3.download(ctx, req, &httpStatus)
+		return err
+	})
+	return out, err
+}
+
+// download is the body of Download. Download runs it with the machine token.
+func (cs3 *CS3) download(ctx context.Context, req DownloadRequest, httpStatus *int) (*DownloadResponse, error) {
 	client, err := cs3.providerClient()
-	if err != nil {
-		return nil, err
-	}
-	ctx, err = cs3.getAuthContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +510,7 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (out *Downloa
 		return nil, err
 	}
 	if res.GetStatus().GetCode() != rpc.Code_CODE_OK {
-		return nil, errtypes.NewErrtypeFromStatus(res.GetStatus())
+		return nil, statusToErr(res.GetStatus())
 	}
 
 	var endpoint string
@@ -507,7 +525,7 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (out *Downloa
 		return nil, errors.New("metadata storage doesn't support the spaces download protocol")
 	}
 
-	hreq, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -525,14 +543,14 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (out *Downloa
 		return nil, err
 	}
 	defer resp.Body.Close()
-	httpStatus = resp.StatusCode
+	*httpStatus = resp.StatusCode
 
 	dres := DownloadResponse{}
 
 	dres.Etag = resp.Header.Get("etag")
 	dres.Etag = resp.Header.Get("oc-etag") // takes precedence
 
-	if err := errtypes.NewErrtypeFromHTTPStatusCode(resp.StatusCode, hreq.URL.Path); err != nil {
+	if err := httpStatusToErr(resp.StatusCode, hreq.URL.Path); err != nil {
 		return nil, err
 	}
 
@@ -555,11 +573,12 @@ func (cs3 *CS3) Delete(ctx context.Context, path string) (err error) {
 	defer span.End()
 	defer func() { endMetadataSpan(span, path, 0, -1, err) }()
 
+	return cs3.withAuth(ctx, func(ctx context.Context) error { return cs3.deletePath(ctx, path) })
+}
+
+// deletePath is the body of Delete. Delete runs it with the machine token.
+func (cs3 *CS3) deletePath(ctx context.Context, path string) error {
 	client, err := cs3.providerClient()
-	if err != nil {
-		return err
-	}
-	ctx, err = cs3.getAuthContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -574,7 +593,7 @@ func (cs3 *CS3) Delete(ctx context.Context, path string) (err error) {
 		return err
 	}
 	if res.Status.Code != rpc.Code_CODE_OK {
-		return errtypes.NewErrtypeFromStatus(res.Status)
+		return statusToErr(res.Status)
 	}
 
 	return nil
@@ -603,11 +622,17 @@ func (cs3 *CS3) ListDir(ctx context.Context, path string) (_ []*provider.Resourc
 	defer span.End()
 	defer func() { endMetadataSpan(span, path, 0, -1, err) }()
 
+	var infos []*provider.ResourceInfo
+	err = cs3.withAuth(ctx, func(ctx context.Context) (err error) {
+		infos, err = cs3.listDir(ctx, path)
+		return err
+	})
+	return infos, err
+}
+
+// listDir is the body of ListDir. ListDir runs it with the machine token.
+func (cs3 *CS3) listDir(ctx context.Context, path string) ([]*provider.ResourceInfo, error) {
 	client, err := cs3.providerClient()
-	if err != nil {
-		return nil, err
-	}
-	ctx, err = cs3.getAuthContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +649,7 @@ func (cs3 *CS3) ListDir(ctx context.Context, path string) (_ []*provider.Resourc
 		return nil, err
 	}
 	if res.Status.Code != rpc.Code_CODE_OK {
-		return nil, errtypes.NewErrtypeFromStatus(res.Status)
+		return nil, statusToErr(res.Status)
 	}
 
 	return res.Infos, nil
@@ -636,11 +661,12 @@ func (cs3 *CS3) MakeDirIfNotExist(ctx context.Context, folder string) (err error
 	defer span.End()
 	defer func() { endMetadataSpan(span, folder, 0, -1, err) }()
 
+	return cs3.withAuth(ctx, func(ctx context.Context) error { return cs3.makeDir(ctx, folder) })
+}
+
+// makeDir is the body of MakeDirIfNotExist. MakeDirIfNotExist runs it with the machine token.
+func (cs3 *CS3) makeDir(ctx context.Context, folder string) error {
 	client, err := cs3.providerClient()
-	if err != nil {
-		return err
-	}
-	ctx, err = cs3.getAuthContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -663,7 +689,7 @@ func (cs3 *CS3) MakeDirIfNotExist(ctx context.Context, folder string) (err error
 		// nothing to do in this case
 		return nil
 	default:
-		return errtypes.NewErrtypeFromStatus(resp.Status)
+		return statusToErr(resp.Status)
 	}
 }
 
@@ -701,64 +727,4 @@ func (cs3 *CS3) providerClient() (provider.ProviderAPIClient, error) {
 
 func (cs3 *CS3) spacesClient() (provider.SpacesAPIClient, error) {
 	return pool.GetSpacesProviderServiceClient(cs3.providerAddr)
-}
-
-func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
-	if !cs3.useSystemUser {
-		return ctx, nil
-	}
-
-	// Start a new context. Then the x-access-token of the caller is not in the
-	// outgoing metadata. The new context has no deadline and no cancel of the
-	// caller. Copy only the span and the baggage of the caller. Then all calls
-	// of the operation stay in the trace of the request.
-	authCtx := trace.ContextWithSpan(context.Background(), trace.SpanFromContext(ctx))
-	authCtx = baggage.ContextWithBaggage(authCtx, baggage.FromContext(ctx))
-	authCtx = rtrace.ContextSetTracerProvider(authCtx, rtrace.ContextGetTracerProviderOrDefault(ctx))
-	authCtx = ctxpkg.ContextSetUser(authCtx, cs3.serviceUser)
-
-	// The span covers only the Authenticate call. The returned context does
-	// not hold it, so the next calls are children of the span of the caller.
-	spanCtx, span := startSpan(authCtx, "getAuthContext")
-	defer span.End()
-
-	selector, err := pool.GatewaySelector(cs3.gatewayAddr)
-	if err != nil {
-		return nil, err
-	}
-	client, err := selector.Next()
-	if err != nil {
-		return nil, err
-	}
-
-	// The Authenticate call gets a context of its own: a gateway that is stuck
-	// on a downstream storage provider accepts the connection and then never
-	// answers, and there is nothing else that would ever end the wait. The
-	// deadline cannot live on authCtx, because the caller runs its own RPC on
-	// the context we return here.
-	timeout := cs3.authRPCTimeout
-	if timeout <= 0 {
-		timeout = defaultAuthRPCTimeout
-	}
-	rpcCtx, cancel := context.WithTimeout(spanCtx, timeout)
-	defer cancel()
-
-	start := time.Now()
-	authRes, err := client.Authenticate(rpcCtx, &gateway.AuthenticateRequest{
-		Type:         "machine",
-		ClientId:     "userid:" + cs3.serviceUser.Id.OpaqueId,
-		ClientSecret: cs3.machineAuthAPIKey,
-	})
-	if err != nil {
-		// this used to fail silently by never returning at all, so make sure
-		// an exhausted deadline is visible at production log level
-		appctx.GetLogger(ctx).Warn().Err(err).Str("gateway_addr", cs3.gatewayAddr).
-			Dur("elapsed", time.Since(start)).Dur("timeout", timeout).Msg("cs3: machine authentication failed")
-		return nil, err
-	}
-	if authRes.GetStatus().GetCode() != rpc.Code_CODE_OK {
-		return nil, errtypes.NewErrtypeFromStatus(authRes.GetStatus())
-	}
-	authCtx = metadata.AppendToOutgoingContext(authCtx, ctxpkg.TokenHeader, authRes.Token)
-	return authCtx, nil
 }
