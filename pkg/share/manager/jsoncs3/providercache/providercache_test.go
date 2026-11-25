@@ -328,6 +328,15 @@ var _ = Describe("Cache", func() {
 			Expect(c.Add(ctx, storageID, spaceID, "s1", &collaboration.Share{Id: &collaboration.ShareId{OpaqueId: "s1"}})).To(Succeed())
 		})
 
+		It("rejects missing storage, space or share ids", func() {
+			_, err := c.Update(ctx, "", spaceID, "s1", setExpiration)
+			Expect(err).To(MatchError("missing storage id"))
+			_, err = c.Update(ctx, storageID, "", "s1", setExpiration)
+			Expect(err).To(MatchError("missing space id"))
+			_, err = c.Update(ctx, storageID, spaceID, "", setExpiration)
+			Expect(err).To(MatchError("missing share id"))
+		})
+
 		It("writes the change when the space is not in memory", func() {
 			c2 := providercache.New(storage, 0*time.Second)
 

@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	gatewayv1beta1 "github.com/cs3org/go-cs3apis/cs3/gateway/v1beta1"
 	groupv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
@@ -32,8 +33,10 @@ import (
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/conversions"
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
+	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/status"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	sharespkg "github.com/owncloud/reva/v2/pkg/share"
@@ -748,6 +751,87 @@ var _ = Describe("Jsoncs3", func() {
 					Grantee:    grant.Grantee,
 				})
 				Expect(s.GetPermissions().GetPermissions().InitiateFileUpload).To(BeTrue())
+			})
+
+			// The injected PreconditionFailed leaves the backing etag unchanged, so the
+			// resync is a NotModified no-op. These specs prove that UpdateShare does not
+			// deadlock and that the update survives the retry. Re-applying the update
+			// onto genuinely fresh state is covered by the providercache Update specs.
+			Context("when the first persist hits a CAS conflict", func() {
+				var (
+					fs *helpers.ErrOnceUploadStorage
+					m2 *jsoncs3.Manager
+				)
+
+				// updateShare runs UpdateShare in a goroutine so that a
+				// self-deadlock fails the spec instead of hanging the suite.
+				updateShare := func(ref *collaboration.ShareReference, p *collaboration.SharePermissions, updated *collaboration.Share, fieldMask *fieldmaskpb.FieldMask) (*collaboration.Share, error) {
+					type result struct {
+						s   *collaboration.Share
+						err error
+					}
+					mgr, uctx := m2, ctx
+					done := make(chan result, 1)
+					go func() {
+						s, err := mgr.UpdateShare(uctx, ref, p, updated, fieldMask)
+						done <- result{s, err}
+					}()
+					var r result
+					Eventually(done, 10*time.Second).Should(Receive(&r), "UpdateShare did not return: the CAS retry path deadlocked")
+					return r.s, r.err
+				}
+
+				BeforeEach(func() {
+					fs = &helpers.ErrOnceUploadStorage{Storage: storage, Err: errtypes.PreconditionFailed("injected")}
+					var err error
+					m2, err = jsoncs3.New(fs, nil, 0, nil, 0)
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				It("retries the update without deadlocking on the space lock", func() {
+					ref := &collaboration.ShareReference{
+						Spec: &collaboration.ShareReference_Id{Id: &collaboration.ShareId{OpaqueId: share.Id.OpaqueId}},
+					}
+					us, err := updateShare(ref, &collaboration.SharePermissions{
+						Permissions: &providerv1beta1.ResourcePermissions{InitiateFileUpload: true},
+					}, nil, nil)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(us.GetPermissions().GetPermissions().InitiateFileUpload).To(BeTrue())
+					Expect(atomic.LoadInt32(&fs.Uploads)).To(Equal(int32(2)))
+
+					// the space lock must have been released again
+					s, err := m2.GetShare(ctx, ref)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(s.GetPermissions().GetPermissions().InitiateFileUpload).To(BeTrue())
+
+					m, err = jsoncs3.New(storage, nil, 0, nil, 0) // Reset in-memory cache
+					Expect(err).ToNot(HaveOccurred())
+					s = shareBykey(&collaboration.ShareKey{
+						ResourceId: sharedResource.Id,
+						Grantee:    grant.Grantee,
+					})
+					Expect(s.GetPermissions().GetPermissions().InitiateFileUpload).To(BeTrue())
+				})
+
+				It("keeps a field mask update when no share reference is given", func() {
+					expiration := &typesv1beta1.Timestamp{Seconds: uint64(time.Now().Add(24 * time.Hour).Unix())}
+					us, err := updateShare(nil, nil, &collaboration.Share{
+						Id:         &collaboration.ShareId{OpaqueId: share.Id.OpaqueId},
+						Expiration: expiration,
+					}, &fieldmaskpb.FieldMask{Paths: []string{"expiration"}})
+					Expect(err).ToNot(HaveOccurred())
+					Expect(us.GetExpiration().GetSeconds()).To(Equal(expiration.GetSeconds()))
+					Expect(us.GetPermissions()).To(BeComparableTo(share.GetPermissions(), protocmp.Transform()))
+
+					m, err = jsoncs3.New(storage, nil, 0, nil, 0) // Reset in-memory cache
+					Expect(err).ToNot(HaveOccurred())
+					s := shareBykey(&collaboration.ShareKey{
+						ResourceId: sharedResource.Id,
+						Grantee:    grant.Grantee,
+					})
+					Expect(s.GetExpiration().GetSeconds()).To(Equal(expiration.GetSeconds()))
+					Expect(s.GetPermissions()).To(BeComparableTo(share.GetPermissions(), protocmp.Transform()))
+				})
 			})
 		})
 
