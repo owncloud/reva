@@ -5,7 +5,9 @@ package jsoncs3
 // and removes them from the documents.
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,9 +19,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
+	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 
 	. "github.com/onsi/gomega"
 )
@@ -284,4 +288,71 @@ func TestCleanupRunLinksToTheListingThatFoundTheSuspect(t *testing.T) {
 
 func fieldMaskState() *field_mask.FieldMask {
 	return &field_mask.FieldMask{Paths: []string{"state"}}
+}
+
+// Break: a user renews an expired share on another pod before the loop runs.
+// The suspect holds the old share. The loop must read the share again and keep
+// a share that is not expired any more.
+func TestCleanupKeepsAShareThatWasRenewedAfterTheListing(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), expiredAt)
+	_, err := f.m.ListReceivedShares(ctxOf("einstein", "group1"), nil, nil)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(f.m.suspectCount()).To(Equal(1))
+
+	// Another pod moves the expiration into the future.
+	shares, err := f.m.Cache.ListSpace(ctxOf("admin"), "storageid", "spaceid")
+	g.Expect(err).ToNot(HaveOccurred())
+	var id string
+	for k := range shares.Shares {
+		id = k
+	}
+	_, err = f.m.Cache.Update(ctxOf("admin"), "storageid", "spaceid", id, func(s *collaboration.Share) {
+		s.Expiration = &typesv1beta1.Timestamp{Seconds: uint64(time.Now().Add(time.Hour).Unix())}
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	f.m.CleanupSuspects(ctxOf("admin"))
+
+	after, err := f.m.Cache.ListSpace(ctxOf("admin"), "storageid", "spaceid")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(after.Shares).To(HaveKey(id), "a renewed share must stay")
+	g.Expect(f.m.suspectCount()).To(BeZero())
+}
+
+// Break: the cleanup removes the entries when the space read got a NotFound
+// that is not real. An empty etag means that the download got NotFound. That
+// can be temporary. A Stat that also gets NotFound is the proof.
+func TestCleanupKeepsEntriesWhenTheSpaceReadGetsATemporaryNotFound(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
+	toggle := &spaceNotFoundStorage{Storage: f.storage}
+	m, err := New(toggle, nil, 0, nopStream{}, 0)
+	g.Expect(err).ToNot(HaveOccurred())
+	m.StaleShareGracePeriod = 0
+	valid := receivedIDs(t, m, "einstein", "group1")
+	g.Expect(valid).To(HaveLen(1))
+
+	toggle.fail.Store(true) // the space file exists, but the read says NotFound
+	g.Expect(receivedIDs(t, m, "einstein", "group1")).To(BeEmpty())
+	m.CleanupSuspects(ctxOf("admin"))
+	toggle.fail.Store(false)
+
+	g.Expect(groupIDsOnStorage(t, f, "group1")).To(ConsistOf(valid[0]), "the share is valid, the entry must stay")
+}
+
+// spaceNotFoundStorage answers NotFound for the downloads of space files while
+// fail is true. Stat shows that the file exists.
+type spaceNotFoundStorage struct {
+	metadata.Storage
+	fail atomic.Bool
+}
+
+func (s *spaceNotFoundStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	if s.fail.Load() && strings.HasPrefix(req.Path, "/storages/") {
+		return nil, errtypes.NotFound("injected temporary not found: " + req.Path)
+	}
+	return s.Storage.Download(ctx, req)
 }

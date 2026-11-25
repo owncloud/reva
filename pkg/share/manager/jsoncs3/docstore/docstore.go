@@ -176,11 +176,14 @@ func (s *Store[T]) startSpan(ctx context.Context, name, p string) (context.Conte
 // an empty document with an empty etag. A failed read returns the error and
 // keeps the old entry.
 //
-// Parallel reads of one path share one download. Each caller waits with its
+// Parallel reads of one path that start from the same entry share one download. Each caller waits with its
 // own context. The shared download does not end when one caller leaves.
 func (s *Store[T]) Get(ctx context.Context, p string) (*Entry[T], error) {
 	start := s.load(p)
-	ch := s.flights.DoChan(p, func() (any, error) {
+	// The key holds the entry that the read starts from. A read that starts
+	// after a write has a newer entry, so it does not join an older read that
+	// can return an old body.
+	ch := s.flights.DoChan(fmt.Sprintf("%s|%p", p, start), func() (any, error) {
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.ReadTimeout)
 		defer cancel()
 		e, err := s.fetch(fctx, p, start)

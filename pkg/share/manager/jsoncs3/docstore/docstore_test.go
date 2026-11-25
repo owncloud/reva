@@ -569,3 +569,39 @@ func TestCreateWritesAnEmptyDocumentOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, e.Etag)
 }
+
+// A read that starts after a write must not join a read that started before
+// the write. That read can return the old body.
+func TestGetAfterAnUpdateDoesNotJoinAnOlderRead(t *testing.T) {
+	p := newProbe()
+	s := newStore(p)
+	require.NoError(t, s.Update(context.Background(), docPath, add("a")))
+	other := newStore(p)
+	require.NoError(t, other.Update(context.Background(), docPath, add("b")))
+
+	gate := p.holdDownloads()
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		_, _ = s.Get(context.Background(), docPath) // old read, on hold
+	}()
+	<-gate.reached
+	p.hold.Store(nil)
+	require.NoError(t, s.Update(context.Background(), docPath, add("c")))
+
+	got := make(chan *set, 1)
+	go func() {
+		e, err := s.Get(context.Background(), docPath)
+		if err == nil {
+			got <- e.Doc
+		}
+	}()
+	select {
+	case d := <-got:
+		assert.Equal(t, []string{"a", "b", "c"}, keys(d))
+	case <-time.After(3 * time.Second):
+		t.Error("the read joined the older read that is on hold")
+	}
+	close(gate.release)
+	<-readDone
+}

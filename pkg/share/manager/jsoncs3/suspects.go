@@ -14,6 +14,7 @@ import (
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/logger"
+	"github.com/owncloud/reva/v2/pkg/share"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
 )
 
@@ -235,18 +236,39 @@ func (m *Manager) cleanupExpired(ctx context.Context, expired []*suspect) {
 	if len(expired) == 0 {
 		return
 	}
-	shares := make([]*collaboration.Share, 0, len(expired))
-	ids := make([]string, 0, len(expired))
+	logger := appctx.GetLogger(ctx)
+	// Read each space again. The suspect holds the share of the listing. Another
+	// pod can have renewed or removed the share since. Only a share that is
+	// still expired in the document is removed.
+	type space struct{ storageID, spaceID string }
+	bySpace := map[space][]*suspect{}
 	for _, s := range expired {
-		if s.share != nil {
-			shares = append(shares, s.share)
+		storageID, spaceID, _ := shareid.Decode(s.shareID)
+		sp := space{storageID, spaceID}
+		bySpace[sp] = append(bySpace[sp], s)
+	}
+	var shares []*collaboration.Share
+	var handled []string
+	for sp, suspects := range bySpace {
+		current, err := m.Cache.ListSpace(ctx, sp.storageID, sp.spaceID)
+		if err != nil {
+			logger.Warn().Err(err).Str("spaceid", sp.spaceID).Msg("could not read the space to check the expired shares. trying again later")
+			continue
 		}
-		ids = append(ids, s.shareID)
+		for _, s := range suspects {
+			cur := current.Shares[s.shareID]
+			if cur != nil && share.IsExpired(cur) {
+				shares = append(shares, cur)
+			}
+			// A share that is gone or renewed needs no removal here. The pod
+			// that removed it cleaned the documents.
+			handled = append(handled, s.shareID)
+		}
 	}
 	if err := m.expireShares(ctx, shares); err != nil {
 		return // keep the suspects, the next run tries again
 	}
-	m.dropSuspects(ids...)
+	m.dropSuspects(handled...)
 }
 
 func (m *Manager) cleanupMissing(ctx context.Context, missing []*suspect) {
@@ -274,6 +296,14 @@ func (m *Manager) cleanupMissing(ctx context.Context, missing []*suspect) {
 		spaceShares, err := m.Cache.ListSpace(ctx, sp.storageID, sp.spaceID)
 		if err != nil {
 			logger.Warn().Err(err).Str("spaceid", sp.spaceID).Msg("could not read the space to check the missing shares. trying again later")
+			continue
+		}
+		// An empty etag means that the download of the space file got NotFound.
+		// That can be temporary, so it is no proof that a share is gone. A Stat
+		// that also gets NotFound is the proof. A failed first Share in a space
+		// leaves a grantee entry without a space file.
+		if spaceShares.Etag == "" && !m.Cache.SpaceFileMissing(ctx, sp.storageID, sp.spaceID) {
+			logger.Warn().Str("spaceid", sp.spaceID).Msg("the space file is not proven missing. trying again later")
 			continue
 		}
 		ssid := sp.storageID + shareid.IDDelimiter + sp.spaceID

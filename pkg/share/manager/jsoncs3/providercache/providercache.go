@@ -353,6 +353,15 @@ func (c *Cache) ListSpace(ctx context.Context, storageID, spaceID string) (_ *Sh
 	return &Shares{Shares: e.Doc.Shares, Etag: e.Etag}, nil
 }
 
+// SpaceFileMissing reports if a Stat of the space file returns NotFound.
+// Use it as a second proof after a download got NotFound. It returns false
+// for all other results, also for errors.
+func (c *Cache) SpaceFileMissing(ctx context.Context, storageID, spaceID string) bool {
+	_, err := c.storage.Stat(ctx, spaceJSONPath(storageID, spaceID))
+	_, notFound := err.(errtypes.NotFound)
+	return notFound
+}
+
 // Persist uploads the space document, also when nothing changed. It gives the
 // document a new etag.
 func (c *Cache) Persist(ctx context.Context, storageID, spaceID string) (err error) {
