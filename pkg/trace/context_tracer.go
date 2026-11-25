@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/embedded"
 )
@@ -82,5 +83,8 @@ func providerOf(ctx context.Context) trace.TracerProvider {
 	if parent := trace.SpanFromContext(ctx); parent.IsRecording() {
 		return parent.TracerProvider()
 	}
-	return DefaultProvider()
+	// The same result as DefaultProvider, without its read lock. The lock
+	// protects only the initialized flag, and it is contended when many
+	// goroutines start spans.
+	return otel.GetTracerProvider()
 }

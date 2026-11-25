@@ -30,6 +30,7 @@ import (
 	backoff "github.com/cenkalti/backoff/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
@@ -80,6 +81,11 @@ func (c *Cache) lockUser(ctx context.Context, userID string) (func(), error) {
 // a child of the span in ctx, shows the wait. The caller keeps its own
 // context, so the work after the wait is not a child of the lock span.
 func (c *Cache) lockUserTraced(ctx context.Context, userID string) func() {
+	// A lock span is only useful under a recorded parent span. With tracing
+	// off, the parent is never recorded, so do not pay for the span.
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return c.lockUser(userID)
+	}
 	_, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 	unlock := c.lockUser(userID)
