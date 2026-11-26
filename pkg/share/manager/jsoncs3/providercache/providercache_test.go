@@ -574,6 +574,106 @@ var _ = Describe("Cache", func() {
 			})
 		})
 	})
+
+	Describe("lock acquisition", func() {
+		It("does not download when the context is already canceled", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			close(bs.Release)
+			c2 := providercache.New(bs, 0*time.Second)
+
+			cctx, cancel := context.WithCancel(ctx)
+			cancel()
+
+			_, err := c2.ListSpace(cctx, storageID, spaceID)
+			Expect(err).To(MatchError(context.Canceled))
+			Expect(atomic.LoadInt32(&bs.Downloads)).To(BeZero())
+		})
+
+		It("abandons a ListSpace waiting for the space lock once the context is canceled", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			defer close(bs.Release)
+			c2 := providercache.New(bs, 0*time.Second)
+
+			// the holder parks inside Download while holding the space lock
+			go func() {
+				defer GinkgoRecover()
+				_, _ = c2.ListSpace(ctx, storageID, spaceID)
+			}()
+			Eventually(bs.Entered, 2*time.Second).Should(Receive())
+
+			cctx, cancel := context.WithCancel(ctx)
+			errc := make(chan error, 1)
+			go func() {
+				defer GinkgoRecover()
+				_, err := c2.ListSpace(cctx, storageID, spaceID)
+				errc <- err
+			}()
+			Consistently(errc, 100*time.Millisecond).ShouldNot(Receive(), "waiter should block while the lock is held")
+
+			cancel()
+			var err error
+			Eventually(errc, 2*time.Second).Should(Receive(&err), "waiter is still parked on the space lock after its context was canceled")
+			Expect(err).To(MatchError(context.Canceled))
+			Expect(atomic.LoadInt32(&bs.Downloads)).To(Equal(int32(1)), "the canceled waiter must not download")
+		})
+
+		It("abandons LockSpace, Add, Get, Remove, RemoveMany, Update and PurgeSpace once the context is done", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			defer close(bs.Release)
+			c2 := providercache.New(bs, 0*time.Second)
+
+			go func() {
+				defer GinkgoRecover()
+				_, _ = c2.ListSpace(ctx, storageID, spaceID)
+			}()
+			Eventually(bs.Entered, 2*time.Second).Should(Receive())
+
+			cctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer cancel()
+			calls := []func() error{
+				func() error {
+					unlock, err := c2.LockSpace(cctx, spaceID)
+					if unlock != nil {
+						unlock()
+					}
+					return err
+				},
+				func() error {
+					return c2.Add(cctx, storageID, spaceID, shareID, share1)
+				},
+				func() error {
+					_, err := c2.Get(cctx, storageID, spaceID, shareID, false)
+					return err
+				},
+				func() error {
+					return c2.Remove(cctx, storageID, spaceID, shareID)
+				},
+				func() error {
+					_, err := c2.RemoveMany(cctx, storageID, spaceID, []string{shareID})
+					return err
+				},
+				func() error {
+					_, err := c2.Update(cctx, storageID, spaceID, shareID, func(*collaboration.Share) {})
+					return err
+				},
+				func() error {
+					return c2.PurgeSpace(cctx, storageID, spaceID)
+				},
+			}
+			errc := make(chan error, len(calls))
+			for _, call := range calls {
+				go func() {
+					defer GinkgoRecover()
+					errc <- call()
+				}()
+			}
+			for range calls {
+				var err error
+				Eventually(errc, 2*time.Second).Should(Receive(&err), "a call is still parked on the lock after its context expired")
+				Expect(err).To(MatchError(context.DeadlineExceeded))
+			}
+		})
+	})
 })
 
 // conflictThenNotFoundStorage returns initialData/initialEtag on the first

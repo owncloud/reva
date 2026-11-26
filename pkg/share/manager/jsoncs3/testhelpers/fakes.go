@@ -108,3 +108,34 @@ func (t *ToggleNotFoundDownloadStorage) Download(ctx context.Context, req metada
 	}
 	return t.Storage.Download(ctx, req)
 }
+
+// BlockingDownloadStorage parks every Download until Release is closed,
+// deliberately ignoring the request context, to simulate a slow backend
+// holding a cache lock. Entered receives one value per Download call that
+// has started (non-blocking send, so size it to the expected number of calls).
+type BlockingDownloadStorage struct {
+	metadata.Storage
+	Entered   chan struct{}
+	Release   chan struct{}
+	Downloads int32
+}
+
+// NewBlockingDownloadStorage wraps s so that Downloads block until Release is closed.
+func NewBlockingDownloadStorage(s metadata.Storage) *BlockingDownloadStorage {
+	return &BlockingDownloadStorage{
+		Storage: s,
+		Entered: make(chan struct{}, 16),
+		Release: make(chan struct{}),
+	}
+}
+
+// Download blocks until Release is closed, then delegates to the wrapped Storage.
+func (b *BlockingDownloadStorage) Download(ctx context.Context, req metadata.DownloadRequest) (*metadata.DownloadResponse, error) {
+	atomic.AddInt32(&b.Downloads, 1)
+	select {
+	case b.Entered <- struct{}{}:
+	default:
+	}
+	<-b.Release
+	return b.Storage.Download(ctx, req)
+}
