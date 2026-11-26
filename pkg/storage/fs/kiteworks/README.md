@@ -1,8 +1,8 @@
 # Kiteworks storage driver
 
-Read-only `storage.FS` implementation backed by a Kiteworks box. Part of OCISDEV-903 (Milestone 2 of the pluggable external storage plan, `~/dev/kiteworks/external-storage-providers-plan.md` §3–4).
+`storage.FS` implementation backed by a Kiteworks box: reads in OCISDEV-903, writes/versions/locking in OCISDEV-906, space lifecycle in OCISDEV-907.
 
-All mutating methods (`CreateDir`, `TouchFile`, `Delete`, `Move`, `SetLock`, `AddGrant`, uploads, space management, recycle bin, revisions) return `errtypes.NotSupported`. Write enablement is tracked in Milestone 3.
+Recycle bin, grants, arbitrary metadata, `CreateReference`, and personal space creation (`CreateHome`, `GetHome`, `CreateStorageSpace` with `type=personal` — KW provisions those itself) still return `errtypes.NotSupported`.
 
 ---
 
@@ -14,6 +14,9 @@ kiteworks/
     client.go     APIClientFactory, APIClient, HTTP helpers
     types.go      FileInfo, DirectoryInfo, QuotaInfo, …
   kiteworks.go    storage.FS implementation
+  spaces.go       space listing and lifecycle
+  versions.go     revisions
+  permissions.go  KW permission → CS3 ResourcePermissions mapping
   *_test.go       Ginkgo smoke tests (mock + real-box)
 ```
 
@@ -34,7 +37,10 @@ The `APIClientFactory` is stateless; a new `APIClient` is constructed for every 
 
 | `storage.FS` method | Endpoint |
 |---------------------|----------|
-| `ListStorageSpaces` | `GET /rest/folders/top?deleted=false&with=(permissions)` |
+| `ListStorageSpaces`  | `GET /rest/folders/top?deleted={false,true}&with=(permissions)` + `GET /rest/users/me` for `syncdirId` |
+| `CreateStorageSpace` | `POST /rest/folders/0/folders` |
+| `UpdateStorageSpace` | `PATCH /rest/folders/{id}/actions/recover`, `PUT /rest/folders/{id}` (rename, quota) |
+| `DeleteStorageSpace` | `DELETE /rest/folders/{id}`, or `/actions/permanent` when `purge` is set |
 | `GetMD`             | `GET /rest/folders/{id}` → fallback `GET /rest/files/{id}` |
 | `ListFolder`        | `GET /rest/folders/{id}/children?deleted=false&with=(permissions)` |
 | `Download`          | `GET /rest/files/{id}/content` |
@@ -59,7 +65,7 @@ SpaceId   = Kiteworks top-folder ID  (from /rest/folders/top → data[].id)
 OpaqueId  = Kiteworks node ID        (folder or file)
 ```
 
-Each top-level folder becomes one `StorageSpace` with `SpaceType = "project"`.
+Each top-level folder becomes one `StorageSpace`. The folder matching the user's `syncdirId` is reported as `personal`, every other one as `project`; if `syncdirId` cannot be resolved, all of them fall back to `project`. Soft-deleted top folders are listed too, marked with the `trashed` opaque entry. Quota writes snap to the five values KW accepts (1/2/5/10/50 GiB, `-1` for unlimited).
 
 ---
 
