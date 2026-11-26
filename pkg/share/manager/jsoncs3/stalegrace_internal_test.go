@@ -275,7 +275,7 @@ func TestSuspectIsKeptForAShareThatThePodFindsRarely(t *testing.T) {
 	m.noteSuspect(context.Background(), suspectInput{shareID: "other", reason: suspectMissing})
 
 	_, missing = m.snapshotSuspects(now)
-	ids := []string{}
+	ids := make([]string, 0, len(missing))
 	for _, s := range missing {
 		ids = append(ids, s.shareID)
 	}
