@@ -20,12 +20,14 @@ package decomposedfs_test
 
 import (
 	"context"
+	"os"
 
 	userv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	cs3permissions "github.com/cs3org/go-cs3apis/cs3/permissions/v1beta1"
 	rpcv1beta1 "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	typesv1beta1 "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/owncloud/reva/v2/pkg/conversions"
@@ -250,6 +252,54 @@ var _ = Describe("Spaces", func() {
 
 				})
 			})
+		})
+	})
+
+	Describe("List Spaces", func() {
+		var (
+			env *helpers.TestEnv
+		)
+		BeforeEach(func() {
+			var err error
+			// the messagepack backend keeps the metadata next to the node directory
+			env, err = helpers.NewTestEnv(map[string]interface{}{
+				"metadata_backend": "messagepack",
+				// the metadata cache keys are relative to the storage root and the in-memory
+				// store is shared within the process, so isolate every env in its own database
+				"filemetadatacache": map[string]interface{}{"cache_database": uuid.NewString()},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			env.PermissionsClient.On("CheckPermission", mock.Anything, mock.Anything, mock.Anything).Return(
+				&cs3permissions.CheckPermissionResponse{Status: &rpcv1beta1.Status{Code: rpcv1beta1.Code_CODE_PERMISSION_DENIED}}, nil)
+			env.Permissions.On("AssemblePermissions", mock.Anything, mock.Anything, mock.Anything).Return(node.OwnerPermissions(), nil)
+		})
+
+		AfterEach(func() {
+			if env != nil {
+				env.Cleanup()
+			}
+		})
+
+		It("reports the space root as a container", func() {
+			spaces, err := env.Fs.ListStorageSpaces(env.Ctx, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces).To(HaveLen(1))
+			Expect(spaces[0].GetRootInfo().GetType()).To(Equal(provider.ResourceType_RESOURCE_TYPE_CONTAINER))
+		})
+
+		It("does not look up the type of the space root on disk", func() {
+			root, err := node.ReadNode(env.Ctx, env.Lookup, env.SpaceRootRes.SpaceId, env.SpaceRootRes.OpaqueId, false, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+			// Space roots carry no type attribute. Removing the root directory (the
+			// metadata stays in place with messagepack) makes any lookup of the type
+			// on disk visible: it would no longer find a directory. This only detects
+			// a disk lookup, it does not define how broken storage should be reported.
+			Expect(os.RemoveAll(root.InternalPath())).To(Succeed())
+
+			spaces, err := env.Fs.ListStorageSpaces(env.Ctx, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spaces).To(HaveLen(1))
+			Expect(spaces[0].GetRootInfo().GetType()).To(Equal(provider.ResourceType_RESOURCE_TYPE_CONTAINER))
 		})
 	})
 
