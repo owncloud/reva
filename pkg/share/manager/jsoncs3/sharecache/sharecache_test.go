@@ -392,6 +392,106 @@ var _ = Describe("Sharecache", func() {
 			})
 		})
 	})
+
+	Describe("lock acquisition", func() {
+		It("does not download when the context is already canceled", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			close(bs.Release)
+			c2 := sharecache.New(bs, "users", "created.json", 0*time.Second)
+
+			cctx, cancel := context.WithCancel(ctx)
+			cancel()
+
+			_, err := c2.List(cctx, userid)
+			Expect(err).To(MatchError(context.Canceled))
+			Expect(atomic.LoadInt32(&bs.Downloads)).To(BeZero())
+		})
+
+		It("abandons a List waiting for the user lock once the context is canceled", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			defer close(bs.Release)
+			c2 := sharecache.New(bs, "users", "created.json", 0*time.Second)
+
+			// the holder parks inside Download while holding the user lock
+			go func() {
+				defer GinkgoRecover()
+				_, _ = c2.List(ctx, userid)
+			}()
+			Eventually(bs.Entered, 2*time.Second).Should(Receive())
+
+			cctx, cancel := context.WithCancel(ctx)
+			errc := make(chan error, 1)
+			go func() {
+				defer GinkgoRecover()
+				_, err := c2.List(cctx, userid)
+				errc <- err
+			}()
+			Consistently(errc, 100*time.Millisecond).ShouldNot(Receive(), "waiter should block while the lock is held")
+
+			cancel()
+			var err error
+			Eventually(errc, 2*time.Second).Should(Receive(&err), "waiter is still parked on the user lock after its context was canceled")
+			Expect(err).To(MatchError(context.Canceled))
+			Expect(atomic.LoadInt32(&bs.Downloads)).To(Equal(int32(1)), "the canceled waiter must not download")
+		})
+
+		It("abandons an Add, Remove or RemoveMany waiting for the user lock once the context is done", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			defer close(bs.Release)
+			c2 := sharecache.New(bs, "users", "created.json", 0*time.Second)
+
+			go func() {
+				defer GinkgoRecover()
+				_, _ = c2.List(ctx, userid)
+			}()
+			Eventually(bs.Entered, 2*time.Second).Should(Receive())
+
+			cctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer cancel()
+			calls := []func() error{
+				func() error {
+					return c2.Add(cctx, userid, shareID)
+				},
+				func() error {
+					return c2.Remove(cctx, userid, shareID)
+				},
+				func() error {
+					return c2.RemoveMany(cctx, userid, []string{shareID})
+				},
+			}
+			errc := make(chan error, len(calls))
+			for _, call := range calls {
+				go func() {
+					defer GinkgoRecover()
+					errc <- call()
+				}()
+			}
+			for range calls {
+				var err error
+				Eventually(errc, 2*time.Second).Should(Receive(&err), "a call is still parked on the lock after its context expired")
+				Expect(err).To(MatchError(context.DeadlineExceeded))
+			}
+		})
+
+		It("still serializes and succeeds for live contexts once the holder finishes", func() {
+			bs := helpers.NewBlockingDownloadStorage(storage)
+			c2 := sharecache.New(bs, "users", "created.json", 0*time.Second)
+
+			errc := make(chan error, 2)
+			for i := 0; i < 2; i++ {
+				go func() {
+					defer GinkgoRecover()
+					_, err := c2.List(ctx, userid)
+					errc <- err
+				}()
+			}
+			Eventually(bs.Entered, 2*time.Second).Should(Receive())
+			Consistently(bs.Entered, 100*time.Millisecond).ShouldNot(Receive(), "a second Download started while the first still held the lock")
+			close(bs.Release)
+			Eventually(errc, 2*time.Second).Should(Receive(BeNil()))
+			Eventually(errc, 2*time.Second).Should(Receive(BeNil()))
+		})
+	})
 })
 
 // countingStorage counts Upload calls, NotFound downloads and trash lookups.
