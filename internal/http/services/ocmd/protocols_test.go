@@ -166,7 +166,7 @@ func TestMarshalProtocol(t *testing.T) {
 	}{
 		{
 			in:  []Protocol{},
-			err: "json: error calling MarshalJSON for type ocmd.Protocols: no protocol defined",
+			err: "json: error calling MarshalJSON for type *ocmd.Protocols: no protocol defined",
 		},
 		{
 			in: []Protocol{
