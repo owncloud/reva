@@ -64,6 +64,10 @@ import (
 
 const (
 	tracerName = "ocdav"
+
+	// keys in the opaque of a version's ResourceInfo, set by the versions handler
+	OpaqueVersionAuthorUsername    = "version-author-username"
+	OpaqueVersionAuthorDisplayName = "version-author-displayname"
 )
 
 // these keys are used to lookup in ArbitraryMetadata, generated prop names are lowercased
@@ -1518,6 +1522,18 @@ func mdToPropResponse(ctx context.Context, pf *XML, md *provider.ResourceInfo, p
 						appendToOK(prop.Raw("oc:share-types", types.String()))
 					} else {
 						appendToNotFound(prop.NotFound("oc:" + pf.Prop[i].Local))
+					}
+				case "meta-version-edited-by": // the user who uploaded a file version
+					if v := utils.ReadPlainFromOpaque(md.Opaque, OpaqueVersionAuthorUsername); v != "" {
+						appendToOK(prop.Escaped("oc:meta-version-edited-by", v))
+					} else {
+						appendToNotFound(prop.NotFound("oc:meta-version-edited-by"))
+					}
+				case "meta-version-edited-by-name": // display name of the above
+					if v := utils.ReadPlainFromOpaque(md.Opaque, OpaqueVersionAuthorDisplayName); v != "" {
+						appendToOK(prop.Escaped("oc:meta-version-edited-by-name", v))
+					} else {
+						appendToNotFound(prop.NotFound("oc:meta-version-edited-by-name"))
 					}
 				case "owner-display-name": // phoenix only
 					if md.Owner != nil {

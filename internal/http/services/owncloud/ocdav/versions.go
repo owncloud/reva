@@ -30,6 +30,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storagespace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 
+	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
@@ -173,8 +174,10 @@ func (h *VersionsHandler) doListVersions(w http.ResponseWriter, r *http.Request,
 		Type: provider.ResourceType_RESOURCE_TYPE_CONTAINER,
 	})
 
+	authors := &versionAuthors{client: client, users: map[string]*userpb.User{}}
 	for i := range versions {
 		vi := &provider.ResourceInfo{
+			Opaque: authors.opaqueFor(ctx, versions[i].GetOpaque()),
 			// TODO(jfd) we cannot access version content, this will be a problem when trying to fetch version thumbnails
 			// Opaque
 			Type: provider.ResourceType_RESOURCE_TYPE_FILE,

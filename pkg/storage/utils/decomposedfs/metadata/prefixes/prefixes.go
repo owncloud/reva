@@ -33,6 +33,12 @@ const (
 	OwnerIDAttr   string = OcisPrefix + "owner.id"
 	OwnerIDPAttr  string = OcisPrefix + "owner.idp"
 	OwnerTypeAttr string = OcisPrefix + "owner.type"
+
+	// the user who uploaded the current content of the node, copied to a revision
+	// when a later upload archives the content. Modelled on owner.*
+	AuthorIDAttr   string = OcisPrefix + "author.id"
+	AuthorIDPAttr  string = OcisPrefix + "author.idp"
+	AuthorTypeAttr string = OcisPrefix + "author.type"
 	// the base name of the node
 	// updated when the file is renamed or moved
 	NameAttr string = OcisPrefix + "name"
