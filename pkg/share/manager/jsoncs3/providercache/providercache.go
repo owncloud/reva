@@ -20,7 +20,9 @@ package providercache
 
 import (
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"os"
 	"path"
@@ -28,8 +30,11 @@ import (
 	"strings"
 	"time"
 
+	groupv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/group/v1beta1"
+	userv1beta1 "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -69,50 +74,107 @@ type Shares struct {
 	Etag string
 }
 
-// UnmarshalJSON overrides the default unmarshaling
-// Shares are tricky to unmarshal because they contain an interface (Grantee) which makes the json Unmarshal bail out
-// To work around that problem we unmarshal into json.RawMessage in a first step and then try to manually unmarshal
-// into the specific types in a second step.
+// UnmarshalJSON reads the space document in one pass.
+//
+// A share has a Grantee with an interface field (the oneof Id). The standard
+// decoder cannot fill an interface. The decoder of a Grantee reads the type and
+// the Id of the grantee and builds the oneof wrapper from them. All other fields
+// of the share use the standard code.
+//
+// The decoder uses the options of encoding/json v1. It gives the same result as
+// the old decoder, which made up to three passes for each share. The golden files
+// in testdata/golden and the fuzz test protect this.
+//
+// The decoder does not read the "Etag" field of the file. The etag comes from the
+// response of the storage.
 func (s *Shares) UnmarshalJSON(data []byte) error {
-	tmp := struct {
-		Shares map[string]json.RawMessage
-	}{}
-
-	err := json.Unmarshal(data, &tmp)
+	d, err := decodeShares(data)
 	if err != nil {
 		return err
 	}
+	s.Shares = d.Shares
+	return nil
+}
 
-	s.Shares = make(map[string]*collaboration.Share, len(tmp.Shares))
-	for id, genericShare := range tmp.Shares {
-		userShare := &collaboration.Share{
-			Grantee: &provider.Grantee{Id: &provider.Grantee_UserId{}},
+// decodeShares reads the space document. The cache calls it directly. A call of
+// json.Unmarshal reads the document one more time before it calls UnmarshalJSON.
+func decodeShares(data []byte) (*Shares, error) {
+	tmp := struct {
+		Shares map[string]*collaboration.Share
+	}{}
+	if err := jsonv2.Unmarshal(data, &tmp, decodeOptions); err != nil {
+		return nil, err
+	}
+	for id, sh := range tmp.Shares {
+		if sh == nil {
+			tmp.Shares[id] = &collaboration.Share{} // a null share is an empty share, not a nil share
 		}
-		err = json.Unmarshal(genericShare, userShare) // is this a user share?
-		if err == nil && userShare.Grantee.Type == provider.GranteeType_GRANTEE_TYPE_USER {
-			s.Shares[id] = userShare
-			continue
-		}
+	}
+	if tmp.Shares == nil {
+		tmp.Shares = map[string]*collaboration.Share{}
+	}
+	return &Shares{Shares: tmp.Shares}, nil
+}
 
-		groupShare := &collaboration.Share{
-			Grantee: &provider.Grantee{Id: &provider.Grantee_GroupId{}},
-		}
-		err = json.Unmarshal(genericShare, groupShare) // is this a group share?
-		if err == nil && groupShare.Grantee.Type == provider.GranteeType_GRANTEE_TYPE_GROUP {
-			s.Shares[id] = groupShare
-			continue
-		}
+var decodeOptions = jsonv2.JoinOptions(
+	jsonv1.DefaultOptionsV1(),
+	jsonv2.WithUnmarshalers(jsonv2.UnmarshalFromFunc(unmarshalGrantee)),
+)
 
-		invalidShare := &collaboration.Share{}
-		err = json.Unmarshal(genericShare, invalidShare) // invalid
-		if err == nil {
-			s.Shares[id] = invalidShare
-			continue
-		}
-
+// unmarshalGrantee reads a Grantee, with the oneof Id.
+//
+//   - Type USER or GROUP always sets the wrapper of the oneof, also when the
+//     Id is missing. An Id with the value null sets no wrapper.
+//   - A different type has no Id. A value other than null for Id is an error,
+//     as in the old decoder.
+func unmarshalGrantee(dec *jsontext.Decoder, g *provider.Grantee) error {
+	var raw struct {
+		Type   provider.GranteeType `json:"type"`
+		Id     jsontext.Value       `json:"Id"`
+		Opaque *types.Opaque        `json:"opaque"`
+	}
+	if err := jsonv2.UnmarshalDecode(dec, &raw, dec.Options()); err != nil {
 		return err
 	}
+	g.Type = raw.Type
+	g.Opaque = raw.Opaque
+	g.Id = nil
 
+	hasID := len(raw.Id) > 0 && raw.Id.Kind() != 'n'
+	switch raw.Type {
+	case provider.GranteeType_GRANTEE_TYPE_USER:
+		w := &provider.Grantee_UserId{}
+		if hasID {
+			var id struct {
+				UserId *userv1beta1.UserId
+			}
+			if err := jsonv2.Unmarshal(raw.Id, &id, dec.Options()); err != nil {
+				return err
+			}
+			w.UserId = id.UserId
+		}
+		if len(raw.Id) == 0 || hasID {
+			g.Id = w
+		}
+	case provider.GranteeType_GRANTEE_TYPE_GROUP:
+		w := &provider.Grantee_GroupId{}
+		if hasID {
+			var id struct {
+				GroupId *groupv1beta1.GroupId
+			}
+			if err := jsonv2.Unmarshal(raw.Id, &id, dec.Options()); err != nil {
+				return err
+			}
+			w.GroupId = id.GroupId
+		}
+		if len(raw.Id) == 0 || hasID {
+			g.Id = w
+		}
+	default:
+		if hasID {
+			return fmt.Errorf("providercache: a grantee of type %d has no Id", raw.Type)
+		}
+	}
 	return nil
 }
 
@@ -126,17 +188,11 @@ var codec = docstore.Codec[Shares]{
 		}
 		return c
 	},
-	Decode: func(data []byte) (*Shares, error) {
-		s := &Shares{}
-		if err := json.Unmarshal(data, s); err != nil {
-			return nil, err
-		}
-		return s, nil
-	},
+	Decode: decodeShares,
 	Encode: func(s *Shares, etag string) ([]byte, error) {
 		c := *s
 		c.Etag = etag
-		return json.Marshal(&c)
+		return jsonv1.Marshal(&c)
 	},
 	SetEtag: func(s *Shares, etag string) { s.Etag = etag },
 }
