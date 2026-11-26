@@ -605,3 +605,115 @@ func TestGetAfterAnUpdateDoesNotJoinAnOlderRead(t *testing.T) {
 	close(gate.release)
 	<-readDone
 }
+
+// ttlStore returns a store with a TTL and a clock that the test controls.
+func ttlStore(p *probe, ttl time.Duration, now *time.Time) *docstore.Store[set] {
+	return docstore.New(p, setCodec, docstore.Options{TTL: ttl, Now: func() time.Time { return *now }})
+}
+
+func (p *probe) downloads() int32 { return p.dl200.Load() + p.dl304.Load() + p.dl404.Load() }
+
+func TestGetWithinTheTTLMakesNoDownload(t *testing.T) {
+	p := newProbe()
+	now := time.Now()
+	s := ttlStore(p, time.Minute, &now)
+	require.NoError(t, s.Update(context.Background(), docPath, add("a")))
+	_, err := s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	before := p.downloads()
+
+	now = now.Add(30 * time.Second)
+	e, err := s.Get(context.Background(), docPath)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a"}, keys(e.Doc))
+	assert.Equal(t, before, p.downloads(), "a read inside the TTL needs no download")
+}
+
+func TestGetAfterTheTTLChecksTheStorageAgain(t *testing.T) {
+	p := newProbe()
+	now := time.Now()
+	s := ttlStore(p, time.Minute, &now)
+	require.NoError(t, s.Update(context.Background(), docPath, add("a")))
+	other := newStore(p)
+	require.NoError(t, other.Update(context.Background(), docPath, add("b")))
+
+	now = now.Add(30 * time.Second)
+	e, err := s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a"}, keys(e.Doc), "another pod wrote, this pod sees it up to the TTL later")
+
+	now = now.Add(31 * time.Second)
+	e, err = s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, keys(e.Doc), "after the TTL")
+}
+
+func TestWriterReadsItsOwnWriteInsideTheTTL(t *testing.T) {
+	p := newProbe()
+	now := time.Now()
+	s := ttlStore(p, time.Minute, &now)
+	require.NoError(t, s.Update(context.Background(), docPath, add("a")))
+	_, err := s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	before := p.downloads()
+
+	require.NoError(t, s.Update(context.Background(), docPath, add("b")))
+	e, err := s.Get(context.Background(), docPath)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, keys(e.Doc))
+	assert.Equal(t, before, p.downloads(), "the write published the new entry")
+}
+
+// An Unshare on pod A removes an item. Pod B has the old document in its entry,
+// and the TTL is not over. The removal on pod B must still find the file state,
+// and the entry of pod B must show the removal afterwards.
+func TestUpdateWithNoChangeOnAStaleBaseFixesTheEntryInsideTheTTL(t *testing.T) {
+	p := newProbe()
+	now := time.Now()
+	podA, podB := ttlStore(p, time.Minute, &now), ttlStore(p, time.Minute, &now)
+	require.NoError(t, podA.Update(context.Background(), docPath, add("x", "ghost")))
+	_, err := podB.Get(context.Background(), docPath) // B caches {x, ghost}
+	require.NoError(t, err)
+	require.NoError(t, podA.Update(context.Background(), docPath, remove("ghost")))
+
+	require.NoError(t, podB.Update(context.Background(), docPath, remove("ghost"))) // no change on the stale base
+
+	now = now.Add(time.Second)
+	e, err := podB.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"x"}, keys(e.Doc), "the fresh download of the update fixed the entry")
+}
+
+func TestWithoutATTLEachGetChecksTheStorage(t *testing.T) {
+	p := newProbe()
+	s := newStore(p)
+	require.NoError(t, s.Update(context.Background(), docPath, add("a")))
+	before := p.downloads()
+
+	_, err := s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	_, err = s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 2, p.downloads()-before)
+}
+
+func TestAFailedReadInsideTheTTLWindowDoesNotExtendTheEntry(t *testing.T) {
+	p := newProbe()
+	now := time.Now()
+	s := ttlStore(p, time.Minute, &now)
+	require.NoError(t, s.Update(context.Background(), docPath, add("a")))
+
+	now = now.Add(2 * time.Minute) // the TTL is over
+	setErr(&p.failDownload, errtypes.PermissionDenied("no"))
+	_, err := s.Get(context.Background(), docPath)
+	require.Error(t, err)
+	setErr(&p.failDownload, nil)
+	before := p.downloads()
+
+	_, err = s.Get(context.Background(), docPath)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, p.downloads()-before, "the failed read did not renew the TTL")
+}

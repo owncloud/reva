@@ -163,7 +163,11 @@ type config struct {
 	ServiceUserID     string `mapstructure:"service_user_id"`
 	ServiceUserIdp    string `mapstructure:"service_user_idp"`
 	MachineAuthAPIKey string `mapstructure:"machine_auth_apikey"`
-	CacheTTL          int    `mapstructure:"ttl"`
+	CacheTTL          int    `mapstructure:"ttl"` // does nothing, see GroupCacheTTL
+	// GroupCacheTTL is the time in seconds for which a pod trusts the cached
+	// document of a group. Zero, the default, makes each listing check the
+	// storage.
+	GroupCacheTTL int `mapstructure:"group_cache_ttl"`
 	// ListTimeout is the time budget of ListReceivedShares in seconds. Zero
 	// selects the default. A negative value switches the budget off.
 	ListTimeout int `mapstructure:"list_timeout"`
@@ -260,7 +264,11 @@ func NewDefault(m map[string]interface{}) (share.Manager, error) {
 		}
 	}
 
-	m2, err := New(s, gatewaySelector, c.CacheTTL, es, c.MaxConcurrency)
+	var opts []Option
+	if c.GroupCacheTTL > 0 {
+		opts = append(opts, WithGroupCacheTTL(time.Duration(c.GroupCacheTTL)*time.Second))
+	}
+	m2, err := New(s, gatewaySelector, c.CacheTTL, es, c.MaxConcurrency, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -279,15 +287,41 @@ func NewDefault(m map[string]interface{}) (share.Manager, error) {
 	return m2, nil
 }
 
+// options holds the settings of New.
+type options struct {
+	groupCacheTTL time.Duration
+}
+
+// Option changes a setting of New.
+type Option func(*options)
+
+// WithGroupCacheTTL sets the time for which a pod trusts the cached document of
+// a group without a download. A new group share shows on other pods up to this
+// time later. The pod that creates the share sees it at once. An Unshare on
+// another pod leaves the ID in the cached document for up to this time. The
+// listing then notes a suspect, and the cleanup finds the document clean.
+// Zero, the default, makes each listing check the storage.
+func WithGroupCacheTTL(ttl time.Duration) Option {
+	return func(o *options) { o.groupCacheTTL = ttl }
+}
+
 // New returns a new manager instance.
-func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient], ttlSeconds int, es events.Stream, maxconcurrency int) (*Manager, error) {
-	ttl := time.Duration(ttlSeconds) * time.Second
+//
+// ttlSeconds is the old setting "ttl". It does nothing. Use WithGroupCacheTTL.
+func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient], _ int, es events.Stream, maxconcurrency int, opts ...Option) (*Manager, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	var ttl time.Duration // the old setting "ttl" does nothing
 
 	m := &Manager{
 		Cache:              providercache.New(s, ttl),
 		CreatedCache:       sharecache.New(s, "users", "created.json", ttl),
 		UserReceivedStates: receivedsharecache.New(s, ttl),
-		GroupReceivedCache: sharecache.New(s, "groups", "received.json", ttl),
+		// Only the group documents get a TTL. The document of a user must not
+		// have one: a share that a user accepted could show as pending on another pod.
+		GroupReceivedCache: sharecache.New(s, "groups", "received.json", o.groupCacheTTL),
 		storage:            s,
 		gatewaySelector:    gatewaySelector,
 		eventStream:        es,

@@ -105,10 +105,14 @@ var codec = docstore.Codec[UserShareCache]{
 	SetEtag: func(u *UserShareCache, etag string) { u.Etag = etag },
 }
 
-// New returns a new Cache instance. The ttl is not used.
-func New(s metadata.Storage, namespace, filename string, _ time.Duration) Cache {
+// New returns a new Cache instance. With a ttl, a read trusts the cached
+// document of a user or group for that time and makes no download. A write of
+// this pod updates the cache at once. Other pods see a change up to the ttl
+// later. Zero means that each read checks the storage.
+func New(s metadata.Storage, namespace, filename string, ttl time.Duration) Cache {
 	return Cache{
 		store: docstore.New(s, codec, docstore.Options{
+			TTL:    ttl,
 			Tracer: func(ctx context.Context) trace.Tracer { return appctx.GetTracerProvider(ctx).Tracer(tracerName) },
 			PathAttrs: func(p string) []attribute.KeyValue {
 				return []attribute.KeyValue{attribute.String("cs3.userid", path.Base(path.Dir(p)))}

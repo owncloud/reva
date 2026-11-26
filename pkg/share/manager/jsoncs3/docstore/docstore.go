@@ -82,6 +82,13 @@ type Options struct {
 	PathAttrs func(path string) []attribute.KeyValue
 	// ReadTimeout limits a shared download.
 	ReadTimeout time.Duration
+	// TTL is the time that a read trusts its entry without a download. Zero
+	// means that each read checks the storage. A write on this pod publishes
+	// its entry at once, so a pod reads its own writes. Other pods see a change
+	// up to the TTL later.
+	TTL time.Duration
+	// Now returns the time for the TTL. Tests replace it.
+	Now func() time.Time
 }
 
 // Store holds the documents of one kind.
@@ -92,6 +99,9 @@ type Store[T any] struct {
 
 	mu      sync.RWMutex
 	entries map[string]*Entry[T]
+	// checked holds the time of the last proof that the entry matches the
+	// storage: a download, or a write of this pod. It is only used with a TTL.
+	checked map[string]time.Time
 
 	locks   sync.Map // path -> *sync.Mutex, only for writers
 	flights singleflight.Group
@@ -99,7 +109,7 @@ type Store[T any] struct {
 
 // New returns a store for the documents of one kind.
 func New[T any](storage metadata.Storage, codec Codec[T], opts ...Options) *Store[T] {
-	s := &Store[T]{storage: storage, codec: codec, entries: map[string]*Entry[T]{}}
+	s := &Store[T]{storage: storage, codec: codec, entries: map[string]*Entry[T]{}, checked: map[string]time.Time{}}
 	if len(opts) > 0 {
 		s.opts = opts[0]
 	}
@@ -127,7 +137,29 @@ func (s *Store[T]) publish(p string, start, next *Entry[T]) bool {
 		return false
 	}
 	s.entries[p] = next
+	s.checked[p] = s.now()
 	return true
+}
+
+func (s *Store[T]) now() time.Time {
+	if s.opts.Now != nil {
+		return s.opts.Now()
+	}
+	return time.Now()
+}
+
+// fresh returns the entry of the path when it is inside the TTL.
+func (s *Store[T]) fresh(p string) *Entry[T] {
+	if s.opts.TTL <= 0 {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e := s.entries[p]
+	if e == nil || s.now().Sub(s.checked[p]) >= s.opts.TTL {
+		return nil
+	}
+	return e
 }
 
 // Peek returns the published entry of the path without a download. It returns
@@ -156,6 +188,9 @@ func (s *Store[T]) startSpan(ctx context.Context, name, p string) (context.Conte
 // Parallel reads of one path that start from the same entry share one download. Each caller waits with its
 // own context. The shared download does not end when one caller leaves.
 func (s *Store[T]) Get(ctx context.Context, p string) (*Entry[T], error) {
+	if e := s.fresh(p); e != nil {
+		return e, nil
+	}
 	start := s.load(p)
 	// The key holds the entry that the read starts from. A read that starts
 	// after a write has a newer entry, so it does not join an older read that
@@ -315,6 +350,7 @@ func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (change
 			return err
 		}
 		fresh = true
+		start = s.adopt(p, start, base)
 	}
 
 	bo := cas.NewBackoff()
@@ -335,6 +371,7 @@ func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (change
 				return err
 			}
 			fresh = true
+			start = s.adopt(p, start, base)
 			continue
 		}
 
@@ -351,6 +388,7 @@ func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (change
 				return err
 			}
 			fresh = true
+			start = s.adopt(p, start, base)
 		case cas.IsTransientGRPCStatus(uerr):
 			span.AddEvent("transient error, retry")
 		default:
@@ -361,6 +399,16 @@ func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (change
 		}
 	}
 	return fmt.Errorf("docstore: giving up after %d tries: %s", maxWriteAttempts, p)
+}
+
+// adopt publishes an entry that a write downloaded, when the entry is newer
+// than the published one. A stale entry then does not stay until the TTL is
+// over. It returns the entry that the later publish must start from.
+func (s *Store[T]) adopt(p string, start, fresh *Entry[T]) *Entry[T] {
+	if fresh == start || !s.publish(p, start, fresh) {
+		return start
+	}
+	return fresh
 }
 
 // upload writes doc with the etag condition of base.

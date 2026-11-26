@@ -356,3 +356,38 @@ func (s *spaceNotFoundStorage) Download(ctx context.Context, req metadata.Downlo
 	}
 	return s.Storage.Download(ctx, req)
 }
+
+// With a group TTL, a listing trusts the cached document of a group. The
+// document of the user is never cached this way, or a share that a user accepted
+// could show as pending on another pod.
+func TestGroupCacheTTLAppliesToGroupDocumentsOnly(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
+	groupDl := &countingDownloadStorage{Storage: f.storage, path: "/groups/group1/received.json"}
+	userDl := &countingDownloadStorage{Storage: groupDl, path: "/users/einstein/received.json"}
+	m, err := New(userDl, nil, 0, nopStream{}, 0, WithGroupCacheTTL(time.Hour))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	for i := 0; i < 3; i++ {
+		g.Expect(receivedIDs(t, m, "einstein", "group1")).To(HaveLen(1))
+	}
+
+	g.Expect(atomic.LoadInt32(&groupDl.downloads)).To(Equal(int32(1)), "the group document is read once")
+	g.Expect(atomic.LoadInt32(&userDl.downloads)).To(Equal(int32(3)), "the user document is read in each listing")
+}
+
+func TestWithoutAGroupCacheTTLEachListingReadsTheGroupDocument(t *testing.T) {
+	g := NewWithT(t)
+	f := newBatchFixture(t)
+	f.share(t, ctxOf("admin"), 0, groupGrantee("group1"), nil)
+	groupDl := &countingDownloadStorage{Storage: f.storage, path: "/groups/group1/received.json"}
+	m, err := New(groupDl, nil, 30, nopStream{}, 0) // the old ttl setting does nothing
+	g.Expect(err).ToNot(HaveOccurred())
+
+	for i := 0; i < 3; i++ {
+		g.Expect(receivedIDs(t, m, "einstein", "group1")).To(HaveLen(1))
+	}
+
+	g.Expect(atomic.LoadInt32(&groupDl.downloads)).To(Equal(int32(3)))
+}
