@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	collaboration "github.com/cs3org/go-cs3apis/cs3/sharing/collaboration/v1beta1"
+	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -55,6 +56,13 @@ func compareWithLegacy(t testing.TB, data []byte) {
 		_ = json.Unmarshal(data, &s)
 		return
 	}
+	compareDecoders(t, data)
+}
+
+// compareDecoders compares the new decoder with the legacy decoder. It does not
+// skip an input with a duplicate member name.
+func compareDecoders(t testing.TB, data []byte) {
+	t.Helper()
 	var got Shares
 	gotErr := json.Unmarshal(data, &got)
 	// The cache calls decodeShares. Both paths must agree.
@@ -200,4 +208,38 @@ func spaceDocument(tb testing.TB, n int) []byte {
 		tb.Fatal(err)
 	}
 	return data
+}
+
+// A member name that comes two times is not written by any pod. A person can
+// edit a file that way. The fuzz test skips such input, so this test pins the
+// cases. Five cases give the result of the legacy decoder. One case differs
+// and is accepted: see section 12.5 of the design.
+func TestDecoderDuplicateMembers(t *testing.T) {
+	same := map[string]string{
+		"two Id objects, the last wins":    `{"Shares":{"a":{"grantee":{"type":1,"Id":{"UserId":{"opaque_id":"u1"}},"Id":{"UserId":{"opaque_id":"u2"}}}}}}`,
+		"Id object, then null":             `{"Shares":{"a":{"grantee":{"type":1,"Id":{"UserId":{"opaque_id":"u1"}},"Id":null}}}}`,
+		"type two times":                   `{"Shares":{"a":{"grantee":{"type":1,"type":2,"Id":{"GroupId":{"opaque_id":"g"}}}}}}`,
+		"UserId two times, members merge":  `{"Shares":{"a":{"grantee":{"type":1,"Id":{"UserId":{"opaque_id":"u1"},"UserId":{"idp":"i"}}}}}}`,
+		"grantee two times, the last wins": `{"Shares":{"a":{"grantee":{"type":1,"Id":{"UserId":{"opaque_id":"u1"}}},"grantee":{"type":2,"Id":{"GroupId":{"opaque_id":"g"}}}}}}`,
+	}
+	for name, in := range same {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, hasDuplicateNames([]byte(in)), "the input must have a duplicate member")
+			compareDecoders(t, []byte(in))
+		})
+	}
+
+	t.Run("Id two times, the first value has a wrong type: the known difference", func(t *testing.T) {
+		in := []byte(`{"Shares":{"a":{"grantee":{"type":1,"Id":0,"Id":{}}}}}`)
+		require.True(t, hasDuplicateNames(in))
+
+		_, legacyErr, panicked := legacyOutcome(in)
+		assert.False(t, panicked)
+		assert.Error(t, legacyErr, "the legacy decoder fails the whole document")
+
+		var s Shares
+		require.NoError(t, json.Unmarshal(in, &s), "the new decoder ignores the first value")
+		require.Contains(t, s.Shares, "a")
+		assert.Equal(t, provider.GranteeType_GRANTEE_TYPE_USER, s.Shares["a"].GetGrantee().GetType())
+	})
 }
