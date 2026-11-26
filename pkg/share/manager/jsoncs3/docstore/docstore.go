@@ -134,29 +134,6 @@ func (s *Store[T]) publish(p string, start, next *Entry[T]) bool {
 // nil when the store has no entry.
 func (s *Store[T]) Peek(p string) *Entry[T] { return s.load(p) }
 
-// Forget drops the entry of the path. The next call reads the document again.
-func (s *Store[T]) Forget(p string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.entries, p)
-}
-
-// Range calls f for each published entry. It stops when f returns false. f
-// must not call the store.
-func (s *Store[T]) Range(f func(path string, e *Entry[T]) bool) {
-	s.mu.RLock()
-	entries := make(map[string]*Entry[T], len(s.entries))
-	for p, e := range s.entries {
-		entries[p] = e
-	}
-	s.mu.RUnlock()
-	for p, e := range entries {
-		if !f(p, e) {
-			return
-		}
-	}
-}
-
 func (s *Store[T]) tracer(ctx context.Context) trace.Tracer {
 	if s.opts.Tracer != nil {
 		return s.opts.Tracer(ctx)
