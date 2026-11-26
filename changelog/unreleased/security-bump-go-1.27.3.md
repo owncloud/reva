@@ -1,6 +1,6 @@
-Security: Build with Go 1.27.3
+Security: Build with a newer Go version
 
-We've raised the Go version to 1.27.3. This version fixes CVE-2026-78667,
-CVE-2026-78669 and CVE-2026-111943 in the Go standard library.
+We've raised the Go version to 1.27.3. This version fixes security issues in
+the Go standard library.
 
 https://github.com/owncloud/reva/pull/856
