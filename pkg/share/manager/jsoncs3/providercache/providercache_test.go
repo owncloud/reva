@@ -633,27 +633,22 @@ var _ = Describe("Cache", func() {
 			Expect(atomic.LoadInt32(&bs.Downloads)).To(Equal(int32(1)), "the canceled waiter must not download")
 		})
 
-		It("abandons LockSpace, Add, Get, Remove, RemoveMany, Update and PurgeSpace once the context is done", func() {
+		It("abandons Add, Get, Remove, RemoveMany, Update and PurgeSpace once the context is done", func() {
 			bs := helpers.NewBlockingDownloadStorage(storage)
 			defer close(bs.Release)
 			c2 := providercache.New(bs, 0*time.Second)
 
+			// In this design, a read takes no lock. The holder is a writer that parks in its
+			// first download and holds the write lock of the document.
 			go func() {
 				defer GinkgoRecover()
-				_, _ = c2.ListSpace(ctx, storageID, spaceID)
+				_ = c2.Add(ctx, storageID, spaceID, "storageid$spaceid!holder", share1)
 			}()
 			Eventually(bs.Entered, 2*time.Second).Should(Receive())
 
 			cctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 			defer cancel()
 			calls := []func() error{
-				func() error {
-					unlock, err := c2.LockSpace(cctx, spaceID)
-					if unlock != nil {
-						unlock()
-					}
-					return err
-				},
 				func() error {
 					return c2.Add(cctx, storageID, spaceID, shareID, share1)
 				},

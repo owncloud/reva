@@ -717,3 +717,40 @@ func TestAFailedReadInsideTheTTLWindowDoesNotExtendTheEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, p.downloads()-before, "the failed read did not renew the TTL")
 }
+
+// A writer that waits for the write lock of a path leaves with the error of its
+// context. A slow writer must not keep the requests behind it parked after the
+// client gave up.
+func TestWriterWaitingForTheLockLeavesWhenItsContextIsDone(t *testing.T) {
+	p := newProbe()
+	s := newStore(p)
+	gate := p.holdDownloads() // the first writer parks in its first download and holds the lock
+	defer close(gate.release)
+	go func() { _ = s.Update(context.Background(), docPath, add("a")) }()
+	<-gate.reached
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Update(ctx, docPath, add("b")) }()
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the writer is still parked on the lock after its context expired")
+	}
+	assert.EqualValues(t, 0, p.uploads.Load(), "the abandoned writer must not upload")
+}
+
+func TestGetWithADoneContextMakesNoDownload(t *testing.T) {
+	p := newProbe()
+	s := newStore(p)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := s.Get(ctx, docPath)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.EqualValues(t, 0, p.downloads())
+}

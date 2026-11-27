@@ -30,6 +30,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/cas"
+	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/keylock"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
 
@@ -103,7 +104,7 @@ type Store[T any] struct {
 	// storage: a download, or a write of this pod. It is only used with a TTL.
 	checked map[string]time.Time
 
-	locks   sync.Map // path -> *sync.Mutex, only for writers
+	locks   keylock.Map // one lock for each path, only for writers
 	flights singleflight.Group
 }
 
@@ -188,6 +189,10 @@ func (s *Store[T]) startSpan(ctx context.Context, name, p string) (context.Conte
 // Parallel reads of one path that start from the same entry share one download. Each caller waits with its
 // own context. The shared download does not end when one caller leaves.
 func (s *Store[T]) Get(ctx context.Context, p string) (*Entry[T], error) {
+	// A caller whose context is done never starts a download.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if e := s.fresh(p); e != nil {
 		return e, nil
 	}
@@ -293,19 +298,17 @@ func wait(ctx context.Context, d time.Duration) error {
 
 // lock waits for the write lock of the path. The lock only lowers the number
 // of conflicts between writers of the same pod. Correctness does not depend on
-// it. Readers never take it.
-func (s *Store[T]) lock(ctx context.Context, p string) func() {
-	v, _ := s.locks.LoadOrStore(p, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
+// it. Readers never take it. A caller that waits for the lock leaves with the
+// error of its context, so a request that the client has given up does not
+// stay parked behind a slow writer.
+func (s *Store[T]) lock(ctx context.Context, p string) (func(), error) {
 	// A lock span is only useful under a recorded parent span.
 	if !trace.SpanFromContext(ctx).IsRecording() {
-		mu.Lock()
-		return mu.Unlock
+		return s.locks.Lock(ctx, p)
 	}
 	_, span := s.startSpan(ctx, "Grab lock", p)
-	mu.Lock()
-	span.End()
-	return mu.Unlock
+	defer span.End()
+	return s.locks.Lock(ctx, p)
 }
 
 // Update changes the document with fn.
@@ -328,7 +331,10 @@ func (s *Store[T]) lock(ctx context.Context, p string) func() {
 func (s *Store[T]) Update(ctx context.Context, p string, fn func(doc *T) (changed bool, err error)) (err error) {
 	// The lock span is a child of the span of the caller. The wait is not
 	// part of the Persist span.
-	unlock := s.lock(ctx, p)
+	unlock, err := s.lock(ctx, p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	ctx, span := s.startSpan(ctx, "Persist", p)
@@ -439,7 +445,10 @@ func (s *Store[T]) upload(ctx context.Context, p string, base *Entry[T], doc *T)
 // nothing when the document exists. A conflict with another creator is no
 // error.
 func (s *Store[T]) Create(ctx context.Context, p string) error {
-	unlock := s.lock(ctx, p)
+	unlock, err := s.lock(ctx, p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	start := s.load(p)
