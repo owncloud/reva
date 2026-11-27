@@ -207,9 +207,10 @@ func TestSpaceDeletedEventRemovesTheGroupShares(t *testing.T) {
 	g.Expect(f.uploadsPerListing(t, 3)).To(Equal([]int32{0, 0, 0}))
 }
 
-// The stale group entry that a failed purge leaves must go away on the first
-// listing. Before, each listing uploaded received.json again, with no end.
-func TestSpaceDeletedEventWithAFailedGroupWriteIsCleanedOnTheFirstListing(t *testing.T) {
+// The stale group entry that a failed purge leaves must go away in the first
+// cleanup run. The listings do not write. Before, each listing uploaded
+// received.json again, with no end.
+func TestSpaceDeletedEventWithAFailedGroupWriteIsCleanedByTheFirstCleanupRun(t *testing.T) {
 	g := NewWithT(t)
 	f := newPurgeFixture(t)
 	f.m.StaleShareGracePeriod = 0 // this test checks the cleanup, not the grace period
@@ -222,8 +223,13 @@ func TestSpaceDeletedEventWithAFailedGroupWriteIsCleanedOnTheFirstListing(t *tes
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(group["storageid:spaceid"].IDs).To(HaveKey(f.share.Id.OpaqueId), "the failed purge leaves the group entry")
 
-	// The first listing rewrites the group file once. The next listings do no uploads.
-	g.Expect(f.uploadsPerListing(t, 3)).To(Equal([]int32{1, 0, 0}))
+	// The listings do no uploads. The first cleanup run rewrites the group file once.
+	g.Expect(f.uploadsPerListing(t, 3)).To(Equal([]int32{0, 0, 0}))
+	before := atomic.LoadInt32(&f.cs.Uploads)
+	f.m.CleanupSuspects(f.ctx)
+	g.Expect(atomic.LoadInt32(&f.cs.Uploads) - before).To(Equal(int32(1)))
+	f.m.CleanupSuspects(f.ctx)
+	g.Expect(atomic.LoadInt32(&f.cs.Uploads)-before).To(Equal(int32(1)), "the second run has nothing to do")
 
 	group, err = f.fresh(t).GroupReceivedCache.List(f.ctx, "group1")
 	g.Expect(err).ToNot(HaveOccurred())

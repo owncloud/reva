@@ -121,6 +121,9 @@ const tracerName = "jsoncs3"
 // common cause of the failure. It is a variable, so the tests can make it short.
 var rollbackTimeout = 30 * time.Second
 
+// defaultListTimeout is the default of Manager.ListTimeout.
+const defaultListTimeout = 10 * time.Second
+
 // defaultStaleShareGracePeriod is the default of Manager.StaleShareGracePeriod.
 // An older version writes the grantee entry and the share at the same time.
 // During a rolling upgrade, a listing can find the grantee entry before the
@@ -154,14 +157,25 @@ var (
 )
 
 type config struct {
-	GatewayAddr       string       `mapstructure:"gateway_addr"`
-	MaxConcurrency    int          `mapstructure:"max_concurrency"`
-	ProviderAddr      string       `mapstructure:"provider_addr"`
-	ServiceUserID     string       `mapstructure:"service_user_id"`
-	ServiceUserIdp    string       `mapstructure:"service_user_idp"`
-	MachineAuthAPIKey string       `mapstructure:"machine_auth_apikey"`
-	CacheTTL          int          `mapstructure:"ttl"`
-	Events            EventOptions `mapstructure:"events"`
+	GatewayAddr       string `mapstructure:"gateway_addr"`
+	MaxConcurrency    int    `mapstructure:"max_concurrency"`
+	ProviderAddr      string `mapstructure:"provider_addr"`
+	ServiceUserID     string `mapstructure:"service_user_id"`
+	ServiceUserIdp    string `mapstructure:"service_user_idp"`
+	MachineAuthAPIKey string `mapstructure:"machine_auth_apikey"`
+	CacheTTL          int    `mapstructure:"ttl"` // does nothing, see GroupCacheTTL
+	// GroupCacheTTL is the time in seconds for which a pod trusts the cached
+	// document of a group. Zero, the default, makes each listing check the
+	// storage.
+	GroupCacheTTL int `mapstructure:"group_cache_ttl"`
+	// ListTimeout is the time budget of ListReceivedShares in seconds. Zero
+	// selects the default. A negative value switches the budget off.
+	ListTimeout int `mapstructure:"list_timeout"`
+	// CleanupInterval is the time in seconds between two runs of the loop that
+	// removes stale and expired shares. Zero selects the default of one
+	// minute. A negative value switches the loop off.
+	CleanupInterval int          `mapstructure:"cleanup_interval"`
+	Events          EventOptions `mapstructure:"events"`
 }
 
 // EventOptions are the configurable options for events
@@ -193,20 +207,32 @@ type Manager struct {
 
 	MaxConcurrency int
 
+	// ListTimeout is the total time budget of ListReceivedShares. Zero means no
+	// budget. When the budget is over, the listing returns an error.
+	ListTimeout time.Duration
+
 	// StaleShareGracePeriod is the time that a pod waits before it removes a
 	// stale grantee entry. Zero removes the entry at the first listing.
 	StaleShareGracePeriod time.Duration
 
-	// staleSince holds the times when this pod found each stale share.
-	staleMu    sync.Mutex
-	staleSince map[string]staleSeen
-	// staleForgetAfter is the time after which this pod forgets a stale share
-	// that no listing found again. It limits the size of staleSince.
+	// suspects holds the shares that a listing found and could not use.
+	suspects suspectList
+	// suspectLimit is the size limit of the suspect list. Zero selects the default.
+	suspectLimit int
+	// staleForgetAfter is the time after which this pod forgets a suspect that
+	// no listing found again. It limits the size of the suspect list.
 	staleForgetAfter time.Duration
-	// staleLastSweep is the time of the last sweep of staleSince.
-	staleLastSweep time.Time
 	// staleClock gives the time for the grace period. Nil means time.Now.
 	staleClock func() time.Time
+
+	// CleanupInterval is the time between two runs of the background loop that
+	// works through the suspects. It decides the delay of the ShareExpired
+	// event. Zero or less switches the loop off.
+	CleanupInterval time.Duration
+	loopOnce        sync.Once
+	closeOnce       sync.Once
+	loopCancel      context.CancelFunc
+	loopDone        chan struct{}
 
 	gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient]
 	eventStream     events.Stream
@@ -238,25 +264,72 @@ func NewDefault(m map[string]interface{}) (share.Manager, error) {
 		}
 	}
 
-	return New(s, gatewaySelector, c.CacheTTL, es, c.MaxConcurrency)
+	var opts []Option
+	if c.GroupCacheTTL > 0 {
+		opts = append(opts, WithGroupCacheTTL(time.Duration(c.GroupCacheTTL)*time.Second))
+	}
+	m2, err := New(s, gatewaySelector, c.CacheTTL, es, c.MaxConcurrency, opts...)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case c.ListTimeout > 0:
+		m2.ListTimeout = time.Duration(c.ListTimeout) * time.Second
+	case c.ListTimeout < 0:
+		m2.ListTimeout = 0
+	}
+	switch {
+	case c.CleanupInterval > 0:
+		m2.CleanupInterval = time.Duration(c.CleanupInterval) * time.Second
+	case c.CleanupInterval < 0:
+		m2.CleanupInterval = 0
+	}
+	return m2, nil
+}
+
+// options holds the settings of New.
+type options struct {
+	groupCacheTTL time.Duration
+}
+
+// Option changes a setting of New.
+type Option func(*options)
+
+// WithGroupCacheTTL sets the time for which a pod trusts the cached document of
+// a group without a download. A new group share shows on other pods up to this
+// time later. The pod that creates the share sees it at once. An Unshare on
+// another pod leaves the ID in the cached document for up to this time. The
+// listing then notes a suspect, and the cleanup finds the document clean.
+// Zero, the default, makes each listing check the storage.
+func WithGroupCacheTTL(ttl time.Duration) Option {
+	return func(o *options) { o.groupCacheTTL = ttl }
 }
 
 // New returns a new manager instance.
-func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient], ttlSeconds int, es events.Stream, maxconcurrency int) (*Manager, error) {
-	ttl := time.Duration(ttlSeconds) * time.Second
+//
+// ttlSeconds is the old setting "ttl". It does nothing. Use WithGroupCacheTTL.
+func New(s metadata.Storage, gatewaySelector pool.Selectable[gatewayv1beta1.GatewayAPIClient], _ int, es events.Stream, maxconcurrency int, opts ...Option) (*Manager, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	var ttl time.Duration // the old setting "ttl" does nothing
 
 	m := &Manager{
 		Cache:              providercache.New(s, ttl),
 		CreatedCache:       sharecache.New(s, "users", "created.json", ttl),
 		UserReceivedStates: receivedsharecache.New(s, ttl),
-		GroupReceivedCache: sharecache.New(s, "groups", "received.json", ttl),
+		// Only the group documents get a TTL. The document of a user must not
+		// have one: a share that a user accepted could show as pending on another pod.
+		GroupReceivedCache: sharecache.New(s, "groups", "received.json", o.groupCacheTTL),
 		storage:            s,
 		gatewaySelector:    gatewaySelector,
 		eventStream:        es,
 		MaxConcurrency:     maxconcurrency,
+		ListTimeout:        defaultListTimeout,
 
 		StaleShareGracePeriod: defaultStaleShareGracePeriod,
-		staleSince:            map[string]staleSeen{},
+		CleanupInterval:       defaultCleanupInterval,
 		staleForgetAfter:      defaultStaleForgetAfter,
 	}
 
@@ -316,6 +389,7 @@ func (m *Manager) initialize(ctx context.Context) error {
 	}
 
 	m.initialized = true
+	m.startCleanupLoop()
 	span.SetStatus(codes.Ok, "initialized")
 	return nil
 }
@@ -539,7 +613,9 @@ func (m *Manager) GetShare(ctx context.Context, ref *collaboration.ShareReferenc
 		return nil, err
 	}
 	if share.IsExpired(s) {
-		m.expireShares(ctx, []*collaboration.Share{s})
+		// The background loop removes the share. A read does not write.
+		m.noteSuspect(ctx, suspectInput{shareID: s.GetId().GetOpaqueId(), reason: suspectExpired, share: s})
+		return nil, errtypes.NotFound(ref.String())
 	}
 	// check if we are the creator or the grantee
 	// TODO allow manager to get shares in a space created by other users
@@ -723,13 +799,10 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 
 	statCache := make(map[string]struct{})
 	var ss []*collaboration.Share
-	// remove the expired shares of all spaces together, with one upload per document
-	var expired []*collaboration.Share
 	for providerID, spaces := range providerSpaces {
 		for spaceID := range spaces {
 			shares, err := m.Cache.ListSpace(ctx, providerID, spaceID)
 			if err != nil {
-				m.expireShares(ctx, expired)
 				return nil, err
 			}
 
@@ -739,7 +812,8 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 				// each log line carries the fields of all earlier shares.
 				log := sublog.With().Str("storageid", resourceID.GetStorageId()).Str("spaceid", resourceID.GetSpaceId()).Str("opaqueid", resourceID.GetOpaqueId()).Logger()
 				if share.IsExpired(s) {
-					expired = append(expired, s)
+					// The listing does not remove the share. The background loop does.
+					m.noteSuspect(ctx, suspectInput{shareID: s.GetId().GetOpaqueId(), reason: suspectExpired, share: s})
 					continue
 				}
 				if !share.MatchesFilters(s, filters) {
@@ -782,7 +856,6 @@ func (m *Manager) listSharesByIDs(ctx context.Context, user *userv1beta1.User, f
 			}
 		}
 	}
-	m.expireShares(ctx, expired)
 	span.SetStatus(codes.Ok, "")
 	return ss, nil
 }
@@ -810,13 +883,6 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 	}
 	work := make(chan w)
 	results := make(chan *collaboration.Share)
-	// The workers collect the expired shares here. The expiration runs after
-	// all workers stop, with one upload per document for all spaces.
-	var (
-		expiredMu     sync.Mutex
-		expiredShares []*collaboration.Share
-	)
-
 	// gctx is cancelled when g.Wait returns. Do not use it after the wait.
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -851,12 +917,13 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 					// the live cache, and then the listing misses valid shares.
 					s := spaceShares.Shares[shareID]
 					if s == nil {
+						// The ID is in created.json, but the space has no such share.
+						// The background loop removes the ID.
+						m.noteSuspect(gctx, suspectInput{shareID: shareID, reason: suspectMissing, creator: user.GetId().GetOpaqueId()})
 						continue
 					}
 					if share.IsExpired(s) {
-						expiredMu.Lock()
-						expiredShares = append(expiredShares, s)
-						expiredMu.Unlock()
+						m.noteSuspect(gctx, suspectInput{shareID: shareID, reason: suspectExpired, share: s})
 						continue
 					}
 					if utils.UserEqual(user.GetId(), s.GetCreator()) {
@@ -886,7 +953,6 @@ func (m *Manager) listCreatedShares(ctx context.Context, user *userv1beta1.User,
 	}
 
 	err = g.Wait()
-	m.expireShares(ctx, expiredShares)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -918,6 +984,16 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 			return nil, errtypes.BadRequest("user not found")
 		}
 		user = u
+	}
+
+	// The listing has a total time budget. The reads of the group loop and of
+	// the workers log an error and continue. Without the check of the context
+	// after them, a listing that ran out of time would look like a complete
+	// list.
+	if m.ListTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.ListTimeout)
+		defer cancel()
 	}
 
 	ssids := map[string]*receivedsharecache.Space{}
@@ -952,6 +1028,12 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
 	// add all spaces the user has receved shares for, this includes mount points and share state for groups
 	spaces, err := m.UserReceivedStates.List(ctx, user.Id.OpaqueId)
 	if err != nil {
@@ -979,13 +1061,6 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 	}
 	work := make(chan w)
 	results := make(chan *collaboration.ReceivedShare)
-	// The workers collect the expired shares here. The expiration runs after
-	// all workers stop, with one upload per document for all spaces.
-	var (
-		expiredMu     sync.Mutex
-		expiredShares []*collaboration.Share
-	)
-
 	// gctx is cancelled when g.Wait returns. Do not use it after the wait.
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -1015,54 +1090,24 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						Msg("failed to list shares in space")
 					continue
 				}
-				// An empty etag means that the download of the space file got NotFound.
-				// That can be temporary, so it is no proof that a share is gone. A Stat
-				// that also gets NotFound is the proof. A failed first Share in a space
-				// leaves a grantee entry without a space file.
-				staleIsProven := spaceShares.Etag != ""
-				spaceFileChecked := false
-				// remove the stale shares of the space together, with one upload per document
-				var stale []string
-				staleOfGroup := map[string][]string{}
-				// cleaned holds the IDs of all stale shares that this worker removes.
-				var cleaned []string
 				for shareID, state := range w.rspace.States {
-					// Read the share from the same snapshot as the etag. A parallel
-					// sync can reset the live cache, and then a valid share looks stale.
 					s := spaceShares.Shares[shareID]
-					if s == nil && !staleIsProven && !spaceFileChecked {
-						spaceFileChecked = true
-						staleIsProven = m.Cache.SpaceFileMissing(gctx, storageID, spaceID)
-					}
-					if s == nil && !staleIsProven {
-						sublogr.Debug().Str("shareid", shareID).Msg("share not found, but the space file can exist. skipping the cleanup")
-						continue
-					}
-					if s == nil && !m.staleGracePeriodOver(shareID) {
-						sublogr.Debug().Str("shareid", shareID).Msg("share not found. waiting for the grace period before the cleanup")
-						continue
-					}
 					if s == nil {
-						sublogr.Warn().Str("shareid", shareID).Msg("share not found. cleaning up")
-						cleaned = append(cleaned, shareID)
-						// Remove the ID from received.json only when the file has it. Otherwise
-						// the user cache downloads the file again to find nothing to remove.
+						// The listing does not write. The background loop checks the
+						// space again and removes the ID from the documents.
+						sublogr.Debug().Str("shareid", shareID).Msg("share not found. noting a suspect")
+						in := suspectInput{shareID: shareID, reason: suspectMissing, groups: groupsOfShare[shareID]}
+						// The ID is in received.json only when the file has it.
 						if us := spaces[w.ssid]; us != nil {
 							if _, inUserFile := us.States[shareID]; inUserFile {
-								stale = append(stale, shareID)
+								in.user = user.Id.OpaqueId
 							}
 						}
-						// A stale group share is in the group cache, not in received.json.
-						for _, group := range groupsOfShare[shareID] {
-							staleOfGroup[group] = append(staleOfGroup[group], shareID)
-						}
+						m.noteSuspect(gctx, in)
 						continue
 					}
-					m.forgetStale(shareID)
 					if share.IsExpired(s) {
-						expiredMu.Lock()
-						expiredShares = append(expiredShares, s)
-						expiredMu.Unlock()
+						m.noteSuspect(gctx, suspectInput{shareID: shareID, reason: suspectExpired, share: s})
 						continue
 					}
 
@@ -1082,32 +1127,6 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 						}
 					}
 				}
-				// failed holds the stale shares that a removal did not remove.
-				failed := map[string]bool{}
-				if len(stale) > 0 {
-					if err := m.UserReceivedStates.RemoveMany(gctx, user.Id.OpaqueId, w.ssid, stale); err != nil {
-						sublogr.Error().Err(err).Strs("shareids", stale).Msg("could not remove stale shares from the user received states")
-						for _, id := range stale {
-							failed[id] = true
-						}
-					}
-				}
-				for group, ids := range staleOfGroup {
-					if err := m.GroupReceivedCache.RemoveMany(gctx, group, ids); err != nil {
-						sublogr.Error().Err(err).Strs("shareids", ids).Str("groupid", group).Msg("could not remove stale shares from the group cache")
-						for _, id := range ids {
-							failed[id] = true
-						}
-					}
-				}
-				// Forget a stale share only after all removals of it. After a failed
-				// removal, the grace period is still over, and the next listing
-				// tries the removal again at once.
-				for _, id := range cleaned {
-					if !failed[id] {
-						m.forgetStale(id)
-					}
-				}
 			}
 			return nil
 		})
@@ -1125,7 +1144,11 @@ func (m *Manager) ListReceivedShares(ctx context.Context, filters []*collaborati
 	}
 
 	err = g.Wait()
-	m.expireShares(ctx, expiredShares)
+	if err == nil {
+		// A worker logs a failed read and continues. If the budget ended the
+		// read, the list is not complete.
+		err = ctx.Err()
+	}
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -1179,7 +1202,11 @@ func (m *Manager) getReceived(ctx context.Context, ref *collaboration.ShareRefer
 		return nil, errtypes.NotFound(ref.String())
 	}
 	if share.IsExpired(s) {
-		m.expireShares(ctx, []*collaboration.Share{s})
+		// The background loop removes the share. A read does not write, and it
+		// does not return an expired share. UpdateReceivedShare must not write
+		// the grantee entry of an expired share again.
+		m.noteSuspect(ctx, suspectInput{shareID: s.GetId().GetOpaqueId(), reason: suspectExpired, share: s})
+		return nil, errtypes.NotFound(ref.String())
 	}
 	return m.convert(ctx, user.Id.GetOpaqueId(), s), nil
 }
@@ -1437,9 +1464,9 @@ func (m *Manager) removeShares(ctx context.Context, shares []*collaboration.Shar
 // document. It publishes a ShareExpired event only for the shares that it
 // removed. Many listings can find the same expired share, and each event can
 // send a notification.
-func (m *Manager) expireShares(ctx context.Context, shares []*collaboration.Share) {
+func (m *Manager) expireShares(ctx context.Context, shares []*collaboration.Share) error {
 	if len(shares) == 0 {
-		return
+		return nil
 	}
 	log := appctx.GetLogger(ctx)
 	removedIDs, err := m.removeShares(ctx, shares, false)
@@ -1465,70 +1492,7 @@ func (m *Manager) expireShares(ctx context.Context, shares []*collaboration.Shar
 			log.Error().Err(err).Str("shareid", s.GetId().GetOpaqueId()).Msg("failed to publish share expired event")
 		}
 	}
-}
-
-// staleSeen holds the times when this pod found a stale share.
-type staleSeen struct {
-	first time.Time // the start of the grace period
-	last  time.Time // the time to forget the share is counted from here
-}
-
-// staleGracePeriodOver reports if a listing can remove a stale share. It is
-// true when this pod first found the share stale StaleShareGracePeriod ago.
-// The first call starts the grace period. Each call sets the last find time
-// for sweepStale. Call forgetStale only after the removal succeeds, so that a
-// failed removal does not start a new grace period.
-func (m *Manager) staleGracePeriodOver(shareID string) bool {
-	if m.StaleShareGracePeriod <= 0 {
-		return true
-	}
-	now := time.Now()
-	if m.staleClock != nil {
-		now = m.staleClock()
-	}
-	m.staleMu.Lock()
-	defer m.staleMu.Unlock()
-	if m.staleSince == nil {
-		m.staleSince = map[string]staleSeen{}
-	}
-	seen, ok := m.staleSince[shareID]
-	if !ok {
-		m.sweepStale(now)
-		m.staleSince[shareID] = staleSeen{first: now, last: now}
-		return false
-	}
-	seen.last = now
-	m.staleSince[shareID] = seen
-	return now.Sub(seen.first) >= m.StaleShareGracePeriod
-}
-
-// sweepStale removes the entries that no listing on this pod found for
-// staleForgetAfter. forgetStale cannot remove an entry when only other pods
-// find the share again or remove it. Without the sweep, staleSince grows
-// until the pod restarts. A sweep reads the full map, so it runs at most once
-// in each staleForgetAfter/staleSweepsPerForget. The caller holds staleMu.
-func (m *Manager) sweepStale(now time.Time) {
-	forgetAfter := m.staleForgetAfter
-	if forgetAfter <= 0 {
-		forgetAfter = defaultStaleForgetAfter
-	}
-	if now.Sub(m.staleLastSweep) < forgetAfter/staleSweepsPerForget {
-		return
-	}
-	m.staleLastSweep = now
-	for id, s := range m.staleSince {
-		if now.Sub(s.last) > forgetAfter {
-			delete(m.staleSince, id)
-		}
-	}
-}
-
-// forgetStale stops the grace period of a share that a listing found again.
-// Two short losses of a share then do not add up to one long loss.
-func (m *Manager) forgetStale(shareID string) {
-	m.staleMu.Lock()
-	defer m.staleMu.Unlock()
-	delete(m.staleSince, shareID)
+	return err
 }
 
 // defaultRemoveConcurrency limits the parallel removals when MaxConcurrency is not set.
@@ -1601,10 +1565,10 @@ func (m *Manager) CleanupStaleShares(ctx context.Context) {
 	// loops. Then each document gets one upload, and the loops do not change
 	// the maps that they read.
 	var orphaned []*collaboration.Share
-	providers.Range(func(storage string, spaces *providercache.Spaces) bool {
-		log.Info().Str("storage", storage).Interface("spaceCount", spaces.Spaces.Count()).Msg("checking storage")
+	for storage, spaces := range providers {
+		log.Info().Str("storage", storage).Int("spaceCount", len(spaces)).Msg("checking storage")
 
-		spaces.Spaces.Range(func(space string, shares *providercache.Shares) bool {
+		for space, shares := range spaces {
 			log.Info().Str("storage", storage).Str("space", space).Interface("shareCount", len(shares.Shares)).Msg("checking space")
 
 			for _, s := range shares.Shares {
@@ -1621,12 +1585,8 @@ func (m *Manager) CleanupStaleShares(ctx context.Context) {
 					orphaned = append(orphaned, s)
 				}
 			}
-
-			return true
-		})
-
-		return true
-	})
+		}
+	}
 
 	removed, err := m.removeShares(ctx, orphaned, false)
 	if err != nil {

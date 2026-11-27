@@ -1,0 +1,1 @@
+{"Shares":{"storage$space!b":{"id":{"opaque_id":"storage$space!b"},"resource_id":{"storage_id":"storage","opaque_id":"file","space_id":"space"},"permissions":{"permissions":{"initiate_file_download":true,"stat":true}},"grantee":{"type":2,"Id":{"GroupId":{"idp":"idp","opaque_id":"students"}}},"owner":{"opaque_id":"owner"},"creator":{"opaque_id":"creator"}}},"Etag":""}

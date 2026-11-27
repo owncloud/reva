@@ -29,16 +29,16 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/options"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/tree/propagator")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/tree/propagator")
 }
 
 type Propagator interface {

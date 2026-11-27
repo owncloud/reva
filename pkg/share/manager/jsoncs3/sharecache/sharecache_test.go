@@ -149,14 +149,17 @@ var _ = Describe("Sharecache", func() {
 			})
 
 			It("updates the etag", func() {
-				uc, _ := c.UserShares.Load(userid)
-				oldEtag := uc.Etag
+				download := func() *metadata.DownloadResponse {
+					res, err := storage.Download(ctx, metadata.DownloadRequest{Path: "/users/user/created.json"})
+					Expect(err).ToNot(HaveOccurred())
+					return res
+				}
+				oldEtag := download().Etag
 				Expect(oldEtag).ToNot(BeEmpty())
 
 				Expect(c.Persist(ctx, userid)).To(Succeed())
 
-				uc, _ = c.UserShares.Load(userid)
-				Expect(uc.Etag).ToNot(Equal(oldEtag))
+				Expect(download().Etag).ToNot(Equal(oldEtag))
 			})
 		})
 	})
@@ -467,9 +470,11 @@ var _ = Describe("Sharecache", func() {
 			defer close(bs.Release)
 			c2 := sharecache.New(bs, "users", "created.json", 0*time.Second)
 
+			// In this design, a read takes no lock. The holder is a writer that parks in its
+			// first download and holds the write lock of the document.
 			go func() {
 				defer GinkgoRecover()
-				_, _ = c2.List(ctx, userid)
+				_ = c2.Add(ctx, userid, shareid.Encode("storageid", "spaceid", "holder"))
 			}()
 			Eventually(bs.Entered, 2*time.Second).Should(Receive())
 

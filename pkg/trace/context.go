@@ -46,3 +46,15 @@ func ContextGetTracerProvider(ctx context.Context) trace.TracerProvider {
 	}
 	return noop.NewTracerProvider()
 }
+
+// ContextGetTracerProviderOrDefault returns the TracerProvider associated with
+// the ctx. If no TracerProvider is associated, it returns the global default
+// TracerProvider. Use it in code that also runs outside of a request, for
+// example at a start or in an event handler, so that its spans still get
+// recorded.
+//
+// Without a provider in the context, it returns the provider of a recording
+// parent span, if the context has one.
+func ContextGetTracerProviderOrDefault(ctx context.Context) trace.TracerProvider {
+	return providerOf(ctx)
+}

@@ -25,8 +25,8 @@ import (
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"go-micro.dev/v4/store"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.opentelemetry.io/otel/trace"
@@ -35,7 +35,7 @@ import (
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/cache")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/cache")
 }
 
 // NewStatCache creates a new StatCache

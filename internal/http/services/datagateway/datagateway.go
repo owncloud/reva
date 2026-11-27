@@ -27,16 +27,16 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/mitchellh/mapstructure"
 	"github.com/owncloud/reva/v2/pkg/appctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rhttp"
 	"github.com/owncloud/reva/v2/pkg/rhttp/global"
 	"github.com/owncloud/reva/v2/pkg/sharedconf"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/mitchellh/mapstructure"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
-	"go.opentelemetry.io/otel"
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -44,7 +44,7 @@ import (
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/tree")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/v2/internal/http/services/datagateway")
 }
 
 const (

@@ -1,0 +1,2 @@
+ok
+{"Shares":{"storage$space!a":{"id":{"opaque_id":"storage$space!a"},"resource_id":{"storage_id":"storage","opaque_id":"file","space_id":"space"},"permissions":{"permissions":{"initiate_file_download":true,"stat":true}},"grantee":{"type":1,"Id":{"UserId":{"idp":"idp","opaque_id":"einstein"}}},"owner":{"opaque_id":"owner"},"creator":{"opaque_id":"creator"},"ctime":{"seconds":1700000000,"nanos":5},"mtime":{"seconds":1700000100}}},"Etag":""}

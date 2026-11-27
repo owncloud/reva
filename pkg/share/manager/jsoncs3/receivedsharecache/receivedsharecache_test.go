@@ -623,9 +623,11 @@ var _ = Describe("Cache", func() {
 			defer close(bs.Release)
 			c2 := receivedsharecache.New(bs, 0*time.Second)
 
+			// In this design, a read takes no lock. The holder is a writer that parks in its
+			// first download and holds the write lock of the document.
 			go func() {
 				defer GinkgoRecover()
-				_, _ = c2.List(ctx, userID)
+				_ = c2.Add(ctx, userID, spaceID, &collaboration.ReceivedShare{Share: share})
 			}()
 			Eventually(bs.Entered, 2*time.Second).Should(Receive())
 

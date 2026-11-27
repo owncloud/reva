@@ -2,7 +2,6 @@
 package cas
 
 import (
-	"context"
 	"time"
 
 	backoff "github.com/cenkalti/backoff/v5"
@@ -59,60 +58,4 @@ func IsTransientGRPCStatus(err error) bool {
 	default:
 		return false
 	}
-}
-
-// RetryPersist retries persistFunc on a CAS conflict, calling resyncFunc between attempts to
-// refresh in-memory state before the next persist, up to maxRetries times with this package's
-// shared backoff. onConflict/onPersistFailed/onResyncFailed let the caller record its own
-// span/log side effects for each outcome without this package depending on otel/zerolog.
-func RetryPersist(ctx context.Context, maxRetries int, persistFunc, resyncFunc func() error,
-	onConflict, onPersistFailed, onResyncFailed func(err error)) error {
-	bo := NewBackoff()
-	var err error
-	for retries := maxRetries; retries > 0; retries-- {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err = persistFunc()
-		switch {
-		case err == nil:
-			return nil
-		case IsConflict(err):
-			onConflict(err)
-		default:
-			onPersistFailed(err)
-			return err
-		}
-		if rerr := resyncFunc(); rerr != nil {
-			onResyncFailed(rerr)
-			return rerr
-		}
-		timer := time.NewTimer(bo.NextBackOff())
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
-	}
-	return err
-}
-
-// DecideNotFoundReset reports whether a NotFound download result resets the
-// cache to empty (true) or is a lost update (false). Only a resync after a CAS
-// conflict with a known etag is a lost update: a write is pending, and the file
-// that it must replace is missing.
-//
-// In all other cases the cache resets to empty. Usually the file does not exist
-// yet. But a normal sync with a known etag can also get a NotFound: the file
-// existed before, and then it disappeared, for example after a manual delete.
-// This reset is accepted. The function does not detect it.
-//
-// The function does not look at the trash. The jsoncs3 caches never delete
-// their files, so a trash lookup cannot find a real race. It also cannot match
-// on decomposedfs, and it costs two calls for each NotFound.
-func DecideNotFoundReset(resetOnNotFound, hadPriorEtag bool) bool {
-	return resetOnNotFound || !hadPriorEtag
 }

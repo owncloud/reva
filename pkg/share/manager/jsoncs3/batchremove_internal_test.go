@@ -173,7 +173,7 @@ func TestPurgeSpaceWithManyCreatorsAndGranteesUploadsEachDocumentOnce(t *testing
 	f.expectEmpty(t, []string{"admin", "teacher"}, []string{"group1", "group2"}, []string{"einstein"})
 }
 
-func TestListCreatedSharesRemovesExpiredSharesWithOneUploadPerDocument(t *testing.T) {
+func TestCleanupRemovesExpiredSharesOfListCreatedSharesWithOneUploadPerDocument(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	for i := 0; i < 20; i++ {
@@ -184,13 +184,14 @@ func TestListCreatedSharesRemovesExpiredSharesWithOneUploadPerDocument(t *testin
 		shares, err := f.m.ListShares(ctxOf("admin"), nil)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(shares).To(BeEmpty())
+		f.m.CleanupSuspects(ctxOf("admin"))
 	})
 
 	g.Expect(uploads).To(Equal(int32(3)))
 	f.expectEmpty(t, []string{"admin"}, []string{"group1"}, nil)
 }
 
-func TestListSharesByIDsRemovesExpiredSharesWithOneUploadPerDocument(t *testing.T) {
+func TestCleanupRemovesExpiredSharesOfListSharesByIDsWithOneUploadPerDocument(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	for i := 0; i < 20; i++ {
@@ -204,13 +205,14 @@ func TestListSharesByIDsRemovesExpiredSharesWithOneUploadPerDocument(t *testing.
 		}})
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(shares).To(BeEmpty())
+		f.m.CleanupSuspects(ctxOf("admin"))
 	})
 
 	g.Expect(uploads).To(Equal(int32(3)))
 	f.expectEmpty(t, []string{"admin"}, []string{"group1"}, nil)
 }
 
-func TestListReceivedSharesRemovesExpiredSharesWithOneUploadPerDocument(t *testing.T) {
+func TestCleanupRemovesExpiredSharesOfListReceivedSharesWithOneUploadPerDocument(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	for i := 0; i < 20; i++ {
@@ -221,13 +223,14 @@ func TestListReceivedSharesRemovesExpiredSharesWithOneUploadPerDocument(t *testi
 		received, err := f.m.ListReceivedShares(ctxOf("einstein", "group1"), nil, nil)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(received).To(BeEmpty())
+		f.m.CleanupSuspects(ctxOf("admin"))
 	})
 
 	g.Expect(uploads).To(Equal(int32(3)))
 	f.expectEmpty(t, []string{"admin"}, []string{"group1"}, nil)
 }
 
-func TestListReceivedSharesRemovesManyStaleGroupSharesWithOneUploadPerGroup(t *testing.T) {
+func TestCleanupRemovesManyStaleGroupSharesWithOneUploadPerGroup(t *testing.T) {
 	g := NewWithT(t)
 	f := newBatchFixture(t)
 	// this test checks the cleanup, not the grace period
@@ -243,6 +246,7 @@ func TestListReceivedSharesRemovesManyStaleGroupSharesWithOneUploadPerGroup(t *t
 		received, err := f.m.ListReceivedShares(ctxOf("einstein", "group1", "group2"), nil, nil)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(received).To(HaveLen(1), "only the valid share")
+		f.m.CleanupSuspects(ctxOf("admin"))
 	})
 
 	// one upload for each group file

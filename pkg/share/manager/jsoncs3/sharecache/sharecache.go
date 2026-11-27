@@ -21,41 +21,34 @@ package sharecache
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"time"
 
-	backoff "github.com/cenkalti/backoff/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"golang.org/x/exp/maps"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
-	"github.com/owncloud/reva/v2/pkg/errtypes"
-	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/cas"
-	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/keylock"
+	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/docstore"
 	"github.com/owncloud/reva/v2/pkg/share/manager/jsoncs3/shareid"
-	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/mtimesyncedcache"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 )
 
 // name is the Tracer name used to identify this instrumentation library.
 const tracerName = "sharecache"
 
-// Cache caches the list of share ids for users/groups
-// It functions as an in-memory cache with a persistence layer
-// The storage is sharded by user/group
+// Cache holds the list of share ids for users and groups. It keeps one document
+// for each user or group, in a docstore. The storage is sharded by user or
+// group.
+//
+// A document that List returns is read-only. A caller must not change it.
 type Cache struct {
-	lockMap keylock.Map
+	store *docstore.Store[UserShareCache]
 
-	UserShares mtimesyncedcache.Map[string, *UserShareCache]
-
-	storage   metadata.Storage
 	namespace string
 	filename  string
-	ttl       time.Duration
 }
 
 // UserShareCache holds the space/share map for one user
@@ -70,93 +63,103 @@ type SpaceShareIDs struct {
 	IDs map[string]struct{}
 }
 
-// lockUser acquires the per-user/group lock, giving up with ctx.Err() once ctx
-// is done so abandoned requests don't stay parked behind a slow holder.
-func (c *Cache) lockUser(ctx context.Context, userID string) (func(), error) {
-	return c.lockMap.Lock(ctx, userID)
+var codec = docstore.Codec[UserShareCache]{
+	New: func() *UserShareCache {
+		return &UserShareCache{UserShares: map[string]*SpaceShareIDs{}}
+	},
+	Clone: func(u *UserShareCache) *UserShareCache {
+		c := &UserShareCache{UserShares: make(map[string]*SpaceShareIDs, len(u.UserShares)), Etag: u.Etag}
+		for ssid, ids := range u.UserShares {
+			cp := &SpaceShareIDs{IDs: make(map[string]struct{}, len(ids.IDs))}
+			for id := range ids.IDs {
+				cp.IDs[id] = struct{}{}
+			}
+			c.UserShares[ssid] = cp
+		}
+		return c
+	},
+	Decode: func(data []byte) (*UserShareCache, error) {
+		u := &UserShareCache{}
+		if err := json.Unmarshal(data, u); err != nil {
+			return nil, err
+		}
+		if u.UserShares == nil {
+			u.UserShares = map[string]*SpaceShareIDs{}
+		}
+		for ssid, ids := range u.UserShares {
+			if ids == nil {
+				ids = &SpaceShareIDs{}
+				u.UserShares[ssid] = ids
+			}
+			if ids.IDs == nil {
+				ids.IDs = map[string]struct{}{}
+			}
+		}
+		return u, nil
+	},
+	Encode: func(u *UserShareCache, etag string) ([]byte, error) {
+		c := *u
+		c.Etag = etag
+		return json.Marshal(&c)
+	},
+	SetEtag: func(u *UserShareCache, etag string) { u.Etag = etag },
 }
 
-// New returns a new Cache instance
+// New returns a new Cache instance. With a ttl, a read trusts the cached
+// document of a user or group for that time and makes no download. A write of
+// this pod updates the cache at once. Other pods see a change up to the ttl
+// later. Zero means that each read checks the storage.
 func New(s metadata.Storage, namespace, filename string, ttl time.Duration) Cache {
 	return Cache{
-		UserShares: mtimesyncedcache.Map[string, *UserShareCache]{},
-		storage:    s,
-		namespace:  namespace,
-		filename:   filename,
-		ttl:        ttl,
+		store: docstore.New(s, codec, docstore.Options{
+			TTL:    ttl,
+			Tracer: func(ctx context.Context) trace.Tracer { return appctx.GetTracerProvider(ctx).Tracer(tracerName) },
+			PathAttrs: func(p string) []attribute.KeyValue {
+				return []attribute.KeyValue{attribute.String("cs3.userid", path.Base(path.Dir(p)))}
+			},
+		}),
+		namespace: namespace,
+		filename:  filename,
 	}
 }
 
-// dropOnFailedUpload drops the user from memory after a failed upload that
-// is not a CAS conflict. The memory state is then different from the file,
-// and the etag did not change, so a sync gets NotModified and keeps it.
-// After the drop, the next call reads the file. A CAS conflict syncs anyway.
-// Call it with the user lock held.
-func (c *Cache) dropOnFailedUpload(err error, userid string) {
-	if err != nil && !cas.IsConflict(err) {
-		c.UserShares.Delete(userid)
-	}
+func (c *Cache) userCreatedPath(userid string) string {
+	return filepath.Join("/", c.namespace, userid, c.filename)
+}
+
+func ssidOf(shareID string) string {
+	storageid, spaceid, _ := shareid.Decode(shareID)
+	return storageid + shareid.IDDelimiter + spaceid
 }
 
 // Add adds a share to the cache
 func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	if _, ok := c.UserShares.Load(userid); !ok {
-		err := c.syncWithRetry(ctx, userid)
-		if err != nil {
-			return err
-		}
-	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
 
-	storageid, spaceid, _ := shareid.Decode(shareID)
-	ssid := storageid + shareid.IDDelimiter + spaceid
-
-	persistFunc := func() error {
-		c.initializeIfNeeded(userid, ssid)
-
-		// add share id
-		us, _ := c.UserShares.Load(userid)
-		us.UserShares[ssid].IDs[shareID] = struct{}{}
-		err := c.Persist(ctx, userid)
-		// With the share in memory, this pod lists a share that is not in the file.
-		c.dropOnFailedUpload(err, userid)
+	ssid := ssidOf(shareID)
+	err := c.store.Update(ctx, c.userCreatedPath(userid), func(d *UserShareCache) (bool, error) {
+		ids := d.UserShares[ssid]
+		if ids == nil {
+			ids = &SpaceShareIDs{IDs: map[string]struct{}{}}
+			d.UserShares[ssid] = ids
+		}
+		if _, ok := ids.IDs[shareID]; ok {
+			return false, nil
+		}
+		ids.IDs[shareID] = struct{}{}
+		return true, nil
+	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		appctx.GetLogger(ctx).Error().Err(err).Str("hostname", os.Getenv("HOSTNAME")).
+			Str("userID", userid).Str("shareID", shareID).Msg("persisting added share failed")
 		return err
 	}
-
-	log := appctx.GetLogger(ctx).With().
-		Str("hostname", os.Getenv("HOSTNAME")).
-		Str("userID", userid).
-		Str("shareID", shareID).Logger()
-
-	err = cas.RetryPersist(ctx, 100, persistFunc,
-		func() error { return c.resyncAfterConflict(ctx, userid) },
-		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting added share, retrying...") },
-		func(err error) {
-			span.SetStatus(codes.Error, fmt.Sprintf("persisting added share failed. giving up: %s", err.Error()))
-			log.Error().Err(err).Msg("persisting added share failed")
-		},
-		func(err error) {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("persisting added share failed. giving up.")
-		},
-	)
-	if err == nil {
-		span.SetStatus(codes.Ok, "")
-	}
-	return err
+	span.SetStatus(codes.Ok, "")
+	return nil
 }
 
 // Remove removes a share for the given user
@@ -166,281 +169,78 @@ func (c *Cache) Remove(ctx context.Context, userid, shareID string) error {
 
 // RemoveMany removes the given shares of one user or group with one upload.
 // The shares can be in different spaces. It does not upload when none of the
-// shares is in the cache.
+// shares is in the document.
 func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	ssidOf := make(map[string]string, len(shareIDs))
-	for _, shareID := range shareIDs {
-		storageid, spaceid, _ := shareid.Decode(shareID)
-		ssidOf[shareID] = storageid + shareid.IDDelimiter + spaceid
-	}
-
-	// When a share is not in memory, sync first. A cold or stale cache does
-	// not show if the share is in the file. When all shares are in memory,
-	// the CAS write in Persist detects stale state.
-	for shareID, ssid := range ssidOf {
-		if !c.has(userid, ssid, shareID) {
-			if err := c.syncWithRetry(ctx, userid); err != nil {
-				return err
-			}
-			break
-		}
-	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.Int("cs3.sharecount", len(shareIDs)))
 
-	persistFunc := func() error {
+	err := c.store.Update(ctx, c.userCreatedPath(userid), func(d *UserShareCache) (bool, error) {
 		removed := false
-		for shareID, ssid := range ssidOf {
-			if c.has(userid, ssid, shareID) {
-				us, _ := c.UserShares.Load(userid)
-				delete(us.UserShares[ssid].IDs, shareID)
-				// An empty space entry makes each listing read the space file again.
-				if len(us.UserShares[ssid].IDs) == 0 {
-					delete(us.UserShares, ssid)
-				}
-				removed = true
+		for _, shareID := range shareIDs {
+			ssid := ssidOf(shareID)
+			ids := d.UserShares[ssid]
+			if ids == nil {
+				continue
 			}
+			if _, ok := ids.IDs[shareID]; !ok {
+				continue
+			}
+			delete(ids.IDs, shareID)
+			// An empty space entry makes each listing read the space file again.
+			if len(ids.IDs) == 0 {
+				delete(d.UserShares, ssid)
+			}
+			removed = true
 		}
-		if !removed {
-			return nil // nothing to remove, do not upload
-		}
-
-		err := c.Persist(ctx, userid)
-		// Without the shares in memory, a retry finds nothing to remove and does not upload.
-		c.dropOnFailedUpload(err, userid)
+		return removed, nil
+	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		appctx.GetLogger(ctx).Error().Err(err).Str("hostname", os.Getenv("HOSTNAME")).
+			Str("userID", userid).Int("shareCount", len(shareIDs)).Msg("persisting removed share failed")
 		return err
 	}
-
-	log := appctx.GetLogger(ctx).With().
-		Str("hostname", os.Getenv("HOSTNAME")).
-		Str("userID", userid).
-		Int("shareCount", len(shareIDs)).Logger()
-
-	err = cas.RetryPersist(ctx, 100, persistFunc,
-		func() error { return c.resyncAfterConflict(ctx, userid) },
-		func(err error) { log.Debug().Err(err).Msg("CAS conflict persisting removed share, retrying...") },
-		func(err error) {
-			span.SetStatus(codes.Error, fmt.Sprintf("persisting removed share failed. giving up: %s", err.Error()))
-			log.Error().Err(err).Msg("persisting removed share failed")
-		},
-		func(err error) {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		},
-	)
-	if err == nil {
-		span.SetStatus(codes.Ok, "")
-	}
-	return err
+	span.SetStatus(codes.Ok, "")
+	return nil
 }
 
-// List return the list of spaces/shares for the given user/group
+// List returns the list of spaces and shares for the given user or group. The
+// result is read-only: a caller must not change it.
 func (c *Cache) List(ctx context.Context, userid string) (map[string]SpaceShareIDs, error) {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "List")
+	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-	if err := c.syncWithRetry(ctx, userid); err != nil {
-		return nil, err
-	}
 
-	r := map[string]SpaceShareIDs{}
-	us, ok := c.UserShares.Load(userid)
-	if !ok {
-		return r, nil
+	p := c.userCreatedPath(userid)
+	e, err := c.store.Get(ctx, p)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
-	if us.Etag == "" {
+	if e.Etag == "" {
 		// No file exists yet. Create the empty file, so the next sync gets a
 		// NotModified instead of another NotFound. Only a listing does this.
 		// Add writes the file anyway, and RemoveMany does not create it,
 		// because it removes nothing.
-		if err := c.Persist(ctx, userid); err != nil {
-			log := appctx.GetLogger(ctx).With().Str("userID", userid).Logger()
-			if cas.IsConflict(err) {
-				// Another replica created the file. The next sync reads it.
-				log.Debug().Err(err).Msg("empty share cache file already created by another writer")
-			} else {
-				log.Warn().Err(err).Msg("failed to create empty share cache file")
-			}
+		if err := c.store.Create(ctx, p); err != nil {
+			appctx.GetLogger(ctx).Warn().Err(err).Str("userID", userid).Msg("failed to create empty share cache file")
 		}
 	}
 
-	for ssid, cached := range us.UserShares {
-		r[ssid] = SpaceShareIDs{
-			IDs: maps.Clone(cached.IDs),
-		}
+	r := make(map[string]SpaceShareIDs, len(e.Doc.UserShares))
+	for ssid, cached := range e.Doc.UserShares {
+		r[ssid] = SpaceShareIDs{IDs: cached.IDs}
 	}
 	return r, nil
 }
 
-// syncWithLock treats NotFound as a legitimately empty cache (cold-start only).
-func (c *Cache) syncWithLock(ctx context.Context, userID string) error {
-	return c.doSync(ctx, userID, true)
-}
-
-// Unlike syncWithLock, a NotFound here must not reset the cache -- a pending
-// mutation is about to overwrite it, dropping a sibling writer's data.
-func (c *Cache) resyncAfterConflict(ctx context.Context, userID string) error {
-	return c.doSync(ctx, userID, false)
-}
-
-func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Sync")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userID))
-
-	log := appctx.GetLogger(ctx).With().Str("userID", userID).Logger()
-
-	c.initializeIfNeeded(userID, "")
-
-	userCreatedPath := c.userCreatedPath(userID)
-	span.AddEvent("updating cache")
-	//  - update cached list of created shares for the user in memory if changed
-	dlreq := metadata.DownloadRequest{
-		Path: userCreatedPath,
-	}
-	var hadEtag bool
-	if us, ok := c.UserShares.Load(userID); ok && us.Etag != "" {
-		hadEtag = true
-		dlreq.IfNoneMatch = []string{us.Etag}
-	}
-
-	dlres, err := c.storage.Download(ctx, dlreq)
-
-	switch err.(type) {
-	case nil:
-		span.AddEvent("updating local cache")
-	case errtypes.NotFound:
-		if !cas.DecideNotFoundReset(resetOnNotFound, hadEtag) {
-			span.SetStatus(codes.Error, err.Error())
-			log.Error().Err(err).Msg("lost update: backing file disappeared mid-retry")
-			return err
-		}
-		c.UserShares.Store(userID, &UserShareCache{UserShares: map[string]*SpaceShareIDs{}})
-		span.SetStatus(codes.Ok, "")
-		return nil
-	case errtypes.NotModified:
-		span.SetStatus(codes.Ok, "")
-		return nil
-	default:
-		span.SetStatus(codes.Error, fmt.Sprintf("Failed to download the share cache: %s", err.Error()))
-		log.Error().Err(err).Msg("Failed to download the share cache")
-		return err
-	}
-
-	newShareCache := &UserShareCache{}
-	err = json.Unmarshal(dlres.Content, newShareCache)
-	if err != nil {
-		span.SetStatus(codes.Error, fmt.Sprintf("Failed to unmarshal the share cache: %s", err.Error()))
-		log.Error().Err(err).Msg("Failed to unmarshal the share cache")
-		return err
-	}
-	newShareCache.Etag = dlres.Etag
-
-	c.UserShares.Store(userID, newShareCache)
-	span.SetStatus(codes.Ok, "")
-	return nil
-}
-
-// Persist persists the data for one user/group to the storage
+// Persist uploads the document of the user or group, also when nothing changed.
+// It gives the document a new etag.
 func (c *Cache) Persist(ctx context.Context, userid string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Persist")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-
-	us, ok := c.UserShares.Load(userid)
-	if !ok {
-		span.SetStatus(codes.Ok, "no user shares")
-		return nil
-	}
-	createdBytes, err := json.Marshal(us)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return err
-	}
-	jsonPath := c.userCreatedPath(userid)
-	if err := c.storage.MakeDirIfNotExist(ctx, path.Dir(jsonPath)); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return err
-	}
-
-	ur := metadata.UploadRequest{
-		Path:        jsonPath,
-		Content:     createdBytes,
-		IfMatchEtag: us.Etag,
-	}
-	// when there is no etag in memory make sure the file has not been created on the server, see https://www.rfc-editor.org/rfc/rfc9110#field.if-match
-	// > If the field value is "*", the condition is false if the origin server has a current representation for the target resource.
-	if us.Etag == "" {
-		ur.IfNoneMatch = []string{"*"}
-	}
-
-	res, err := c.storage.Upload(ctx, ur)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return err
-	}
-	us.Etag = res.Etag
-
-	span.SetStatus(codes.Ok, "")
-	return nil
-}
-
-// syncWithRetry retries syncWithLock's cold-start read on transient errors, since callers have no other retry wrapper.
-func (c *Cache) syncWithRetry(ctx context.Context, userID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	_, err := backoff.Retry(ctx, func() (struct{}, error) {
-		err := c.syncWithLock(ctx, userID)
-		if err != nil && !cas.IsSyncTransient(err) {
-			return struct{}{}, backoff.Permanent(err)
-		}
-		return struct{}{}, err
-	}, backoff.WithBackOff(cas.NewBackoff()), backoff.WithMaxTries(20))
-	return err
-}
-
-func (c *Cache) userCreatedPath(userid string) string {
-	return filepath.Join("/", c.namespace, userid, c.filename)
-}
-
-// has reports if the in-memory state has the share. The caller must hold the user lock.
-func (c *Cache) has(userid, ssid, shareID string) bool {
-	us, ok := c.UserShares.Load(userid)
-	if !ok || us.UserShares[ssid] == nil {
-		return false
-	}
-	_, ok = us.UserShares[ssid].IDs[shareID]
-	return ok
-}
-
-func (c *Cache) initializeIfNeeded(userid, ssid string) {
-	us, _ := c.UserShares.LoadOrStore(userid, &UserShareCache{
-		UserShares: map[string]*SpaceShareIDs{},
+	return c.store.Update(ctx, c.userCreatedPath(userid), func(*UserShareCache) (bool, error) {
+		return true, nil
 	})
-	if ssid != "" && us.UserShares[ssid] == nil {
-		us.UserShares[ssid] = &SpaceShareIDs{
-			IDs: map[string]struct{}{},
-		}
-	}
 }
