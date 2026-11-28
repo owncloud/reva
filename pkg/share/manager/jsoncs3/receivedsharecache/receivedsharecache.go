@@ -38,6 +38,7 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/metadata"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // name is the Tracer name used to identify this instrumentation library.
@@ -89,6 +90,26 @@ func (c *Cache) lockUser(ctx context.Context, userID string) (func(), error) {
 	return c.lockMap.Lock(ctx, userID)
 }
 
+// lockUserTraced waits for the lock of the user or group. A "Grab lock" span,
+// a child of the span in ctx, shows the wait. The caller keeps its own
+// context, so the work after the wait is not a child of the lock span.
+func (c *Cache) lockUserTraced(ctx context.Context, userID string) (func(), error) {
+	// A lock span is only useful under a recorded parent span. With tracing
+	// off, the parent is never recorded, so do not pay for the span.
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return c.lockUser(ctx, userID)
+	}
+	_, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
+	span.SetAttributes(attribute.String("cs3.userid", userID))
+	unlock, err := c.lockUser(ctx, userID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
+	return unlock, err
+}
+
 // dropOnFailedUpload drops the user from memory after a failed upload that
 // is not a CAS conflict. The memory state is then different from the file,
 // and the etag did not change, so a sync gets NotModified and keeps it.
@@ -102,10 +123,10 @@ func (c *Cache) dropOnFailedUpload(err error, userID string) {
 
 // Add adds a new entry to the cache
 func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaboration.ReceivedShare) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userID)
-	span.SetAttributes(attribute.String("cs3.userid", userID))
-	span.End()
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
+	unlock, err := c.lockUserTraced(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -117,10 +138,6 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 			return err
 		}
 	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID))
 
 	err = c.retryPersist(ctx, userID, spaceID, func() error {
 		c.initializeIfNeeded(userID, spaceID)
@@ -152,10 +169,10 @@ func (c *Cache) Add(ctx context.Context, userID, spaceID string, rs *collaborati
 
 // Get returns one entry from the cache
 func (c *Cache) Get(ctx context.Context, userID, spaceID, shareID string) (*State, error) {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userID)
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Get")
+	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
-	span.End()
+	unlock, err := c.lockUserTraced(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -180,18 +197,14 @@ func (c *Cache) Remove(ctx context.Context, userID, spaceID, shareID string) err
 // RemoveMany removes the given shares of one user in one space with one upload.
 // It does not upload when none of the shares is in the cache.
 func (c *Cache) RemoveMany(ctx context.Context, userID, spaceID string, shareIDs []string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userID)
-	span.SetAttributes(attribute.String("cs3.userid", userID))
-	span.End()
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID), attribute.Int("cs3.sharecount", len(shareIDs)))
+	unlock, err := c.lockUserTraced(ctx, userID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userID), attribute.String("cs3.spaceid", spaceID), attribute.Int("cs3.sharecount", len(shareIDs)))
 
 	// When a share is not in memory, sync first. A cold or stale cache does
 	// not show if the share is in received.json. When all shares are in
@@ -249,7 +262,7 @@ func (c *Cache) List(ctx context.Context, userID string) (map[string]*Space, err
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userID))
 
-	unlock, err := c.lockUser(ctx, userID)
+	unlock, err := c.lockUserTraced(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -426,12 +439,14 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	}
 
 	newSpaces := &Spaces{}
+	span.SetAttributes(attribute.Int("metadata.bytes", len(dlres.Content)))
 	err = json.Unmarshal(dlres.Content, newSpaces)
 	if err != nil {
 		span.SetStatus(codes.Error, fmt.Sprintf("Failed to unmarshal the received share: %s", err.Error()))
 		log.Error().Err(err).Msg("Failed to unmarshal the received share")
 		return err
 	}
+	span.AddEvent("decoded")
 	newSpaces.etag = dlres.Etag
 
 	c.ReceivedSpaces.Store(userID, newSpaces)

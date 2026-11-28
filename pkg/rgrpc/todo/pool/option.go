@@ -45,7 +45,10 @@ func (o *ClientOptions) init() error {
 		return err
 	}
 	o.caCert = sharedOpt.CACertFile
-	o.tracerProvider = rtrace.DefaultProvider()
+	// The connection serves the calls of all services in the single binary.
+	// Resolve the provider for each call from its context, not one time from
+	// the global provider.
+	o.tracerProvider = rtrace.ContextTracerProvider()
 	return nil
 }
 

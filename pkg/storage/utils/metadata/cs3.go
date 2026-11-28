@@ -34,7 +34,10 @@ import (
 	rpc "github.com/cs3org/go-cs3apis/cs3/rpc/v1beta1"
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	types "github.com/cs3org/go-cs3apis/cs3/types/v1beta1"
-	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
 
@@ -43,13 +46,20 @@ import (
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/errtypes"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 )
 
-var tracer trace.Tracer
+const tracerName = "github.com/owncloud/reva/pkg/storage/utils/metadata"
 
-func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/metadata")
+// startSpan starts a span with the tracer provider of the context. The gRPC
+// and HTTP servers of reva put the provider of their service into the
+// context. Prefer it to the global provider: in the single binary, each
+// service sets the global provider at its start, so it belongs to the service
+// that started last. A context with no provider, for example at a start,
+// uses the global provider.
+func startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
+	return rtrace.ContextGetTracerProviderOrDefault(ctx).Tracer(tracerName).Start(ctx, name)
 }
 
 // defaultAuthRPCTimeout bounds the machine auth Authenticate call made for
@@ -141,7 +151,7 @@ func (cs3 *CS3) Backend() string {
 
 // Init creates the metadata space
 func (cs3 *CS3) Init(ctx context.Context, spaceid string) (err error) {
-	ctx, span := tracer.Start(ctx, "Init")
+	ctx, span := startSpan(ctx, "Init")
 	defer span.End()
 
 	client, err := cs3.spacesClient()
@@ -203,7 +213,7 @@ func (cs3 *CS3) Init(ctx context.Context, spaceid string) (err error) {
 
 // SimpleUpload uploads a file to the metadata storage
 func (cs3 *CS3) SimpleUpload(ctx context.Context, uploadpath string, content []byte) error {
-	ctx, span := tracer.Start(ctx, "SimpleUpload")
+	ctx, span := startSpan(ctx, "SimpleUpload")
 	defer span.End()
 
 	log := appctx.GetLogger(ctx)
@@ -216,9 +226,15 @@ func (cs3 *CS3) SimpleUpload(ctx context.Context, uploadpath string, content []b
 }
 
 // Upload uploads a file to the metadata storage
-func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse, error) {
-	ctx, span := tracer.Start(ctx, "Upload")
+func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (_ *UploadResponse, err error) {
+	ctx, span := startSpan(ctx, "Upload")
 	defer span.End()
+	httpStatus := 0
+	defer func() {
+		endMetadataSpan(span, req.Path, httpStatus, len(req.Content), err,
+			attribute.String("metadata.condition", uploadCondition(req)),
+			attribute.Bool("metadata.conflict", metadataResult(err) == resultConflict))
+	}()
 
 	log := appctx.GetLogger(ctx)
 	log.Debug().Str("path", req.Path).Msg("cs3.Upload.start")
@@ -299,11 +315,14 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 
 	md, _ := metadata.FromOutgoingContext(ctx)
 	httpReq.Header.Add(ctxpkg.TokenHeader, md.Get(ctxpkg.TokenHeader)[0])
+	// Send the trace context. Then the work of the data server is in the trace of the request.
+	rtrace.Propagator.Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 	resp, err := cs3.dataGatewayClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	httpStatus = resp.StatusCode
 	log.Debug().Str("path", req.Path).Int("status", resp.StatusCode).Msg("cs3.Upload.put_done")
 	if err := errtypes.NewErrtypeFromHTTPStatusCode(resp.StatusCode, httpReq.URL.Path); err != nil {
 		return nil, err
@@ -319,10 +338,73 @@ func (cs3 *CS3) Upload(ctx context.Context, req UploadRequest) (*UploadResponse,
 	}, nil
 }
 
+// Values of the span attribute metadata.result.
+const (
+	resultOK          = "200"
+	resultNotModified = "304"
+	resultNotFound    = "404"
+	resultConflict    = "conflict"
+	resultError       = "error"
+)
+
+// metadataResult classifies the result of a download or an upload. A 304, a
+// 404 and a CAS conflict are expected results, not errors.
+func metadataResult(err error) string {
+	switch err.(type) {
+	case nil:
+		return resultOK
+	case errtypes.NotModified:
+		return resultNotModified
+	case errtypes.NotFound:
+		return resultNotFound
+	case errtypes.Aborted, errtypes.PreconditionFailed, errtypes.AlreadyExists, errtypes.TooEarly:
+		return resultConflict
+	default:
+		return resultError
+	}
+}
+
+// uploadCondition returns the CAS condition of an upload.
+func uploadCondition(req UploadRequest) string {
+	switch {
+	case req.IfMatchEtag != "":
+		return "if-match"
+	case len(req.IfNoneMatch) > 0:
+		return "if-none-match"
+	case !req.IfUnmodifiedSince.IsZero():
+		return "if-unmodified-since"
+	default:
+		return "none"
+	}
+}
+
+// endMetadataSpan adds the result of a metadata call to the span. Then a
+// trace shows a 304, a 404 or a CAS conflict. httpStatus is 0 when the call
+// did not get an HTTP answer. size is -1 when the call transfers no content.
+func endMetadataSpan(span trace.Span, path string, httpStatus, size int, err error, attrs ...attribute.KeyValue) {
+	result := metadataResult(err)
+	span.SetAttributes(
+		attribute.String("metadata.path", path),
+		attribute.String("metadata.result", result),
+	)
+	if size >= 0 {
+		span.SetAttributes(attribute.Int("metadata.bytes", size))
+	}
+	if httpStatus != 0 {
+		span.SetAttributes(attribute.Int("http.response.status_code", httpStatus))
+	}
+	span.SetAttributes(attrs...)
+	if result == resultError {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+}
+
 // Stat returns the metadata for the given path
-func (cs3 *CS3) Stat(ctx context.Context, path string) (*provider.ResourceInfo, error) {
-	ctx, span := tracer.Start(ctx, "Stat")
+func (cs3 *CS3) Stat(ctx context.Context, path string) (_ *provider.ResourceInfo, err error) {
+	ctx, span := startSpan(ctx, "Stat")
 	defer span.End()
+	defer func() { endMetadataSpan(span, path, 0, -1, err) }()
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -353,7 +435,7 @@ func (cs3 *CS3) Stat(ctx context.Context, path string) (*provider.ResourceInfo, 
 
 // SimpleDownload reads a file from the metadata storage
 func (cs3 *CS3) SimpleDownload(ctx context.Context, downloadpath string) (content []byte, err error) {
-	ctx, span := tracer.Start(ctx, "SimpleDownload")
+	ctx, span := startSpan(ctx, "SimpleDownload")
 	defer span.End()
 	dres, err := cs3.Download(ctx, DownloadRequest{Path: downloadpath})
 	if err != nil {
@@ -363,9 +445,17 @@ func (cs3 *CS3) SimpleDownload(ctx context.Context, downloadpath string) (conten
 }
 
 // Download reads a file from the metadata storage
-func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (*DownloadResponse, error) {
-	ctx, span := tracer.Start(ctx, "Download")
+func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (out *DownloadResponse, err error) {
+	ctx, span := startSpan(ctx, "Download")
 	defer span.End()
+	httpStatus := 0
+	defer func() {
+		size := 0
+		if out != nil {
+			size = len(out.Content)
+		}
+		endMetadataSpan(span, req.Path, httpStatus, size, err)
+	}()
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -428,11 +518,14 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (*DownloadRes
 
 	md, _ := metadata.FromOutgoingContext(ctx)
 	hreq.Header.Add(ctxpkg.TokenHeader, md.Get(ctxpkg.TokenHeader)[0])
+	// Send the trace context. Then the work of the data server is in the trace of the request.
+	rtrace.Propagator.Inject(ctx, propagation.HeaderCarrier(hreq.Header))
 	resp, err := cs3.dataGatewayClient.Do(hreq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	httpStatus = resp.StatusCode
 
 	dres := DownloadResponse{}
 
@@ -457,9 +550,10 @@ func (cs3 *CS3) Download(ctx context.Context, req DownloadRequest) (*DownloadRes
 }
 
 // Delete deletes a path
-func (cs3 *CS3) Delete(ctx context.Context, path string) error {
-	ctx, span := tracer.Start(ctx, "Delete")
+func (cs3 *CS3) Delete(ctx context.Context, path string) (err error) {
+	ctx, span := startSpan(ctx, "Delete")
 	defer span.End()
+	defer func() { endMetadataSpan(span, path, 0, -1, err) }()
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -488,7 +582,7 @@ func (cs3 *CS3) Delete(ctx context.Context, path string) error {
 
 // ReadDir returns the entries in a given directory
 func (cs3 *CS3) ReadDir(ctx context.Context, path string) ([]string, error) {
-	ctx, span := tracer.Start(ctx, "ReadDir")
+	ctx, span := startSpan(ctx, "ReadDir")
 	defer span.End()
 
 	infos, err := cs3.ListDir(ctx, path)
@@ -504,9 +598,10 @@ func (cs3 *CS3) ReadDir(ctx context.Context, path string) ([]string, error) {
 }
 
 // ListDir returns a list of ResourceInfos for the entries in a given directory
-func (cs3 *CS3) ListDir(ctx context.Context, path string) ([]*provider.ResourceInfo, error) {
-	ctx, span := tracer.Start(ctx, "ListDir")
+func (cs3 *CS3) ListDir(ctx context.Context, path string) (_ []*provider.ResourceInfo, err error) {
+	ctx, span := startSpan(ctx, "ListDir")
 	defer span.End()
+	defer func() { endMetadataSpan(span, path, 0, -1, err) }()
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -536,9 +631,10 @@ func (cs3 *CS3) ListDir(ctx context.Context, path string) ([]*provider.ResourceI
 }
 
 // MakeDirIfNotExist will create a root node in the metadata storage. Requires an authenticated context.
-func (cs3 *CS3) MakeDirIfNotExist(ctx context.Context, folder string) error {
-	ctx, span := tracer.Start(ctx, "MakeDirIfNotExist")
+func (cs3 *CS3) MakeDirIfNotExist(ctx context.Context, folder string) (err error) {
+	ctx, span := startSpan(ctx, "MakeDirIfNotExist")
 	defer span.End()
+	defer func() { endMetadataSpan(span, folder, 0, -1, err) }()
 
 	client, err := cs3.providerClient()
 	if err != nil {
@@ -573,7 +669,7 @@ func (cs3 *CS3) MakeDirIfNotExist(ctx context.Context, folder string) error {
 
 // CreateSymlink creates a symlink
 func (cs3 *CS3) CreateSymlink(ctx context.Context, oldname, newname string) error {
-	ctx, span := tracer.Start(ctx, "CreateSymlink")
+	ctx, span := startSpan(ctx, "CreateSymlink")
 	defer span.End()
 
 	if _, err := cs3.ResolveSymlink(ctx, newname); err == nil {
@@ -585,7 +681,7 @@ func (cs3 *CS3) CreateSymlink(ctx context.Context, oldname, newname string) erro
 
 // ResolveSymlink resolves a symlink
 func (cs3 *CS3) ResolveSymlink(ctx context.Context, name string) (string, error) {
-	ctx, span := tracer.Start(ctx, "ResolveSymlink")
+	ctx, span := startSpan(ctx, "ResolveSymlink")
 	defer span.End()
 
 	b, err := cs3.SimpleDownload(ctx, name)
@@ -612,9 +708,18 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 		return ctx, nil
 	}
 
-	// we need to start a new context to get rid of an existing x-access-token in the outgoing context
-	authCtx := context.Background()
-	authCtx, span := tracer.Start(authCtx, "getAuthContext", trace.WithLinks(trace.LinkFromContext(ctx)))
+	// Start a new context. Then the x-access-token of the caller is not in the
+	// outgoing metadata. The new context has no deadline and no cancel of the
+	// caller. Copy only the span and the baggage of the caller. Then all calls
+	// of the operation stay in the trace of the request.
+	authCtx := trace.ContextWithSpan(context.Background(), trace.SpanFromContext(ctx))
+	authCtx = baggage.ContextWithBaggage(authCtx, baggage.FromContext(ctx))
+	authCtx = rtrace.ContextSetTracerProvider(authCtx, rtrace.ContextGetTracerProviderOrDefault(ctx))
+	authCtx = ctxpkg.ContextSetUser(authCtx, cs3.serviceUser)
+
+	// The span covers only the Authenticate call. The returned context does
+	// not hold it, so the next calls are children of the span of the caller.
+	spanCtx, span := startSpan(authCtx, "getAuthContext")
 	defer span.End()
 
 	selector, err := pool.GatewaySelector(cs3.gatewayAddr)
@@ -626,8 +731,6 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 		return nil, err
 	}
 
-	authCtx = ctxpkg.ContextSetUser(authCtx, cs3.serviceUser)
-
 	// The Authenticate call gets a context of its own: a gateway that is stuck
 	// on a downstream storage provider accepts the connection and then never
 	// answers, and there is nothing else that would ever end the wait. The
@@ -637,7 +740,7 @@ func (cs3 *CS3) getAuthContext(ctx context.Context) (context.Context, error) {
 	if timeout <= 0 {
 		timeout = defaultAuthRPCTimeout
 	}
-	rpcCtx, cancel := context.WithTimeout(authCtx, timeout)
+	rpcCtx, cancel := context.WithTimeout(spanCtx, timeout)
 	defer cancel()
 
 	start := time.Now()

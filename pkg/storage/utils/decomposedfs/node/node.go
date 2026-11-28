@@ -48,17 +48,17 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/metadata/prefixes"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/grants"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/pkg/errors"
 	"github.com/rogpeppe/go-internal/lockedfile"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/node")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/node")
 }
 
 // Define keys and values used in the node metadata

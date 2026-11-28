@@ -11,8 +11,8 @@ import (
 	ctxpkg "github.com/owncloud/reva/v2/pkg/ctx"
 	"github.com/owncloud/reva/v2/pkg/rgrpc/todo/pool"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/owncloud/reva/v2/pkg/utils"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 )
@@ -22,7 +22,7 @@ var (
 )
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/permissions")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/permissions")
 }
 
 const (

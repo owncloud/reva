@@ -30,6 +30,7 @@ import (
 	backoff "github.com/cenkalti/backoff/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
 
 	"github.com/owncloud/reva/v2/pkg/appctx"
@@ -76,6 +77,26 @@ func (c *Cache) lockUser(ctx context.Context, userID string) (func(), error) {
 	return c.lockMap.Lock(ctx, userID)
 }
 
+// lockUserTraced waits for the lock of the user or group. A "Grab lock" span,
+// a child of the span in ctx, shows the wait. The caller keeps its own
+// context, so the work after the wait is not a child of the lock span.
+func (c *Cache) lockUserTraced(ctx context.Context, userID string) (func(), error) {
+	// A lock span is only useful under a recorded parent span. With tracing
+	// off, the parent is never recorded, so do not pay for the span.
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return c.lockUser(ctx, userID)
+	}
+	_, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
+	span.SetAttributes(attribute.String("cs3.userid", userID))
+	unlock, err := c.lockUser(ctx, userID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
+	return unlock, err
+}
+
 // New returns a new Cache instance
 func New(s metadata.Storage, namespace, filename string, ttl time.Duration) Cache {
 	return Cache{
@@ -100,10 +121,10 @@ func (c *Cache) dropOnFailedUpload(err error, userid string) {
 
 // Add adds a share to the cache
 func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
+	unlock, err := c.lockUserTraced(ctx, userid)
 	if err != nil {
 		return err
 	}
@@ -115,10 +136,6 @@ func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
 			return err
 		}
 	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
 
 	storageid, spaceid, _ := shareid.Decode(shareID)
 	ssid := storageid + shareid.IDDelimiter + spaceid
@@ -168,10 +185,10 @@ func (c *Cache) Remove(ctx context.Context, userid, shareID string) error {
 // The shares can be in different spaces. It does not upload when none of the
 // shares is in the cache.
 func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string) error {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
-	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
+	defer span.End()
+	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.Int("cs3.sharecount", len(shareIDs)))
+	unlock, err := c.lockUserTraced(ctx, userid)
 	if err != nil {
 		return err
 	}
@@ -194,10 +211,6 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 			break
 		}
 	}
-
-	ctx, span = appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
-	defer span.End()
-	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.Int("cs3.sharecount", len(shareIDs)))
 
 	persistFunc := func() error {
 		removed := false
@@ -247,10 +260,10 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 
 // List return the list of spaces/shares for the given user/group
 func (c *Cache) List(ctx context.Context, userid string) (map[string]SpaceShareIDs, error) {
-	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
-	unlock, err := c.lockUser(ctx, userid)
+	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "List")
+	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid))
-	span.End()
+	unlock, err := c.lockUserTraced(ctx, userid)
 	if err != nil {
 		return nil, err
 	}
@@ -344,12 +357,14 @@ func (c *Cache) doSync(ctx context.Context, userID string, resetOnNotFound bool)
 	}
 
 	newShareCache := &UserShareCache{}
+	span.SetAttributes(attribute.Int("metadata.bytes", len(dlres.Content)))
 	err = json.Unmarshal(dlres.Content, newShareCache)
 	if err != nil {
 		span.SetStatus(codes.Error, fmt.Sprintf("Failed to unmarshal the share cache: %s", err.Error()))
 		log.Error().Err(err).Msg("Failed to unmarshal the share cache")
 		return err
 	}
+	span.AddEvent("decoded")
 	newShareCache.Etag = dlres.Etag
 
 	c.UserShares.Store(userID, newShareCache)

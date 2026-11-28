@@ -41,11 +41,11 @@ import (
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/node"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/options"
 	"github.com/owncloud/reva/v2/pkg/storage/utils/decomposedfs/tree/propagator"
+	rtrace "github.com/owncloud/reva/v2/pkg/trace"
 	"github.com/owncloud/reva/v2/pkg/utils"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"go-micro.dev/v4/store"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
@@ -53,7 +53,7 @@ import (
 var tracer trace.Tracer
 
 func init() {
-	tracer = otel.Tracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/tree")
+	tracer = rtrace.NewContextTracer("github.com/owncloud/reva/pkg/storage/utils/decomposedfs/tree")
 }
 
 // Blobstore defines an interface for storing blobs in a blobstore
