@@ -58,17 +58,21 @@ func startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 // lockSpaceTraced waits for the lock of the space. A "Grab lock" span, a child
 // of the span in ctx, shows the wait. The caller keeps its own context, so the
 // work after the wait is not a child of the lock span.
-func (c *Cache) lockSpaceTraced(ctx context.Context, spaceID string) func() {
+func (c *Cache) lockSpaceTraced(ctx context.Context, spaceID string) (func(), error) {
 	// A lock span is only useful under a recorded parent span. With tracing
 	// off, the parent is never recorded, so do not pay for the span.
 	if !trace.SpanFromContext(ctx).IsRecording() {
-		return c.LockSpace(spaceID)
+		return c.LockSpace(ctx, spaceID)
 	}
 	_, span := startSpan(ctx, "Grab lock")
 	span.SetAttributes(attribute.String("cs3.spaceid", spaceID))
-	unlock := c.LockSpace(spaceID)
+	unlock, err := c.LockSpace(ctx, spaceID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 	span.End()
-	return unlock
+	return unlock, err
 }
 
 // Cache holds share information structured by provider and space
@@ -212,7 +216,10 @@ func (c *Cache) Add(ctx context.Context, storageID, spaceID, shareID string, sha
 		return fmt.Errorf("missing share id")
 	}
 
-	unlock := c.lockSpaceTraced(ctx, spaceID)
+	unlock, err := c.lockSpaceTraced(ctx, spaceID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	if !c.isSpaceCached(storageID, spaceID) {
@@ -277,7 +284,10 @@ func (c *Cache) RemoveMany(ctx context.Context, storageID, spaceID string, share
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.storageid", storageID), attribute.String("cs3.spaceid", spaceID), attribute.Int("cs3.sharecount", len(shareIDs)))
 
-	unlock := c.lockSpaceTraced(ctx, spaceID)
+	unlock, err := c.lockSpaceTraced(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 
 	// When a share is not in memory, sync first. A cold or stale cache does
@@ -368,7 +378,10 @@ func (c *Cache) Update(ctx context.Context, storageID, spaceID, shareID string, 
 		return nil, fmt.Errorf("missing share id")
 	}
 
-	unlock := c.lockSpaceTraced(ctx, spaceID)
+	unlock, err := c.lockSpaceTraced(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 
 	// When the share is not in memory, sync first, as in RemoveMany. Else
@@ -447,7 +460,10 @@ func (c *Cache) Get(ctx context.Context, storageID, spaceID, shareID string, ski
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.storageid", storageID), attribute.String("cs3.spaceid", spaceID), attribute.String("cs3.shareid", shareID))
 
-	unlock := c.lockSpaceTraced(ctx, spaceID)
+	unlock, err := c.lockSpaceTraced(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 
 	if !skipSync {
@@ -487,7 +503,10 @@ func (c *Cache) All(ctx context.Context) (*mtimesyncedcache.Map[string, *Spaces]
 		for _, space := range spaces {
 			spaceID := strings.TrimSuffix(space.Name, ".json")
 
-			unlock := c.lockSpaceTraced(ctx, spaceID)
+			unlock, err := c.lockSpaceTraced(ctx, spaceID)
+			if err != nil {
+				return nil, err
+			}
 			if err := c.syncWithRetry(ctx, storageID, spaceID); err != nil {
 				unlock()
 				return nil, err
@@ -505,7 +524,10 @@ func (c *Cache) ListSpace(ctx context.Context, storageID, spaceID string) (*Shar
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.storageid", storageID), attribute.String("cs3.spaceid", spaceID))
 
-	unlock := c.lockSpaceTraced(ctx, spaceID)
+	unlock, err := c.lockSpaceTraced(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 
 	// sync cache, maybe our data is outdated
@@ -611,7 +633,10 @@ func (c *Cache) PurgeSpace(ctx context.Context, storageID, spaceID string) error
 	ctx, span := startSpan(ctx, "PurgeSpace")
 	defer span.End()
 
-	unlock := c.lockSpaceTraced(ctx, spaceID)
+	unlock, err := c.lockSpaceTraced(ctx, spaceID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	if !c.isSpaceCached(storageID, spaceID) {

@@ -80,17 +80,21 @@ func (c *Cache) lockUser(ctx context.Context, userID string) (func(), error) {
 // lockUserTraced waits for the lock of the user or group. A "Grab lock" span,
 // a child of the span in ctx, shows the wait. The caller keeps its own
 // context, so the work after the wait is not a child of the lock span.
-func (c *Cache) lockUserTraced(ctx context.Context, userID string) func() {
+func (c *Cache) lockUserTraced(ctx context.Context, userID string) (func(), error) {
 	// A lock span is only useful under a recorded parent span. With tracing
 	// off, the parent is never recorded, so do not pay for the span.
 	if !trace.SpanFromContext(ctx).IsRecording() {
-		return c.lockUser(userID)
+		return c.lockUser(ctx, userID)
 	}
 	_, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Grab lock")
 	span.SetAttributes(attribute.String("cs3.userid", userID))
-	unlock := c.lockUser(userID)
+	unlock, err := c.lockUser(ctx, userID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 	span.End()
-	return unlock
+	return unlock, err
 }
 
 // New returns a new Cache instance
@@ -120,7 +124,10 @@ func (c *Cache) Add(ctx context.Context, userid, shareID string) error {
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Add")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.String("cs3.shareid", shareID))
-	unlock := c.lockUserTraced(ctx, userid)
+	unlock, err := c.lockUserTraced(ctx, userid)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	if _, ok := c.UserShares.Load(userid); !ok {
@@ -181,7 +188,10 @@ func (c *Cache) RemoveMany(ctx context.Context, userid string, shareIDs []string
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "Remove")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid), attribute.Int("cs3.sharecount", len(shareIDs)))
-	unlock := c.lockUserTraced(ctx, userid)
+	unlock, err := c.lockUserTraced(ctx, userid)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	ssidOf := make(map[string]string, len(shareIDs))
@@ -253,7 +263,10 @@ func (c *Cache) List(ctx context.Context, userid string) (map[string]SpaceShareI
 	ctx, span := appctx.GetTracerProvider(ctx).Tracer(tracerName).Start(ctx, "List")
 	defer span.End()
 	span.SetAttributes(attribute.String("cs3.userid", userid))
-	unlock := c.lockUserTraced(ctx, userid)
+	unlock, err := c.lockUserTraced(ctx, userid)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 	if err := c.syncWithRetry(ctx, userid); err != nil {
 		return nil, err
